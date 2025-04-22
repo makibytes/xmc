@@ -1,27 +1,38 @@
-# AMC - Artemis Messaging Client
+# XMC - Xenomorphic Messaging Client
 
 [![Build Status](https://travis-ci.org/makibytes/amc.svg?branch=master)](https://travis-ci.org/makibytes/amc)
 [![Go Report Card](https://goreportcard.com/badge/github.com/makibytes/amc)](https://goreportcard.com/report/github.com/makibytes/amc)
 [![GoDoc](https://godoc.org/github.com/makibytes/amc?status.svg)](https://godoc.org/github.com/makibytes/amc)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makibytes/amc/blob/main/LICENSE)
 
-This project provides a command-line interface (CLI) for sending and receiving messages to/from Apache Artemis,
-using the AMQP 1.0 protocol. It works with other AMQP 1.0 brokers, too, but the names in the arguments & flags
-correspond to Artemis. There are also some features specific to Artemis like ANYCAST/MULTICAST routing.
-Testing has been done with Artemis only.
+This project provides a command-line interface (CLI) for sending and receiving messages to/from a range of different Message and Streaming Brokers. Currently supported:
+
+|binary|Broker          |Protocol  |
+|------|----------------|----------|
+|`amc` |Apache Artemis  |AMQP 1.0  |
+|`imc` |IBM MQ          |IBM MQ    |
+|`kmc` |Kafka           |Kafka     |
+|`mmc` |MQTT            |MQTT      |
+|`rmc` |RabbitMQ        |AMQP 1.0  |
+|`smc` |Amazon SQS      |AMQP 1.0  |
+|`zmc` |Azure ServiceBus|AMQP 1.0  |
+
+The goal of this project is to support a common set of features across the different
+protocols and brokers, comparable to the JMS API. See broker/BROKERS.md for more details.
 
 ## Usage
 
-You can send a message with the following command:
+All binaries work the same way and use the same arguments, as long as the broker supports them.
+We use `xmc` as a placeholder for the binary name.
 
 ```sh
-amc put <queue-name> <message>
+xmc put <queue-name> <message>
 ```
 
 You can receive a message with the following command:
 
 ```sh
-amc get <queue-name>
+xmc get <queue-name>
 ```
 
 This will print the payload (data) to stdout and remove the message from the
@@ -30,23 +41,25 @@ queue. Use `peek` instead of `get` to keep it in the queue.
 You can wait for a message with the `-w` flag:
 
 ```sh
-amc get -w <queue-name>
+xmc get -w <queue-name>
 ```
 
 The following parameters and environment variables can be used for all commands:
 
 ```sh
-  -s, --server string      server URL of the broker    [$AMC_SERVER]
-  -u, --user string        username for SASL login     [$AMC_USER]
-  -p, --password string    password for SASL login     [$AMC_PASSWORD]
+  -s, --server string      server URL of the broker    [$XMC_SERVER]
+  -u, --user string        username for SASL login     [$XMC_USER]
+  -p, --password string    password for SASL login     [$XMC_PASSWORD]
 ```
+
+Notice: the environment variables are prefixed with the name of the binary in uppercase.
 
 ## Advanced Usage
 
 You can set properties (metadata) for the message with the following flags:
 
 ```sh
-amc put <queue-name> -P <key1>=<value1> -P <key2>=<value2> <message>
+xmc put <queue-name> -P <key1>=<value1> -P <key2>=<value2> <message>
 ```
 
 If a message has properties, the `get` command will show them automatically.
@@ -59,7 +72,7 @@ You can suppress this behaviour with the `-q` flag:
 Note that in the context of the AMQP 1.0 protocol, the properties are called
 "Application Properties". The protocol also defines a structure called
 "Properties" with a finite list of fields like message-id, user-id, etc. In
-`amc` we call them "MessageProperties" to avoid confusion. You can see them
+`xmc` we call them "MessageProperties" to avoid confusion. You can see them
 in verbose mode only.
 
 ## Working with Files, Redirection of STDOUT
@@ -67,14 +80,14 @@ in verbose mode only.
 The message can be read from file:
 
 ```sh
-amc put <queue-name> < message.dat
+xmc put <queue-name> < message.dat
 ```
 
 By redirecting the output of `get` the message data (and only the data) will
 be written to a file:
 
 ```sh
-amc get <queue-name> > message.dat
+xmc get <queue-name> > message.dat
 ```
 
 The file will be exactly the same as it was sent! Without redirection `amc`

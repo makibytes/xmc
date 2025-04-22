@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/artemis"
+	"github.com/makibytes/amc/broker/artemis"
 	"github.com/makibytes/amc/conn"
 	"github.com/makibytes/amc/log"
 )
