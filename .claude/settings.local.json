@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(go get:*)",
+      "Bash(go build:*)",
+      "Bash(./amc-kafka --help)",
+      "Bash(./amc-artemis:*)",
+      "Bash(./amc-nobuild:*)",
+      "Bash(./amc send:*)",
+      "Bash(./amc:*)",
+      "Bash(./amc-rabbitmq:*)",
+      "Bash(./amc-test send:*)",
+      "Bash(./amc-test publish:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

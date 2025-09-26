@@ -1,4 +1,6 @@
-package conn
+//go:build artemis
+
+package broker
 
 type ReceiveArguments struct {
 	Acknowledge               bool

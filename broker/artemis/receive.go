@@ -1,15 +1,18 @@
-package receive
+//go:build artemis
+
+package artemis
 
 import (
 	"context"
 	"time"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/conn"
+
 	"github.com/makibytes/amc/log"
 )
 
-func ReceiveMessage(session *amqp.Session, args conn.ReceiveArguments) (*amqp.Message, error) {
+// Import the struct definition from receive_args.go, which is in the same package
+func ReceiveMessage(session *amqp.Session, args ReceiveArguments) (*amqp.Message, error) {
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if args.Timeout == 0 {
