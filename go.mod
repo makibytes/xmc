@@ -4,7 +4,7 @@ go 1.23
 
 require (
 	github.com/Azure/go-amqp v1.5.0
-	github.com/spf13/cobra v1.10.1
+	github.com/spf13/cobra v1.10.2
 )
 
 require (
