@@ -17,8 +17,9 @@ import (
 // NewSendCommand creates a send command for queue-based brokers
 func NewSendCommand(backend backends.QueueBackend) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "send <queue> [message]",
-		Short: "Send a message to a queue",
+		Use:     "send <queue> [message]",
+		Aliases: []string{"put"},
+		Short:   "Send a message to a queue",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doSend(cmd, args, backend)

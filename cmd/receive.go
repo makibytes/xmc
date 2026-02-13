@@ -14,8 +14,9 @@ import (
 // NewReceiveCommand creates a receive command for queue-based brokers
 func NewReceiveCommand(backend backends.QueueBackend) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "receive <queue>",
-		Short: "Receive a message from a queue (destructive read)",
+		Use:     "receive <queue>",
+		Aliases: []string{"get"},
+		Short:   "Receive a message from a queue (destructive read)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doReceive(cmd, args, backend, true)

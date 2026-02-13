@@ -1,20 +1,20 @@
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
-export AMC_USER="artemis"
-export AMC_PASSWORD="artemis"
-export amc="./amc"
+export "${XMC_ENV_PREFIX}_USER=artemis"
+export "${XMC_ENV_PREFIX}_PASSWORD=artemis"
+export xmc="$XMC_BINARY"
 
 @test "initialize ANYCAST address" {
-    run $amc get queue1
+    run $xmc get queue1
     assert_success
 }
 
 @test "send/receive text payload" {
-    run $amc put queue1 HelloWorld
+    run $xmc put queue1 HelloWorld
     assert_success
 
-    run $amc get queue1
+    run $xmc get queue1
     assert_success
 
     assert_output "HelloWorld"
@@ -24,10 +24,10 @@ export amc="./amc"
     run dd if=/dev/urandom of=./test.bin bs=1024 count=1
     assert_success
 
-    run bash -c '$amc put queue1 < ./test.bin'
+    run bash -c '$xmc put queue1 < ./test.bin'
     assert_success
 
-    run bash -c '$amc get queue1 > ./test.out.bin'
+    run bash -c '$xmc get queue1 > ./test.out.bin'
     assert_success
 
     run diff ./test.bin ./test.out.bin
