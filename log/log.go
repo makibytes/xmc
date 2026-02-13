@@ -5,24 +5,17 @@ import (
 	"os"
 )
 
-// initialized in cmd/root
 var IsVerbose bool
 
-func init() {
-	if isStdoutRedirected() {
-		IsStdout = false
-	}
-}
-
-func Info(s string, args ...interface{}) {
+func Info(s string, args ...any) {
 	if len(args) > 0 {
 		fmt.Printf(s, args...)
 	} else {
-		fmt.Println(args...)
+		fmt.Println(s)
 	}
 }
 
-func Error(s string, args ...interface{}) {
+func Error(s string, args ...any) {
 	if len(args) > 0 {
 		fmt.Fprintf(os.Stderr, s, args...)
 	} else {
@@ -30,7 +23,7 @@ func Error(s string, args ...interface{}) {
 	}
 }
 
-func Verbose(s string, args ...interface{}) {
+func Verbose(s string, args ...any) {
 	if IsVerbose {
 		if len(args) > 0 {
 			fmt.Printf(s, args...)

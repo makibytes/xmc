@@ -7,7 +7,12 @@
 *.dll
 *.so
 *.dylib
+
 /amc
+/imc
+/kmc
+/mmc
+/rmc
 
 # Test binary, built with `go test -c`
 *.test
@@ -30,3 +35,6 @@ go.work
 ./test/bats/.git
 test.bin
 test.out.bin
+
+/dist
+

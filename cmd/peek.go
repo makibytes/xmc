@@ -2,70 +2,76 @@ package cmd
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
-	"github.com/makibytes/amc/conn"
-	"github.com/makibytes/amc/rc"
-	"github.com/makibytes/amc/receive"
+	"github.com/makibytes/amc/broker/backends"
 	"github.com/spf13/cobra"
 )
 
-var peekArgs conn.ReceiveArguments
-var peekCmd = &cobra.Command{
-	Use:   "peek <queue>",
-	Short: "Look into a message, but let it stay in the queue",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		connArgs = getConnArgs()
+// NewPeekCommand creates a peek command for queue-based brokers
+func NewPeekCommand(backend backends.QueueBackend) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "peek <queue>",
+		Short: "Peek at a message in the queue without removing it (non-destructive read)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return doPeek(cmd, args, backend)
+		},
+	}
 
-		number, _ := cmd.Flags().GetInt("number")
-		timeout, _ := cmd.Flags().GetFloat32("timeout")
-		wait, _ := cmd.Flags().GetBool("wait")
-		if wait {
-			timeout = 0
-		}
+	cmd.Flags().Float32P("timeout", "t", 0.1, "Seconds to wait")
+	cmd.Flags().BoolP("wait", "w", false, "Wait (endless) for a message to arrive")
+	cmd.Flags().IntP("count", "n", 1, "Number of messages to peek")
+	cmd.Flags().BoolP("json", "J", false, "Output messages as JSON")
+	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
 
-		durable, _ := cmd.Flags().GetBool("durable")
-		peekArgs = conn.ReceiveArguments{
-			Acknowledge: false,
-			Durable:     durable,
-			Number:      number,
-			Queue:       args[0],
-			Timeout:     timeout,
-			Wait:        wait,
-		}
+	return cmd
+}
 
-		connection, session, err := conn.Connect(connArgs)
+func doPeek(cmd *cobra.Command, args []string, backend backends.QueueBackend) error {
+	timeout, _ := cmd.Flags().GetFloat32("timeout")
+	wait, _ := cmd.Flags().GetBool("wait")
+	count, _ := cmd.Flags().GetInt("count")
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+	selector, _ := cmd.Flags().GetString("selector")
+
+	opts := backends.ReceiveOptions{
+		Queue:                     args[0],
+		Timeout:                   timeout,
+		Wait:                      wait,
+		Acknowledge:               false, // peek = non-destructive
+		WithHeaderAndProperties:   true,
+		WithApplicationProperties: true,
+		Selector:                  selector,
+	}
+
+	received := 0
+	for received < count {
+		message, err := backend.Receive(context.Background(), opts)
 		if err != nil {
+			if err == context.DeadlineExceeded {
+				return nil
+			}
 			return err
 		}
+		if message == nil {
+			if received == 0 {
+				return fmt.Errorf("no message available")
+			}
+			return nil
+		}
 
-		message, err := receive.ReceiveMessage(session, peekArgs)
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				// no message when timeout occurs? -> no error
-				return nil
-			} else {
+		if jsonOutput {
+			if err := displayMessageJSON(message); err != nil {
+				return err
+			}
+		} else {
+			if err := displayMessage(message, opts.WithHeaderAndProperties, opts.WithApplicationProperties); err != nil {
 				return err
 			}
 		}
-		if message == nil {
-			return errors.New(rc.NoMessage)
-		}
+		received++
+	}
 
-		// use cmd.get's handleMessage()
-		err = handleMessage(message, peekArgs)
-
-		session.Close(context.Background())
-		connection.Close()
-
-		return err
-	},
-}
-
-func init() {
-	peekCmd.Flags().BoolP("durable", "d", true, "create durable queue if it doesn't exist")
-	peekCmd.Flags().IntP("number", "n", 1, "number of messages to fetch, 0 = all")
-	peekCmd.Flags().BoolP("wait", "w", false, "wait (endless) for a message to arrive")
-	peekCmd.Flags().Float32P("timeout", "t", 0.1, "seconds to wait")
+	return nil
 }
