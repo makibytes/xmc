@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/log"
 )
 
 func TestRequestCommand_BasicRequestReply(t *testing.T) {
@@ -45,13 +45,13 @@ func TestRequestCommand_BasicRequestReply(t *testing.T) {
 	}
 
 	// Verify default reply-to queue
-	if mock.lastSendOpts.ReplyTo != "amc.reply" {
-		t.Errorf("replyTo = %q, want %q", mock.lastSendOpts.ReplyTo, "amc.reply")
+	if mock.lastSendOpts.ReplyTo != "xmc.reply" {
+		t.Errorf("replyTo = %q, want %q", mock.lastSendOpts.ReplyTo, "xmc.reply")
 	}
 
 	// Verify reply was received on the reply queue
-	if mock.lastReceiveOpts.Queue != "amc.reply" {
-		t.Errorf("receive queue = %q, want %q", mock.lastReceiveOpts.Queue, "amc.reply")
+	if mock.lastReceiveOpts.Queue != "xmc.reply" {
+		t.Errorf("receive queue = %q, want %q", mock.lastReceiveOpts.Queue, "xmc.reply")
 	}
 	if !mock.lastReceiveOpts.Acknowledge {
 		t.Error("reply receive should acknowledge")

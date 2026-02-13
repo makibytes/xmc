@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/makibytes/amc/broker/backends"
+	"github.com/makibytes/xmc/broker/backends"
 )
 
 // mockQueueBackend is a test double for QueueBackend

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +20,7 @@ func NewSubscribeCommand(backend backends.TopicBackend) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringP("group", "g", "amc-consumer-group", "Consumer group ID")
+	cmd.Flags().StringP("group", "g", "xmc-consumer-group", "Consumer group ID")
 	cmd.Flags().Float32P("timeout", "t", 0.1, "Seconds to wait")
 	cmd.Flags().BoolP("quiet", "q", false, "Quiet about properties, show data only")
 	cmd.Flags().BoolP("wait", "w", true, "Wait (endless) for a message to arrive")

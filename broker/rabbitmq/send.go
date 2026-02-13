@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments) error {
@@ -60,7 +60,7 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 		Durability:       durability,
 		SourceAddress:    targetAddress,
 		TargetDurability: durability,
-		Name:             "amc",
+		Name:             "rmc",
 	}
 
 	log.Verbose("📤 generating sender...")

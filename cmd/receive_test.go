@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/log"
 )
 
 func TestReceiveCommand_DisplaysMessage(t *testing.T) {

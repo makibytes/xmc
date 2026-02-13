@@ -6,8 +6,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/makibytes/amc/broker/amqpcommon"
-	"github.com/makibytes/amc/broker/backends"
+	"github.com/makibytes/xmc/broker/amqpcommon"
+	"github.com/makibytes/xmc/broker/backends"
 
 	"github.com/Azure/go-amqp"
 )

@@ -4,18 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AMC is a unified command-line interface for sending and receiving messages to/from different Message and Streaming Brokers. The broker backend is selected at **build time** using Go build tags (`artemis`, `ibmmq`, `kafka`, `mqtt`, `rabbitmq`). The goal is to support a common set of features across different protocols and brokers, comparable to the JMS API.
+XMC (Xenomorphic Message Client) is a unified command-line interface for sending and receiving messages to/from different Message and Streaming Brokers. The broker backend is selected at **build time** using Go build tags (`artemis`, `ibmmq`, `kafka`, `mqtt`, `rabbitmq`). Each flavor produces its own binary (`amc`, `imc`, `kmc`, `mmc`, `rmc`) with its own environment variable prefix. The goal is to support a common set of features across different protocols and brokers, comparable to the JMS API.
 
 ## Building
 
 Build for a specific broker using build tags:
 
 ```bash
-go build -tags artemis        # Apache Artemis (AMQP 1.0)
-go build -tags ibmmq          # IBM MQ
-go build -tags kafka          # Apache Kafka
-go build -tags mqtt           # MQTT Brokers
-go build -tags rabbitmq       # RabbitMQ v4+ (AMQP 1.0)
+go build -tags artemis -o amc .    # Apache Artemis (AMQP 1.0)
+go build -tags ibmmq -o imc .     # IBM MQ
+go build -tags kafka -o kmc .     # Apache Kafka
+go build -tags mqtt -o mmc .      # MQTT Brokers
+go build -tags rabbitmq -o rmc .  # RabbitMQ v4+ (AMQP 1.0)
 ```
 
 Default build (without tags) will fail with "No broker loaded" error at runtime.
@@ -74,7 +74,7 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 
 Uses `spf13/cobra` for CLI:
 - Root command provides persistent flags (`--server`, `--user`, `--password`, `--verbose`, TLS flags)
-- Environment variables prefixed with `AMC_` (e.g., `AMC_SERVER`, `AMC_USER`, `AMC_PASSWORD`)
+- Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `RMC_` (RabbitMQ)
 - Queue commands: `send`, `receive`, `peek`, `request`
 - Topic commands: `publish`, `subscribe`
 - Management commands: `manage list`, `manage purge`, `manage stats`

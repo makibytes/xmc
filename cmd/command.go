@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/makibytes/amc/broker/backends"
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
 )
 

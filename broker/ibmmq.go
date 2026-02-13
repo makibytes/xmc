@@ -5,17 +5,17 @@ package broker
 import (
 	"os"
 
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/broker/ibmmq"
-	"github.com/makibytes/amc/cmd"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/broker/ibmmq"
+	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
 // GetRootCommand returns the IBM MQ root command
 func GetRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "amc",
+		Use:   "imc",
 		Short: "IBM MQ Messaging Client",
 		Long:  "Command-line interface for IBM MQ messaging",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -26,14 +26,14 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	// Connection flags
-	var defaultServer = os.Getenv("AMC_SERVER")
+	var defaultServer = os.Getenv("IMC_SERVER")
 	if defaultServer == "" {
 		defaultServer = "ibmmq://localhost:1414/QM1?channel=SYSTEM.DEF.SVRCONN"
 	}
-	var defaultUser = os.Getenv("AMC_USER")
-	var defaultPassword = os.Getenv("AMC_PASSWORD")
-	var defaultQueueManager = os.Getenv("AMC_QUEUE_MANAGER")
-	var defaultChannel = os.Getenv("AMC_CHANNEL")
+	var defaultUser = os.Getenv("IMC_USER")
+	var defaultPassword = os.Getenv("IMC_PASSWORD")
+	var defaultQueueManager = os.Getenv("IMC_QUEUE_MANAGER")
+	var defaultChannel = os.Getenv("IMC_CHANNEL")
 
 	var connArgs ibmmq.ConnArguments
 
@@ -52,6 +52,9 @@ func GetRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReceiveCommand, queueFactory))
 	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewPeekCommand, queueFactory))
 	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewRequestCommand, queueFactory))
+
+	// Version command
+	rootCmd.AddCommand(cmd.NewVersionCommand())
 
 	return rootCmd
 }

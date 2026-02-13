@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/ibm-messaging/mq-golang/v5/ibmmq"
-	"github.com/makibytes/amc/broker/backends"
+	"github.com/makibytes/xmc/broker/backends"
 )
 
 // QueueAdapter adapts IBM MQ to the QueueBackend interface

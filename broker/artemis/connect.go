@@ -4,7 +4,7 @@ package artemis
 
 import (
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/broker/amqpcommon"
+	"github.com/makibytes/xmc/broker/amqpcommon"
 )
 
 // ConnArguments wraps the common AMQP connection arguments

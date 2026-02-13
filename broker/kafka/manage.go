@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 	kafkago "github.com/segmentio/kafka-go"
 )
 

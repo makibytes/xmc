@@ -4,8 +4,8 @@ package artemis
 
 import (
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/broker/amqpcommon"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/amqpcommon"
+	"github.com/makibytes/xmc/log"
 )
 
 // ReceiveMessage receives a message from Artemis with routing-specific capabilities

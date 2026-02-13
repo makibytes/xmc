@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/broker/rabbitmq"
-	"github.com/makibytes/amc/cmd"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/broker/rabbitmq"
+	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
 // GetRootCommand returns the RabbitMQ root command
 func GetRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "amc",
+		Use:   "rmc",
 		Short: "RabbitMQ Messaging Client",
 		Long:  "Command-line interface for RabbitMQ messaging (AMQP 1.0)",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -27,13 +27,13 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	// Connection flags
-	var defaultServer = os.Getenv("AMC_SERVER")
+	var defaultServer = os.Getenv("RMC_SERVER")
 	if defaultServer == "" {
 		defaultServer = "amqp://localhost:5672"
 	}
-	var defaultUser = os.Getenv("AMC_USER")
-	var defaultPassword = os.Getenv("AMC_PASSWORD")
-	var defaultExchange = os.Getenv("AMC_EXCHANGE")
+	var defaultUser = os.Getenv("RMC_USER")
+	var defaultPassword = os.Getenv("RMC_PASSWORD")
+	var defaultExchange = os.Getenv("RMC_EXCHANGE")
 	if defaultExchange == "" {
 		defaultExchange = "amq.topic"
 	}
@@ -72,6 +72,9 @@ func GetRootCommand() *cobra.Command {
 
 	// Management commands
 	rootCmd.AddCommand(newRabbitMQManageCommand(connArgs))
+
+	// Version command
+	rootCmd.AddCommand(cmd.NewVersionCommand())
 
 	return rootCmd
 }

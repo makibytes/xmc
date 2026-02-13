@@ -23,7 +23,7 @@ jobs:
     - name: Get dependencies
       run: go mod download
     - name: Build
-      run: go build -v -ldflags="-X 'github.com/makibytes/amc/cmd.version=${{ github.ref_name }}'" .
+      run: go build -v -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" .
     - name: Run tests
       run: go test -short ./...
 
@@ -42,6 +42,6 @@ jobs:
     - name: Get dependencies
       run: go mod download
     - name: Build
-      run: go build -v -ldflags="-X 'github.com/makibytes/amc/cmd.version=${{ github.ref_name }}'" .
+      run: go build -v -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" .
     - name: Run tests
       run: go test -short ./...

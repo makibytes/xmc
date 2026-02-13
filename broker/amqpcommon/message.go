@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/log"
 )
 
 // ConvertAMQPToBackendMessage converts an AMQP 1.0 message to the common backend Message type

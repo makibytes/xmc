@@ -8,7 +8,7 @@ import (
 
 	"github.com/Azure/go-amqp"
 
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments) error {

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 // ReceiveOptions configures an AMQP receive operation
@@ -40,7 +40,7 @@ func ReceiveMessage(session *amqp.Session, opts ReceiveOptions) (*amqp.Message, 
 	}
 
 	expiryPolicy := amqp.ExpiryPolicyLinkDetach
-	linkName := "amc"
+	linkName := "xmc"
 	if opts.DurableSubscription {
 		expiryPolicy = amqp.ExpiryPolicyNever
 		if opts.SubscriptionName != "" {

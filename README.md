@@ -1,23 +1,21 @@
-# AMC - All Message Clients
+# XMC - Xenomorphic Message Client
 
-[![Build Status](https://travis-ci.org/makibytes/amc.svg?branch=master)](https://travis-ci.org/makibytes/amc)
-[![Go Report Card](https://goreportcard.com/badge/github.com/makibytes/amc)](https://goreportcard.com/report/github.com/makibytes/amc)
-[![GoDoc](https://godoc.org/github.com/makibytes/amc?status.svg)](https://godoc.org/github.com/makibytes/amc)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makibytes/amc/blob/main/LICENSE)
+[![Build Status](https://github.com/makibytes/xmc/actions/workflows/main_build_and_test_linux.yml/badge.svg)](https://github.com/makibytes/xmc/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/makibytes/xmc)](https://goreportcard.com/report/github.com/makibytes/xmc)
+[![GoDoc](https://godoc.org/github.com/makibytes/xmc?status.svg)](https://godoc.org/github.com/makibytes/xmc)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makibytes/xmc/blob/main/LICENSE)
 
-This project provides a unified command-line interface (CLI) for sending and receiving messages to/from different Message and Streaming Brokers. The broker backend is selected at **build time** using Go build tags:
+This project provides a unified command-line interface (CLI) for sending and receiving messages to/from different Message and Streaming Brokers. The broker backend is selected at **build time** using Go build tags. Each flavor produces its own binary with its own name and environment variable prefix.
 
 ## Building for Different Brokers
 
-Build the `amc` binary for your specific broker:
-
-| Build Command | Broker | Protocol |
-| --- | --- | --- |
-| `go build -tags artemis` | Apache Artemis | AMQP 1.0 |
-| `./scripts/build-imc-in-container.sh` | IBM MQ | IBM MQ |
-| `go build -tags kafka` | Apache Kafka | Kafka |
-| `go build -tags mqtt` | MQTT Brokers | MQTT |
-| `go build -tags rabbitmq` | RabbitMQ v4+ | AMQP 1.0 |
+| Build Command | Binary | Broker | Protocol | Env Prefix |
+| --- | --- | --- | --- | --- |
+| `go build -tags artemis -o amc .` | `amc` | Apache Artemis | AMQP 1.0 | `AMC_` |
+| `./scripts/build-imc-in-container.sh` | `imc` | IBM MQ | IBM MQ | `IMC_` |
+| `go build -tags kafka -o kmc .` | `kmc` | Apache Kafka | Kafka | `KMC_` |
+| `go build -tags mqtt -o mmc .` | `mmc` | MQTT Brokers | MQTT | `MMC_` |
+| `go build -tags rabbitmq -o rmc .` | `rmc` | RabbitMQ v4+ | AMQP 1.0 | `RMC_` |
 
 Build all flavors for the platform matrix (`linux/amd64`, `linux/arm64`, `darwin/arm64`, `windows/amd64`):
 
@@ -32,20 +30,20 @@ protocols and brokers, comparable to the JMS API. See broker/BROKERS.md for more
 
 ## Usage
 
-After building for your chosen broker, the `amc` binary provides the same interface regardless of backend.
+After building for your chosen broker, the binary provides the same interface regardless of backend. In the examples below, `xmc` is used as a placeholder — substitute it with the actual binary name (`amc`, `imc`, `kmc`, `mmc`, or `rmc`).
 
 ### Connection Parameters
 
 The following parameters and environment variables can be used for all commands:
 
 ```sh
-  -s, --server string      server URL of the broker    [$AMC_SERVER]
-  -u, --user string        username for SASL login     [$AMC_USER]
-  -p, --password string    password for SASL login     [$AMC_PASSWORD]
+  -s, --server string      server URL of the broker    [$<PREFIX>_SERVER]
+  -u, --user string        username for SASL login     [$<PREFIX>_USER]
+  -p, --password string    password for SASL login     [$<PREFIX>_PASSWORD]
   -v, --verbose            print verbose output
 ```
 
-Environment variables are prefixed with `AMC_`.
+Environment variables are prefixed per flavor: `AMC_` for Artemis, `IMC_` for IBM MQ, `KMC_` for Kafka, `RMC_` for RabbitMQ.
 
 ### TLS / SSL
 
@@ -68,9 +66,9 @@ TLS is auto-detected when using `amqps://` or `kafka+ssl://` URL schemes.
 Send a message to a queue:
 
 ```sh
-amc send <queue> <message>
-amc send <queue> < message.dat           # read from stdin
-echo -e "line1\nline2" | amc send -l <queue>  # send each line as separate message
+xmc send <queue> <message>
+xmc send <queue> < message.dat           # read from stdin
+echo -e "line1\nline2" | xmc send -l <queue>  # send each line as separate message
 ```
 
 Flags:
@@ -93,11 +91,11 @@ Flags:
 Receive (destructive read) a message from a queue:
 
 ```sh
-amc receive <queue>
-amc receive -w <queue>             # wait for a message
-amc receive -n 10 <queue>          # receive 10 messages
-amc receive -J <queue>             # output as JSON
-amc receive -S "color='red'" <queue>  # filter by selector
+xmc receive <queue>
+xmc receive -w <queue>             # wait for a message
+xmc receive -n 10 <queue>          # receive 10 messages
+xmc receive -J <queue>             # output as JSON
+xmc receive -S "color='red'" <queue>  # filter by selector
 ```
 
 Flags:
@@ -116,8 +114,8 @@ Flags:
 Peek at a message without removing it (non-destructive read):
 
 ```sh
-amc peek <queue>
-amc peek -n 5 -J <queue>          # peek 5 messages as JSON
+xmc peek <queue>
+xmc peek -n 5 -J <queue>          # peek 5 messages as JSON
 ```
 
 Same flags as `receive` except messages are never consumed.
@@ -127,15 +125,15 @@ Same flags as `receive` except messages are never consumed.
 Send a message and wait for a reply (request-reply pattern):
 
 ```sh
-amc request <queue> <message>
-amc request -R my-reply-queue <queue> <message>
-amc request -J <queue> <message>   # output reply as JSON
+xmc request <queue> <message>
+xmc request -R my-reply-queue <queue> <message>
+xmc request -J <queue> <message>   # output reply as JSON
 ```
 
 Flags:
 
 ```
-  -R, --replyto string     reply queue (default "amc.reply")
+  -R, --replyto string     reply queue (default "xmc.reply")
   -t, --timeout float32    seconds to wait for reply (default 30)
   -J, --json               output reply as JSON
   -q, --quiet              show data only
@@ -150,8 +148,8 @@ Plus all `send` flags for the outgoing message.
 Publish a message to a topic:
 
 ```sh
-amc publish <topic> <message>
-amc publish -n 100 <topic> <message>   # publish 100 times
+xmc publish <topic> <message>
+xmc publish -n 100 <topic> <message>   # publish 100 times
 ```
 
 Same flags as `send`, plus:
@@ -165,16 +163,16 @@ Same flags as `send`, plus:
 Subscribe and receive a message from a topic:
 
 ```sh
-amc subscribe <topic>
-amc subscribe -n 10 -J <topic>        # receive 10 as JSON
-amc subscribe -D <topic>              # durable subscription
-amc subscribe -S "type='order'" <topic>  # with selector
+xmc subscribe <topic>
+xmc subscribe -n 10 -J <topic>        # receive 10 as JSON
+xmc subscribe -D <topic>              # durable subscription
+xmc subscribe -S "type='order'" <topic>  # with selector
 ```
 
 Same flags as `receive`, plus:
 
 ```
-  -g, --group string       consumer group ID (default "amc-consumer-group")
+  -g, --group string       consumer group ID (default "xmc-consumer-group")
   -D, --durable            create a durable subscription
 ```
 
@@ -183,9 +181,9 @@ Same flags as `receive`, plus:
 Broker management operations (available for Artemis, RabbitMQ, Kafka):
 
 ```sh
-amc manage list                    # list queues/topics
-amc manage purge <queue>           # remove all messages from a queue
-amc manage stats <queue>           # show queue statistics
+xmc manage list                    # list queues/topics
+xmc manage purge <queue>           # remove all messages from a queue
+xmc manage stats <queue>           # show queue statistics
 ```
 
 ### Application Properties
@@ -193,7 +191,7 @@ amc manage stats <queue>           # show queue statistics
 You can set properties (metadata) for the message:
 
 ```sh
-amc send <queue> -P key1=value1 -P key2=value2 <message>
+xmc send <queue> -P key1=value1 -P key2=value2 <message>
 ```
 
 If a message has properties, `receive` shows them automatically. Use `-q` to suppress.
@@ -203,17 +201,17 @@ If a message has properties, `receive` shows them automatically. Use `-q` to sup
 The message can be read from file:
 
 ```sh
-amc send <queue> < message.dat
+xmc send <queue> < message.dat
 ```
 
 By redirecting the output of `receive`, the message data (and only the data) will
 be written to a file:
 
 ```sh
-amc receive <queue> > message.dat
+xmc receive <queue> > message.dat
 ```
 
-The file will be exactly the same as it was sent. Without redirection `amc`
+The file will be exactly the same as it was sent. Without redirection the binary
 adds a newline character at the end of the message data for better readability.
 
 ### JSON Output
@@ -221,8 +219,16 @@ adds a newline character at the end of the message data for better readability.
 Use `-J` to get structured JSON output from receive, peek, subscribe, and request:
 
 ```sh
-$ amc receive -J test-queue
+$ xmc receive -J test-queue
 {"data":"hello world","messageId":"ID:123","properties":{"env":"prod"}}
+```
+
+### Version
+
+Print the version of the binary:
+
+```sh
+xmc version
 ```
 
 ## Testing
@@ -276,4 +282,4 @@ Use the latest version of Go and run tests with Artemis.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
