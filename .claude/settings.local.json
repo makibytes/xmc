@@ -26,7 +26,10 @@
       "Bash(/tmp/amc-ver version:*)",
       "Bash(go mod verify:*)",
       "Bash(/tmp/xmc-stub:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(bash -x run-tests.sh)",
+      "Bash(XMC_BINARY=./amc bash:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
