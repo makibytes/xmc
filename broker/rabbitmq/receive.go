@@ -4,7 +4,7 @@ package rabbitmq
 
 import (
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/broker/amqpcommon"
+	"github.com/makibytes/xmc/broker/amqpcommon"
 )
 
 // ReceiveMessage receives a message from RabbitMQ (no routing capabilities needed)

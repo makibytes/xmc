@@ -3,6 +3,7 @@ package mqtt
 import (
 	"fmt"
 
+	"github.com/makibytes/xmc/cmd"
 	"github.com/spf13/cobra"
 )
 
@@ -17,8 +18,8 @@ func NewBroker() *Broker {
 // RootCommand returns the root command for MQTT operations
 func (b *Broker) RootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "amc",
-		Short: "AMC - Artemis Messaging Client (MQTT mode)",
+		Use:   "mmc",
+		Short: "MQTT Messaging Client",
 		Long:  "A messaging client for MQTT operations",
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
@@ -29,6 +30,7 @@ func (b *Broker) RootCommand() *cobra.Command {
 	rootCmd.AddCommand(b.putCommand())
 	rootCmd.AddCommand(b.getCommand())
 	rootCmd.AddCommand(b.peekCommand())
+	rootCmd.AddCommand(cmd.NewVersionCommand())
 
 	return rootCmd
 }

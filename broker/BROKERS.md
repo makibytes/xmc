@@ -64,7 +64,7 @@ flowchart LR
 ### IBM MQ
 
 - Protocol: IBM MQ native (requires IBM MQ client libraries)
-- Queue-only operations (no topic support in amc)
+- Queue-only operations (no topic support in imc)
 - Binary name: `imc` (built via `build-imc-in-container.sh` or with `-tags ibmmq`)
 - Connection flags include `--qmgr/-m` (queue manager) and `--channel/-c`
 - Selectors: IBM MQ message selector support

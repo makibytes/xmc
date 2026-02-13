@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/makibytes/amc/broker/backends"
+	"github.com/makibytes/xmc/broker/backends"
 )
 
 func TestWrapQueueCommand_CreatesAdapter(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 func TestConvertAMQPToBackendMessage_BasicData(t *testing.T) {

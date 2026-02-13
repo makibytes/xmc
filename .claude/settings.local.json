@@ -16,7 +16,17 @@
       "Bash(ls:*)",
       "Bash(go test:*)",
       "Bash(go vet:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(/tmp/amc-check:*)",
+      "Bash(/tmp/kmc-check version:*)",
+      "Bash(/tmp/kmc-check:*)",
+      "Bash(/tmp/rmc-check:*)",
+      "Bash(/tmp/mmc-check:*)",
+      "Bash(/tmp/amc-ver version:*)",
+      "Bash(go mod verify:*)",
+      "Bash(/tmp/xmc-stub:*)",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": []

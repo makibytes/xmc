@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DOCKER_BIN="${DOCKER_BIN:-docker}"
-BUILDER_IMAGE="${IMC_BUILDER_IMAGE:-amc-ibmmq-builder:latest}"
+BUILDER_IMAGE="${IMC_BUILDER_IMAGE:-xmc-ibmmq-builder:latest}"
 TARGET_OS="${TARGET_OS:-linux}"
 TARGET_ARCH="${TARGET_ARCH:-amd64}"
 IMC_OUTPUT="${IMC_OUTPUT:-imc}"

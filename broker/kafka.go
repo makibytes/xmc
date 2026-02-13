@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/broker/kafka"
-	"github.com/makibytes/amc/cmd"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/broker/kafka"
+	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
 // GetRootCommand returns the Kafka root command
 func GetRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "amc",
+		Use:   "kmc",
 		Short: "Apache Kafka Messaging Client",
 		Long:  "Command-line interface for Apache Kafka messaging",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -27,12 +27,12 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	// Connection flags
-	var defaultServer = os.Getenv("AMC_SERVER")
+	var defaultServer = os.Getenv("KMC_SERVER")
 	if defaultServer == "" {
 		defaultServer = "kafka://localhost:9092"
 	}
-	var defaultUser = os.Getenv("AMC_USER")
-	var defaultPassword = os.Getenv("AMC_PASSWORD")
+	var defaultUser = os.Getenv("KMC_USER")
+	var defaultPassword = os.Getenv("KMC_PASSWORD")
 
 	var connArgs kafka.ConnArguments
 
@@ -75,6 +75,9 @@ func GetRootCommand() *cobra.Command {
 		},
 	})
 	rootCmd.AddCommand(mgmtCmd)
+
+	// Version command
+	rootCmd.AddCommand(cmd.NewVersionCommand())
 
 	return rootCmd
 }

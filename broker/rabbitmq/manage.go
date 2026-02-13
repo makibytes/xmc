@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 // ManagementArgs holds parameters for RabbitMQ management operations

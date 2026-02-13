@@ -7,8 +7,8 @@ import (
 	"errors"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/broker/amqpcommon"
-	"github.com/makibytes/amc/broker/backends"
+	"github.com/makibytes/xmc/broker/amqpcommon"
+	"github.com/makibytes/xmc/broker/backends"
 )
 
 // TopicAdapter adapts Artemis to the TopicBackend interface

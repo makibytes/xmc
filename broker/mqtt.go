@@ -3,7 +3,7 @@
 package broker
 
 import (
-	"github.com/makibytes/amc/broker/mqtt"
+	"github.com/makibytes/xmc/broker/mqtt"
 	"github.com/spf13/cobra"
 )
 

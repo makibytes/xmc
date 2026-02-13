@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 	"github.com/segmentio/kafka-go"
 )
 

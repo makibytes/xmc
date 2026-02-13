@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ibm-messaging/mq-golang/v5/ibmmq"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 // ReceiveMessage receives a message from an IBM MQ queue

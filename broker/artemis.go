@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/makibytes/amc/broker/artemis"
-	"github.com/makibytes/amc/broker/backends"
-	"github.com/makibytes/amc/cmd"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker/artemis"
+	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
@@ -66,6 +66,9 @@ func GetRootCommand() *cobra.Command {
 
 	// Management commands
 	rootCmd.AddCommand(newManageCommand(connArgs))
+
+	// Version command
+	rootCmd.AddCommand(cmd.NewVersionCommand())
 
 	return rootCmd
 }

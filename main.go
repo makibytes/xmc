@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"github.com/makibytes/amc/broker"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/broker"
+	"github.com/makibytes/xmc/log"
 )
 
 func main() {

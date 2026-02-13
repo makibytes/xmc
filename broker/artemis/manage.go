@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 // ManagementArgs holds parameters for Artemis management operations

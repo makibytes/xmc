@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/log"
+	"github.com/makibytes/xmc/log"
 )
 
 // ConnArguments holds common AMQP connection parameters
@@ -36,12 +36,12 @@ func Connect(args ConnArguments) (*amqp.Conn, *amqp.Session, error) {
 	var connOptions *amqp.ConnOptions
 	if args.User == "" {
 		connOptions = &amqp.ConnOptions{
-			ContainerID: "amcContainer",
+			ContainerID: "xmcContainer",
 			SASLType:    amqp.SASLTypeAnonymous(),
 		}
 	} else {
 		connOptions = &amqp.ConnOptions{
-			ContainerID: "amcContainer",
+			ContainerID: "xmcContainer",
 			SASLType:    amqp.SASLTypePlain(args.User, args.Password),
 		}
 	}
