@@ -1,20 +1,26 @@
-package send
+//go:build artemis
+
+package artemis
 
 import (
 	"context"
+	"time"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/amc/artemis"
-	"github.com/makibytes/amc/conn"
+
 	"github.com/makibytes/amc/log"
 )
 
-func SendMessage(ctx context.Context, session *amqp.Session, args conn.SendArguments) error {
+func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments) error {
 	log.Verbose("🏗️  constructing message...")
 	message := amqp.NewMessage(args.Message)
 	message.Header = &amqp.MessageHeader{
 		Durable:  args.Durable,
 		Priority: args.Priority,
+	}
+	if args.TTL > 0 {
+		message.Header.TTL = time.Duration(args.TTL) * time.Millisecond
+		log.Verbose("setting TTL to %d ms", args.TTL)
 	}
 	message.Properties = &amqp.MessageProperties{
 		ContentType:   &args.ContentType,
@@ -30,11 +36,11 @@ func SendMessage(ctx context.Context, session *amqp.Session, args conn.SendArgum
 	var targetCapabilities []string
 	if args.Multicast {
 		log.Verbose("🤟 with MULTICAST routing")
-		artemisRouting = artemis.TopicType
+		artemisRouting = TopicType
 		targetCapabilities = append(targetCapabilities, "topic")
 	} else {
 		log.Verbose("👉 with ANYCAST routing")
-		artemisRouting = artemis.QueueType
+		artemisRouting = QueueType
 		targetCapabilities = append(targetCapabilities, "queue")
 	}
 	message.DeliveryAnnotations = amqp.Annotations{

@@ -1,3 +1,5 @@
+//go:build artemis
+
 package artemis
 
 // values from artemis source code AMQPMessageSupport.java
