@@ -1,4 +1,4 @@
-FROM golang:1.23-bookworm
+FROM golang:1.26-bookworm
 
 ARG MQ_VRMF=9.4.5.0
 ARG MQ_ARCH=X64

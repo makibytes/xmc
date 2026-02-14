@@ -42,3 +42,74 @@ jobs:
         binary_name: ${{ matrix.flavor.binary }}
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
+
+  build-and-release-ibmmq-linux:
+    name: Build and release IBM MQ (linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v5
+      with:
+        submodules: recursive
+    - name: Build Docker image
+      run: docker build -t xmc-ibmmq-builder build/ibmmq
+    - name: Build imc binary
+      run: |
+        docker run --rm \
+          -v "${{ github.workspace }}:/workspace" \
+          -e CGO_ENABLED=1 \
+          -e GOOS=linux \
+          -e GOARCH=amd64 \
+          xmc-ibmmq-builder \
+          go build -tags ibmmq \
+            -ldflags "-X github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}" \
+            -o imc .
+    - name: Create release tarball
+      run: |
+        tar -czf imc-${{ github.ref_name }}-linux-amd64.tar.gz imc
+    - name: Upload to release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ github.ref_name }} \
+          imc-${{ github.ref_name }}-linux-amd64.tar.gz \
+          --clobber
+
+  build-and-release-ibmmq-windows:
+    name: Build and release IBM MQ (windows/amd64)
+    runs-on: windows-latest
+    steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 1.26.0
+    - name: Check out code
+      uses: actions/checkout@v5
+      with:
+        submodules: recursive
+    - name: Download and install IBM MQ client
+      shell: powershell
+      run: |
+        $MQ_VRMF = "9.4.5.0"
+        $url = "https://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/messaging/mqdev/redist/${MQ_VRMF}-IBM-MQC-Redist-Win64.zip"
+        Invoke-WebRequest -Uri $url -OutFile mq-redist.zip
+        Expand-Archive -Path mq-redist.zip -DestinationPath "C:\Program Files\IBM\MQ"
+    - name: Build imc binary
+      shell: bash
+      env:
+        CGO_ENABLED: "1"
+      run: |
+        go build -tags ibmmq \
+          -ldflags "-X github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}" \
+          -o imc.exe .
+    - name: Create release archive
+      shell: powershell
+      run: |
+        Compress-Archive -Path imc.exe -DestinationPath "imc-${{ github.ref_name }}-windows-amd64.zip"
+    - name: Upload to release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ github.ref_name }} `
+          "imc-${{ github.ref_name }}-windows-amd64.zip" `
+          --clobber
