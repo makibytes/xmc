@@ -29,7 +29,9 @@
       "Bash(echo:*)",
       "Bash(bash -x run-tests.sh)",
       "Bash(XMC_BINARY=./amc bash:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(go list:*)",
+      "Bash(go mod edit:*)"
     ],
     "deny": [],
     "ask": []
