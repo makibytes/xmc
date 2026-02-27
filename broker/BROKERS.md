@@ -2,21 +2,21 @@
 
 ## Feature Matrix
 
-| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT |
-| --- | --- | --- | --- | --- | --- |
-| Queue send/receive/peek | Yes | Yes | - | Yes | - |
-| Topic publish/subscribe | Yes | Yes | Yes | - | Yes |
-| Request-reply | Yes | Yes | - | Yes | - |
-| TLS / SSL | Yes | Yes | Yes | - | Yes |
-| Message selectors | Yes | Yes | - | Yes | - |
-| Durable subscriptions | Yes | Yes | - | - | - |
-| TTL / expiry | Yes | Yes | Yes | Yes | - |
-| Application properties | Yes | Yes | Yes | Yes | - |
-| Message priority | Yes | Yes | - | Yes | - |
-| Persistent delivery | Yes | Yes | - | Yes | - |
-| Management: list | Yes | Yes | Yes | - | - |
-| Management: purge | Yes | Yes | - | - | - |
-| Management: stats | Yes | Yes | - | - | - |
+| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS |
+| --- | --- | --- | --- | --- | --- | --- |
+| Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes |
+| Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes |
+| Request-reply | Yes | Yes | - | Yes | - | Yes |
+| TLS / SSL | Yes | Yes | Yes | - | Yes | Yes |
+| Message selectors | Yes | Yes | - | Yes | - | - |
+| Durable subscriptions | Yes | Yes | - | - | - | - |
+| TTL / expiry | Yes | Yes | Yes | Yes | - | - |
+| Application properties | Yes | Yes | Yes | Yes | - | - |
+| Message priority | Yes | Yes | - | Yes | - | - |
+| Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) |
+| Management: list | Yes | Yes | Yes | - | - | Yes |
+| Management: purge | Yes | Yes | - | - | - | - |
+| Management: stats | Yes | Yes | - | - | - | - |
 
 ## Traditional Message Brokers
 
@@ -96,6 +96,46 @@ flowchart LR
 ### MQTT
 
 - Protocol: MQTT 3.1.1 / 5.0
-- Topic-only pub/sub model
-- Lightweight protocol designed for IoT
-- Stub implementation (not fully implemented)
+- Binary: `mmc`, build tag: `mqtt`
+- **Queue topology**: send publishes to `queue/{name}` with QoS 1; receive uses MQTT 5.0 shared subscriptions (`$share/xmc/queue/{name}`) for competing consumers; peek subscribes directly without a shared subscription using a fresh clean-session client.
+- **Topic topology**: publish/subscribe to MQTT topics directly. Consumer groups via `--group` map to shared subscriptions (`$share/{groupID}/{topic}`).
+- TLS: auto-detected via `ssl://` URL scheme or `--tls` flag
+- `--client-id` flag: optional, auto-generated if not set
+- QoS 0 = non-persistent, QoS 1 = persistent (maps to `--persistent` flag)
+- Default server: `tcp://localhost:1883` (env: `MMC_SERVER`)
+- Library: `github.com/eclipse/paho.mqtt.golang`
+
+```mermaid
+flowchart LR
+    A[Producer] -->|queue/name QoS 1| B{$share/xmc/queue/name}
+    B --> C(Consumer1)
+    B --> D(Consumer2)
+
+    E[Producer] -->|topic| F(Subscriber1)
+    E -->|topic| G(Subscriber2)
+```
+
+### NATS
+
+- Protocol: NATS Core / JetStream
+- Binary: `nmc`, build tag: `nats`
+- **Queue topology**: JetStream streams with WorkQueue retention — each message delivered to exactly one consumer. Streams are auto-created on first use (`XMC_Q_{QUEUENAME}`). Peek uses a pull consumer with nak (no acknowledgement) so messages are not consumed.
+- **Topic topology**: Core NATS pub/sub subjects. Consumer groups via `--group` flag map to NATS queue subscribers (`QueueSubscribeSync`).
+- Request-reply: supported using NATS reply subjects
+- TLS: standard flags (`--tls`, `--ca-cert`, `--cert`, `--key-file`, `--insecure`)
+- Management: `manage list` enumerates JetStream streams (= queues)
+- Default server: `nats://localhost:4222` (env: `NMC_SERVER`)
+- Requires JetStream enabled on the server (`--jetstream` flag or `jetstream {}` in server config) for queue operations
+- Library: `github.com/nats-io/nats.go`
+
+```mermaid
+flowchart LR
+    A[Producer] -->|JetStream stream XMC_Q_NAME| B{WorkQueue}
+    B -->|pull consumer| C(Consumer1)
+    B -->|pull consumer| D(Consumer2)
+
+    E[Producer] -->|subject| F(Subscriber1)
+    E -->|subject| G["QueueGroup (--group)"]
+    G --> H(Consumer1)
+    G --> I(Consumer2)
+```
