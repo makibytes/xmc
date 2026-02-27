@@ -148,3 +148,42 @@ func TestPeekCommand_SelectorFlag(t *testing.T) {
 		t.Errorf("selector = %q, want %q", mock.lastReceiveOpts.Selector, "priority > 5")
 	}
 }
+
+func TestPeekCommand_NilMessageAfterFirst(t *testing.T) {
+msgs := []*backends.Message{
+{Data: []byte("first peek")},
+nil,
+}
+mock := &mockQueueBackend{receiveMsgs: msgs}
+cmd := NewPeekCommand(mock)
+cmd.SetArgs([]string{"test-queue", "-n", "5"})
+
+old := os.Stdout
+_, w, _ := os.Pipe()
+os.Stdout = w
+origIsStdout := log.IsStdout
+log.IsStdout = false
+defer func() { log.IsStdout = origIsStdout }()
+
+err := cmd.Execute()
+w.Close()
+os.Stdout = old
+
+if err != nil {
+t.Fatalf("expected nil error when message stream ends, got: %v", err)
+}
+if mock.receiveCount != 2 {
+t.Errorf("receiveCount = %d, want 2", mock.receiveCount)
+}
+}
+
+func TestPeekCommand_NilMessageFirst(t *testing.T) {
+mock := &mockQueueBackend{receiveMsg: nil}
+cmd := NewPeekCommand(mock)
+cmd.SetArgs([]string{"test-queue"})
+
+err := cmd.Execute()
+if err == nil {
+t.Fatal("expected error for nil message, got nil")
+}
+}

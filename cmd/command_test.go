@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -71,4 +74,23 @@ func TestWrapTopicCommand_FactoryError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from factory, got nil")
 	}
+}
+
+func TestVersionCommand_Execute(t *testing.T) {
+cmd := NewVersionCommand()
+
+old := os.Stdout
+r, w, _ := os.Pipe()
+os.Stdout = w
+
+cmd.Execute()
+w.Close()
+os.Stdout = old
+
+var buf bytes.Buffer
+buf.ReadFrom(r)
+got := strings.TrimSpace(buf.String())
+if got != "dev" {
+t.Errorf("version = %q, want %q", got, "dev")
+}
 }

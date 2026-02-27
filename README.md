@@ -261,6 +261,29 @@ Then you can start the tests:
 ./run-tests.sh
 ```
 
+### Integration Tests (testcontainers)
+
+Integration tests start real broker containers automatically via [testcontainers-go](https://golang.testcontainers.org/).
+Requires Docker.
+
+Run all broker integration tests:
+
+```sh
+./run-integration-tests.sh
+```
+
+Run a single broker:
+
+```sh
+go test -tags "artemis integration" -timeout 120s -v ./broker/artemis/
+```
+
+Integration tests are tagged with both the broker build tag and `integration`:
+
+```go
+//go:build artemis && integration
+```
+
 IBM MQ is built in a Docker container that downloads the IBM MQ Redistributable SDK and compiles `imc` without requiring local MQ headers.
 This requires a working Docker installation.
 
