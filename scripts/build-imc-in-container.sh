@@ -48,4 +48,4 @@ fi
   -w /workspace \
   -e "IMC_OUTPUT=${IMC_OUTPUT}" \
   "${BUILDER_IMAGE}" \
-  bash -c 'mkdir -p "$(dirname "${IMC_OUTPUT}")" && go build -tags ibmmq -o "${IMC_OUTPUT}" .'
+  bash -c 'mkdir -p "$(dirname "${IMC_OUTPUT}")" && go build -tags ibmmq -buildvcs=false -o "${IMC_OUTPUT}" .'
