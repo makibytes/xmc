@@ -16,6 +16,7 @@ This project provides a unified command-line interface (CLI) for sending and rec
 | `go build -tags kafka -o kmc .` | `kmc` | Apache Kafka | Kafka | `KMC_` |
 | `go build -tags mqtt -o mmc .` | `mmc` | MQTT Brokers | MQTT 3.1.1/5.0 | `MMC_` |
 | `go build -tags nats -o nmc .` | `nmc` | NATS | NATS / JetStream | `NMC_` |
+| `go build -tags pulsar -o pmc .` | `pmc` | Apache Pulsar | Pulsar native | `PMC_` |
 | `go build -tags rabbitmq -o rmc .` | `rmc` | RabbitMQ v4+ | AMQP 1.0 | `RMC_` |
 
 Build all flavors for the platform matrix (`linux/amd64`, `linux/arm64`, `darwin/arm64`, `windows/amd64`):
@@ -31,7 +32,7 @@ protocols and brokers, comparable to the JMS API. See broker/BROKERS.md for more
 
 ## Usage
 
-After building for your chosen broker, the binary provides the same interface regardless of backend. In the examples below, `xmc` is used as a placeholder — substitute it with the actual binary name (`amc`, `imc`, `kmc`, `mmc`, `nmc`, or `rmc`).
+After building for your chosen broker, the binary provides the same interface regardless of backend. In the examples below, `xmc` is used as a placeholder — substitute it with the actual binary name (`amc`, `imc`, `kmc`, `mmc`, `nmc`, `pmc`, or `rmc`).
 
 ### Connection Parameters
 
@@ -44,7 +45,7 @@ The following parameters and environment variables can be used for all commands:
   -v, --verbose            print verbose output
 ```
 
-Environment variables are prefixed per flavor: `AMC_` for Artemis, `IMC_` for IBM MQ, `KMC_` for Kafka, `MMC_` for MQTT, `NMC_` for NATS, `RMC_` for RabbitMQ.
+Environment variables are prefixed per flavor: `AMC_` for Artemis, `IMC_` for IBM MQ, `KMC_` for Kafka, `MMC_` for MQTT, `NMC_` for NATS, `PMC_` for Pulsar, `RMC_` for RabbitMQ.
 
 ### TLS / SSL
 

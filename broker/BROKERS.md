@@ -2,21 +2,21 @@
 
 ## Feature Matrix
 
-| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS |
-| --- | --- | --- | --- | --- | --- | --- |
-| Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes |
-| Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes |
-| Request-reply | Yes | Yes | - | Yes | - | Yes |
-| TLS / SSL | Yes | Yes | Yes | - | Yes | Yes |
-| Message selectors | Yes | Yes | - | Yes | - | - |
-| Durable subscriptions | Yes | Yes | - | - | - | - |
-| TTL / expiry | Yes | Yes | Yes | Yes | - | - |
-| Application properties | Yes | Yes | Yes | Yes | - | - |
-| Message priority | Yes | Yes | - | Yes | - | - |
-| Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) |
-| Management: list | Yes | Yes | Yes | - | - | Yes |
-| Management: purge | Yes | Yes | - | - | - | - |
-| Management: stats | Yes | Yes | - | - | - | - |
+| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS | Pulsar |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes |
+| Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes |
+| Request-reply | Yes | Yes | - | Yes | - | Yes | Yes |
+| TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes |
+| Message selectors | Yes | Yes | - | Yes | - | - | - |
+| Durable subscriptions | Yes | Yes | - | - | - | - | Yes |
+| TTL / expiry | Yes | Yes | Yes | Yes | - | - | Partial |
+| Application properties | Yes | Yes | Yes | Yes | - | - | Yes |
+| Message priority | Yes | Yes | - | Yes | - | - | - |
+| Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) |
+| Management: list | Yes | Yes | Yes | - | - | Yes | Yes |
+| Management: purge | Yes | Yes | - | - | - | - | - |
+| Management: stats | Yes | Yes | - | - | - | - | - |
 
 ## Traditional Message Brokers
 
@@ -138,4 +138,33 @@ flowchart LR
     E -->|subject| G["QueueGroup (--group)"]
     G --> H(Consumer1)
     G --> I(Consumer2)
+```
+
+### Apache Pulsar
+
+- Protocol: Pulsar native (binary protocol, port 6650)
+- Binary: `pmc`, build tag: `pulsar`
+- **Queue topology**: Shared subscription on `persistent://public/default/{queue}` — messages distributed among all subscribers with the same subscription name, each delivered to exactly one consumer.
+- **Topic topology**: Exclusive subscription by default (single consumer gets all messages); `--group` maps to Shared subscription for load-balanced consumer groups.
+- Durable subscriptions: all subscriptions are durable by default in Pulsar (server retains messages until acknowledged)
+- Peek: uses Shared subscription + Nack so messages are redelivered and not consumed
+- Request-reply: via ReplyTo topic property
+- TLS: auto-detected via `pulsar+ssl://` URL scheme; also `--tls` flag
+- Authentication: token-based via `--password` (JWT); TLS client certificate via `--cert`/`--key-file`
+- Management: `pmc manage list` uses Pulsar Admin REST API (HTTP port 8080, `--admin-port` to override)
+- Default server: `pulsar://localhost:6650` (env: `PMC_SERVER`)
+- Tenant/namespace: defaults to `persistent://public/default/`
+
+```mermaid
+flowchart LR
+    A[Producer] -->|persistent://public/default/queue| B{Shared Sub}
+    B -->|competing| C(Consumer1)
+    B -->|competing| D(Consumer2)
+
+    E[Producer] -->|persistent://public/default/topic| F{Exclusive Sub}
+    F --> G(Consumer1)
+
+    H[Producer] -->|persistent://public/default/topic| I{"Shared Sub (--group)"}
+    I --> J(Consumer1)
+    I --> K(Consumer2)
 ```

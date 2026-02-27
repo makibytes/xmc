@@ -1,4 +1,4 @@
-//go:build !artemis && !kafka && !ibmmq && !mqtt && !rabbitmq && !nats
+//go:build !artemis && !kafka && !ibmmq && !mqtt && !rabbitmq && !nats && !pulsar
 
 package broker
 
