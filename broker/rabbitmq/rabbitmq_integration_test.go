@@ -69,6 +69,7 @@ func newConnArgs() ConnArguments {
 
 // TestRabbitMQ_QueueSendReceive verifies a basic text message roundtrip via a queue.
 func TestRabbitMQ_QueueSendReceive(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test.send.receive"
 	payload := []byte("hello rabbitmq")
@@ -104,6 +105,7 @@ func TestRabbitMQ_QueueSendReceive(t *testing.T) {
 
 // TestRabbitMQ_QueueSendReceive_Properties verifies application properties are preserved.
 func TestRabbitMQ_QueueSendReceive_Properties(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test.properties"
 	payload := []byte("props message")
@@ -151,6 +153,7 @@ func TestRabbitMQ_QueueSendReceive_Properties(t *testing.T) {
 
 // TestRabbitMQ_QueuePeek verifies that peeking does not consume the message.
 func TestRabbitMQ_QueuePeek(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test.peek"
 	payload := []byte("peek me")
@@ -203,6 +206,7 @@ func TestRabbitMQ_QueuePeek(t *testing.T) {
 
 // TestRabbitMQ_QueueReceive_Timeout verifies that receiving from an empty queue returns an error.
 func TestRabbitMQ_QueueReceive_Timeout(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test.timeout.empty"
 
@@ -224,6 +228,7 @@ func TestRabbitMQ_QueueReceive_Timeout(t *testing.T) {
 
 // TestRabbitMQ_QueueSendReceive_CorrelationID verifies that CorrelationID is preserved.
 func TestRabbitMQ_QueueSendReceive_CorrelationID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test.correlation"
 	payload := []byte("corr message")
@@ -264,6 +269,7 @@ func TestRabbitMQ_QueueSendReceive_CorrelationID(t *testing.T) {
 
 // TestRabbitMQ_TopicPublishSubscribe verifies publish and subscribe via the amq.topic exchange.
 func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	topic := "test.topic.pubsub"
 	payload := []byte("topic message")

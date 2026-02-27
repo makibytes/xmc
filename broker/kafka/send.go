@@ -41,6 +41,7 @@ func PublishMessage(ctx context.Context, connArgs ConnArguments, args SendArgume
 	}
 
 	writer := kafka.NewWriter(writerConfig)
+	writer.AllowAutoTopicCreation = true
 	defer writer.Close()
 
 	// Build message headers from properties

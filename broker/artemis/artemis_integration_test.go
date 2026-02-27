@@ -58,6 +58,7 @@ func randomSuffix() string { return fmt.Sprintf("%d", rand.Int63()) }
 // --- Queue tests ---
 
 func TestArtemis_QueueSendReceive(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip()
 	}
@@ -98,6 +99,7 @@ func TestArtemis_QueueSendReceive(t *testing.T) {
 }
 
 func TestArtemis_QueueSendReceive_Properties(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip()
 	}
@@ -147,6 +149,7 @@ func TestArtemis_QueueSendReceive_Properties(t *testing.T) {
 }
 
 func TestArtemis_QueuePeek(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip()
 	}
@@ -207,6 +210,7 @@ func TestArtemis_QueuePeek(t *testing.T) {
 }
 
 func TestArtemis_QueueReceive_Timeout(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip()
 	}
@@ -234,6 +238,7 @@ func TestArtemis_QueueReceive_Timeout(t *testing.T) {
 }
 
 func TestArtemis_QueueSendReceive_MessageID(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip()
 	}
@@ -279,6 +284,7 @@ func TestArtemis_QueueSendReceive_MessageID(t *testing.T) {
 // --- Topic tests ---
 
 func TestArtemis_TopicPublishSubscribe(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip()
 	}
@@ -338,6 +344,7 @@ func TestArtemis_TopicPublishSubscribe(t *testing.T) {
 }
 
 func TestArtemis_TopicPublishSubscribe_Properties(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip()
 	}

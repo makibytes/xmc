@@ -70,9 +70,11 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	topic := queueTopic(opts.Queue)
 	consumer, err := a.client.Subscribe(pulsar.ConsumerOptions{
-		Topic:            topic,
-		SubscriptionName: queueSubscription,
-		Type:             pulsar.Shared,
+		Topic:                       topic,
+		SubscriptionName:            queueSubscription,
+		Type:                        pulsar.Shared,
+		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
+		NackRedeliveryDelay:         1 * time.Second,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("subscribing to %s: %w", topic, err)

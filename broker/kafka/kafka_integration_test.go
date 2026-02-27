@@ -36,6 +36,7 @@ func makeConnArgs() ConnArguments {
 // TestKafka_TopicPublishSubscribe verifies that a published message is received
 // with the correct payload.
 func TestKafka_TopicPublishSubscribe(t *testing.T) {
+	t.Parallel()
 	topic := "test-publish-subscribe"
 	payload := []byte("hello kafka")
 
@@ -89,6 +90,7 @@ func TestKafka_TopicPublishSubscribe(t *testing.T) {
 // TestKafka_TopicPublishSubscribe_Properties verifies that application
 // properties survive a publish/subscribe round-trip.
 func TestKafka_TopicPublishSubscribe_Properties(t *testing.T) {
+	t.Parallel()
 	topic := "test-publish-properties"
 
 	adapter, err := NewTopicAdapter(makeConnArgs())
@@ -149,6 +151,7 @@ func TestKafka_TopicPublishSubscribe_Properties(t *testing.T) {
 // TestKafka_TopicPublishSubscribe_Key verifies that publishing with a key
 // results in a message being received (key visible in metadata).
 func TestKafka_TopicPublishSubscribe_Key(t *testing.T) {
+	t.Parallel()
 	topic := "test-publish-key"
 	messageKey := "partition-key-1"
 
@@ -208,6 +211,7 @@ func TestKafka_TopicPublishSubscribe_Key(t *testing.T) {
 // TestKafka_TopicSubscribe_ConsumerGroup verifies that subscribe works with a
 // named consumer group.
 func TestKafka_TopicSubscribe_ConsumerGroup(t *testing.T) {
+	t.Parallel()
 	topic := "test-consumer-group"
 	groupID := "test-cg-shared"
 
@@ -261,6 +265,7 @@ func TestKafka_TopicSubscribe_ConsumerGroup(t *testing.T) {
 // TestKafka_TopicSubscribe_Timeout verifies that subscribing to an empty topic
 // with a short timeout returns an error.
 func TestKafka_TopicSubscribe_Timeout(t *testing.T) {
+	t.Parallel()
 	topic := "test-subscribe-timeout-empty"
 
 	adapter, err := NewTopicAdapter(makeConnArgs())

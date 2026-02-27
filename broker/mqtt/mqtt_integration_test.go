@@ -41,6 +41,7 @@ func randomSuffix() string { return fmt.Sprintf("%d", rand.Int63()) } //nolint:g
 // TestMQTT_TopicPublishSubscribe verifies basic pub/sub using QoS 0 (non-persistent).
 // The subscriber goroutine is started first, then the publisher sends after a short delay.
 func TestMQTT_TopicPublishSubscribe(t *testing.T) {
+	t.Parallel()
 	topic := "test/topic/" + randomSuffix()
 	payload := []byte("hello mqtt")
 
@@ -95,6 +96,7 @@ func TestMQTT_TopicPublishSubscribe(t *testing.T) {
 // TestMQTT_TopicPublishSubscribe_Persistent publishes with Persistent=true (QoS 1)
 // and verifies the message is received.
 func TestMQTT_TopicPublishSubscribe_Persistent(t *testing.T) {
+	t.Parallel()
 	topic := "test/topic/persistent/" + randomSuffix()
 	payload := []byte("persistent message")
 
@@ -147,6 +149,7 @@ func TestMQTT_TopicPublishSubscribe_Persistent(t *testing.T) {
 // TestMQTT_TopicSubscribe_Timeout verifies that Subscribe returns an error when
 // no message arrives within the timeout window.
 func TestMQTT_TopicSubscribe_Timeout(t *testing.T) {
+	t.Parallel()
 	topic := "test/topic/nobody/" + randomSuffix()
 
 	adapter, err := NewTopicAdapter(makeConnArgs())
@@ -171,6 +174,7 @@ func TestMQTT_TopicSubscribe_Timeout(t *testing.T) {
 // but the default no-auth config may use MQTT 3.1.1 only. If the subscribe token
 // returns an error, the test is skipped with an explanatory message.
 func TestMQTT_QueueSendReceive(t *testing.T) {
+	t.Parallel()
 	queueName := "testq-" + randomSuffix()
 	payload := []byte("queue message")
 
@@ -228,6 +232,7 @@ func TestMQTT_QueueSendReceive(t *testing.T) {
 // subscription ($share/<groupID>/<topic>). Mosquitto 2.x supports this with MQTT 5.
 // If the broker rejects the shared subscription, the test is skipped.
 func TestMQTT_TopicSubscribe_GroupID(t *testing.T) {
+	t.Parallel()
 	topic := "test/grouped/" + randomSuffix()
 	payload := []byte("grouped message")
 

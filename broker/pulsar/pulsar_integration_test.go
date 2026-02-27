@@ -68,6 +68,7 @@ func newTopicAdapter(t *testing.T) *TopicAdapter {
 // --- Queue tests (Shared subscription) ---
 
 func TestPulsar_QueueSendReceive(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test-queue-" + randomSuffix()
 	payload := []byte("hello pulsar")
@@ -89,6 +90,7 @@ func TestPulsar_QueueSendReceive(t *testing.T) {
 }
 
 func TestPulsar_QueuePeek(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test-queue-peek-" + randomSuffix()
 	payload := []byte("peek me")
@@ -120,6 +122,7 @@ func TestPulsar_QueuePeek(t *testing.T) {
 }
 
 func TestPulsar_QueueSendReceive_Properties(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test-queue-props-" + randomSuffix()
 
@@ -152,6 +155,7 @@ func TestPulsar_QueueSendReceive_Properties(t *testing.T) {
 }
 
 func TestPulsar_QueueReceive_Timeout(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test-queue-timeout-" + randomSuffix()
 
@@ -168,6 +172,7 @@ func TestPulsar_QueueReceive_Timeout(t *testing.T) {
 }
 
 func TestPulsar_QueueSendReceive_CorrelationID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := "test-queue-correlid-" + randomSuffix()
 	corrID := "corr-" + randomSuffix()
@@ -195,6 +200,7 @@ func TestPulsar_QueueSendReceive_CorrelationID(t *testing.T) {
 // --- Topic tests (Exclusive subscription) ---
 
 func TestPulsar_TopicPublishSubscribe(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	topic := "persistent://public/default/test-topic-" + randomSuffix()
 	payload := []byte("hello topic")
@@ -233,6 +239,7 @@ func TestPulsar_TopicPublishSubscribe(t *testing.T) {
 }
 
 func TestPulsar_TopicPublishSubscribe_Key(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	topic := "persistent://public/default/test-topic-key-" + randomSuffix()
 	payload := []byte("keyed message")
@@ -278,6 +285,7 @@ func TestPulsar_TopicPublishSubscribe_Key(t *testing.T) {
 }
 
 func TestPulsar_TopicSubscribe_GroupID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	topic := "persistent://public/default/test-topic-group-" + randomSuffix()
 	groupID := "my-group-" + randomSuffix()

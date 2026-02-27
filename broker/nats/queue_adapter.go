@@ -16,9 +16,10 @@ import (
 
 // QueueAdapter adapts NATS JetStream to the QueueBackend interface.
 type QueueAdapter struct {
-	connArgs ConnArguments
-	nc       *natsclient.Conn
-	js       natsclient.JetStreamContext
+	connArgs  ConnArguments
+	nc        *natsclient.Conn
+	js        natsclient.JetStreamContext
+	consumers map[string]*natsclient.Subscription // cached pull subscribers, keyed by queue name
 }
 
 // NewQueueAdapter creates a new NATS JetStream queue adapter.
@@ -29,9 +30,10 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	}
 
 	return &QueueAdapter{
-		connArgs: connArgs,
-		nc:       nc,
-		js:       js,
+		connArgs:  connArgs,
+		nc:        nc,
+		js:        js,
+		consumers: make(map[string]*natsclient.Subscription),
 	}, nil
 }
 
@@ -63,13 +65,10 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return nil, err
 	}
 
-	sub, err := a.js.PullSubscribe(queueSubject(opts.Queue), "xmc-consumer",
-		natsclient.BindStream(streamName(opts.Queue)),
-	)
+	sub, err := a.getOrCreateConsumer(opts.Queue)
 	if err != nil {
-		return nil, fmt.Errorf("creating pull subscriber: %w", err)
+		return nil, err
 	}
-	defer sub.Unsubscribe() //nolint:errcheck
 
 	timeout := receiveTimeout(opts.Timeout, opts.Wait)
 
@@ -86,7 +85,9 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 	m := msgs[0]
 	if opts.Acknowledge {
-		if err := m.Ack(); err != nil {
+		// AckSync waits for server confirmation, ensuring the message is deleted
+		// before the next Fetch on the same consumer.
+		if err := m.AckSync(); err != nil {
 			return nil, fmt.Errorf("acknowledging message: %w", err)
 		}
 	} else {
@@ -98,8 +99,29 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	return natsToBackendMessage(m), nil
 }
 
+// getOrCreateConsumer returns a cached pull subscriber for the given queue,
+// creating one if it doesn't exist.
+func (a *QueueAdapter) getOrCreateConsumer(queue string) (*natsclient.Subscription, error) {
+	if sub, ok := a.consumers[queue]; ok {
+		return sub, nil
+	}
+
+	sub, err := a.js.PullSubscribe(queueSubject(queue), "xmc-consumer",
+		natsclient.BindStream(streamName(queue)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating pull subscriber: %w", err)
+	}
+
+	a.consumers[queue] = sub
+	return sub, nil
+}
+
 // Close implements backends.QueueBackend.
 func (a *QueueAdapter) Close() error {
+	for _, sub := range a.consumers {
+		sub.Unsubscribe() //nolint:errcheck
+	}
 	if a.nc != nil {
 		a.nc.Close()
 	}

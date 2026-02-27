@@ -32,7 +32,14 @@ type ConnArguments struct {
 
 // parseKafkaURL parses the server URL and returns brokers and TLS config
 func parseKafkaURL(serverURL string, tlsCfg TLSConfig) ([]string, *tls.Config, error) {
-	u, err := url.Parse(serverURL)
+	// Ensure the URL has a scheme so url.Parse treats "host:port" as a host,
+	// not as "scheme:opaque".
+	rawURL := serverURL
+	if !strings.Contains(serverURL, "://") {
+		rawURL = "kafka://" + serverURL
+	}
+
+	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid server URL: %w", err)
 	}

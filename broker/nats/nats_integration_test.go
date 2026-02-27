@@ -40,6 +40,7 @@ func randomSuffix() string {
 // --- Queue tests (JetStream) ---
 
 func TestNATS_QueueSendReceive(t *testing.T) {
+	t.Parallel()
 	queue := "test-send-receive-" + randomSuffix()
 	ctx := context.Background()
 
@@ -64,6 +65,7 @@ func TestNATS_QueueSendReceive(t *testing.T) {
 }
 
 func TestNATS_QueuePeek(t *testing.T) {
+	t.Parallel()
 	queue := "test-peek-" + randomSuffix()
 	ctx := context.Background()
 
@@ -101,6 +103,7 @@ func TestNATS_QueuePeek(t *testing.T) {
 }
 
 func TestNATS_QueueSendReceive_Properties(t *testing.T) {
+	t.Parallel()
 	queue := "test-props-" + randomSuffix()
 	ctx := context.Background()
 
@@ -140,6 +143,7 @@ func TestNATS_QueueSendReceive_Properties(t *testing.T) {
 }
 
 func TestNATS_QueueReceive_Timeout(t *testing.T) {
+	t.Parallel()
 	queue := "test-timeout-" + randomSuffix()
 	ctx := context.Background()
 
@@ -159,6 +163,7 @@ func TestNATS_QueueReceive_Timeout(t *testing.T) {
 }
 
 func TestNATS_QueueSend_Multiple(t *testing.T) {
+	t.Parallel()
 	queue := "test-multi-" + randomSuffix()
 	ctx := context.Background()
 
@@ -189,6 +194,7 @@ func TestNATS_QueueSend_Multiple(t *testing.T) {
 // --- Topic tests (core NATS pub/sub) ---
 
 func TestNATS_TopicPublishSubscribe(t *testing.T) {
+	t.Parallel()
 	topic := "test.topic." + randomSuffix()
 	ctx := context.Background()
 
@@ -237,6 +243,7 @@ func TestNATS_TopicPublishSubscribe(t *testing.T) {
 }
 
 func TestNATS_TopicPublishSubscribe_QueueGroup(t *testing.T) {
+	t.Parallel()
 	topic := "test.topic.group." + randomSuffix()
 	group := "test-group"
 	ctx := context.Background()
