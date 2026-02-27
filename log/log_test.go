@@ -122,3 +122,59 @@ func TestVerbose_WhenDisabled(t *testing.T) {
 		t.Errorf("Verbose() when disabled = %q, want empty", got)
 	}
 }
+
+func TestVerbose_WithoutArgs_WhenEnabled(t *testing.T) {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	origVerbose := IsVerbose
+	IsVerbose = true
+	defer func() { IsVerbose = origVerbose }()
+
+	Verbose("plain verbose message")
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+
+	if got := strings.TrimSpace(buf.String()); got != "plain verbose message" {
+		t.Errorf("Verbose() = %q, want %q", got, "plain verbose message")
+	}
+}
+
+func TestIsStdoutRedirected_WithPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	old := os.Stdout
+	os.Stdout = w
+	defer func() {
+		os.Stdout = old
+		w.Close()
+	}()
+
+	if !isStdoutRedirected() {
+		t.Error("expected isStdoutRedirected() = true when stdout is a pipe")
+	}
+}
+
+func TestIsStdoutRedirected_WithCharDevice(t *testing.T) {
+tty, err := os.Open("/dev/tty")
+if err != nil {
+t.Skip("cannot open /dev/tty (headless environment): " + err.Error())
+}
+defer tty.Close()
+
+old := os.Stdout
+os.Stdout = tty
+defer func() { os.Stdout = old }()
+
+// Calling with a char device exercises the syscall.Stat_t path
+_ = isStdoutRedirected()
+}

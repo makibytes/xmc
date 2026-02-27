@@ -94,6 +94,8 @@ for target in "${TARGETS[@]}"; do
   build_pure_go_flavor "mqtt" "mmc" "${goos}" "${goarch}"
   build_pure_go_flavor "kafka" "kmc" "${goos}" "${goarch}"
   build_pure_go_flavor "rabbitmq" "rmc" "${goos}" "${goarch}"
+  build_pure_go_flavor "nats" "nmc" "${goos}" "${goarch}"
+  build_pure_go_flavor "pulsar" "pmc" "${goos}" "${goarch}"
 
   build_ibm_flavor "${goos}" "${goarch}"
 

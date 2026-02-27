@@ -2,7 +2,7 @@
 
 # Auto-detect the broker binary or use XMC_BINARY if set
 if [ -z "$XMC_BINARY" ]; then
-    for bin in amc imc kmc mmc rmc; do
+    for bin in amc imc kmc mmc rmc nmc pmc; do
         if [ -f "./$bin" ]; then
             XMC_BINARY="./$bin"
             break
@@ -22,6 +22,8 @@ case "$(basename "$XMC_BINARY")" in
     kmc) XMC_ENV_PREFIX="KMC" ;;
     mmc) XMC_ENV_PREFIX="MMC" ;;
     rmc) XMC_ENV_PREFIX="RMC" ;;
+    nmc) XMC_ENV_PREFIX="NMC" ;;
+    pmc) XMC_ENV_PREFIX="PMC" ;;
     *)   echo "Unknown binary: $XMC_BINARY"; exit 1 ;;
 esac
 

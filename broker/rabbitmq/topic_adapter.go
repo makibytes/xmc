@@ -70,7 +70,9 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 // Subscribe implements backends.TopicBackend
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Queue:                     opts.Topic,
+		// For RabbitMQ native AMQP 1.0: /exchange/{exchange}/{routing-key} creates a
+		// temporary exclusive queue bound to the exchange with the routing key.
+		Queue:                     "/exchange/" + a.exchange + "/" + opts.Topic,
 		Acknowledge:               true,
 		Durable:                   false,
 		DurableSubscription:       opts.Durable,

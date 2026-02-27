@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-XMC (Xenomorphic Message Client) is a unified command-line interface for sending and receiving messages to/from different Message and Streaming Brokers. The broker backend is selected at **build time** using Go build tags (`artemis`, `ibmmq`, `kafka`, `mqtt`, `rabbitmq`). Each flavor produces its own binary (`amc`, `imc`, `kmc`, `mmc`, `rmc`) with its own environment variable prefix. The goal is to support a common set of features across different protocols and brokers, comparable to the JMS API.
+XMC (Xenomorphic Message Client) is a unified command-line interface for sending and receiving messages to/from different Message and Streaming Brokers. The broker backend is selected at **build time** using Go build tags (`artemis`, `ibmmq`, `kafka`, `mqtt`, `nats`, `pulsar`, `rabbitmq`). Each flavor produces its own binary (`amc`, `imc`, `kmc`, `mmc`, `nmc`, `pmc`, `rmc`) with its own environment variable prefix. The goal is to support a common set of features across different protocols and brokers, comparable to the JMS API.
 
 ## Building
 
@@ -15,6 +15,8 @@ go build -tags artemis -o amc .    # Apache Artemis (AMQP 1.0)
 go build -tags ibmmq -o imc .     # IBM MQ
 go build -tags kafka -o kmc .     # Apache Kafka
 go build -tags mqtt -o mmc .      # MQTT Brokers
+go build -tags nats -o nmc .      # NATS / JetStream
+go build -tags pulsar -o pmc .    # Apache Pulsar
 go build -tags rabbitmq -o rmc .  # RabbitMQ v4+ (AMQP 1.0)
 ```
 
@@ -74,7 +76,7 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 
 Uses `spf13/cobra` for CLI:
 - Root command provides persistent flags (`--server`, `--user`, `--password`, `--verbose`, TLS flags)
-- Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `RMC_` (RabbitMQ)
+- Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ)
 - Queue commands: `send`, `receive`, `peek`, `request`
 - Topic commands: `publish`, `subscribe`
 - Management commands: `manage list`, `manage purge`, `manage stats`
@@ -94,6 +96,8 @@ Uses `spf13/cobra` for CLI:
 All brokers support TLS via persistent flags (`--tls`, `--ca-cert`, `--cert`, `--key-file`, `--insecure`).
 - AMQP brokers (Artemis, RabbitMQ): auto-detect `amqps://` URL scheme
 - Kafka: auto-detect `kafka+ssl://` URL scheme
+- MQTT: auto-detect `ssl://` URL scheme
+- Pulsar: auto-detect `pulsar+ssl://` URL scheme
 - Shared TLS config in `broker/amqpcommon/connect.go` for AMQP brokers
 - Kafka has its own TLS config in `broker/kafka/connect.go`
 
@@ -104,6 +108,8 @@ Each broker uses its native management API:
 - **RabbitMQ**: RabbitMQ Management API (HTTP port 15672)
 - **Kafka**: Admin client via `segmentio/kafka-go` (topic listing only)
 - **IBM MQ**: No management commands (queue management via IBM tooling)
+- **NATS**: JetStream API (stream listing = queue listing)
+- **Pulsar**: Admin REST API (HTTP port 8080, `--admin-port` to override; topic listing only)
 
 ## Key Design Decisions
 
@@ -126,7 +132,9 @@ Each broker uses its native management API:
   - `artemis/` - Apache Artemis (AMQP 1.0) + Jolokia management
   - `kafka/` - Apache Kafka + admin client management
   - `ibmmq/` - IBM MQ
-  - `mqtt/` - MQTT (stub, not implemented)
+  - `mqtt/` - MQTT (paho.mqtt.golang; queue via shared subscriptions, topic pub/sub)
+  - `nats/` - NATS / JetStream (JetStream WorkQueue for queues, core NATS for topics)
+  - `pulsar/` - Apache Pulsar (persistent:// topics; Shared subscription for queues, Exclusive/Shared for topics)
   - `rabbitmq/` - RabbitMQ (AMQP 1.0) + Management API
   - `backends/` - Common queue/topic interfaces and types
 - `log/` - Logging utilities with verbose mode support
