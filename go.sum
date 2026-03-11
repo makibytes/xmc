@@ -211,8 +211,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/testcontainers/testcontainers-go v0.41.0 h1:mfpsD0D36YgkxGj2LrIyxuwQ9i2wCKAD+ESsYM1wais=
 github.com/testcontainers/testcontainers-go v0.41.0/go.mod h1:pdFrEIfaPl24zmBjerWTTYaY0M6UHsqA1YSvsoU40MI=
-github.com/testcontainers/testcontainers-go/modules/nats v0.40.0 h1:IfMgeVI7Mg7CIu0R9N0c85XYMjai7e4OCCmHvkmG6Hg=
-github.com/testcontainers/testcontainers-go/modules/nats v0.40.0/go.mod h1:HpKiTohLxK5QGdCkF0W57nEUDzOR5aZsazH1uo8nqso=
+github.com/testcontainers/testcontainers-go/modules/nats v0.41.0 h1:ONiEuMwUgOLL3DiIHDgS4NvjwsSND4zkAhFlxkXWdb0=
+github.com/testcontainers/testcontainers-go/modules/nats v0.41.0/go.mod h1:XSx4gGxmUaj3EHx3+ySOjge3ZCfOeV6yq/SrNhoYmso=
 github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.41.0 h1:JQS8FXKuzRTxvfEfHUhNFOgRAv0rovEw7c4+Ne2nqtY=
 github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.41.0/go.mod h1:p7PE0uLxjRRNZJnnndNoJUadUZoE0jMzzjpSP0DxcUM=
 github.com/testcontainers/testcontainers-go/modules/redpanda v0.40.0 h1:B8f4pGYc2aRlG/3aEEdn/jqLfJL3+q8xAPJypxk2ttg=
