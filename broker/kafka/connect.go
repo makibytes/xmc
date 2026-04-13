@@ -4,24 +4,17 @@ package kafka
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 
+	"github.com/makibytes/xmc/broker/tlsutil"
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
 )
 
-// TLSConfig holds TLS connection parameters for Kafka
-type TLSConfig struct {
-	Enabled    bool
-	CACert     string
-	ClientCert string
-	ClientKey  string
-	Insecure   bool
-}
+// TLSConfig is an alias for the shared TLS configuration.
+type TLSConfig = tlsutil.TLSConfig
 
 type ConnArguments struct {
 	Server   string
@@ -49,41 +42,13 @@ func parseKafkaURL(serverURL string, tlsCfg TLSConfig) ([]string, *tls.Config, e
 
 	var tlsConfig *tls.Config
 	if u.Scheme == "kafka+ssl" || u.Scheme == "kafkas" || tlsCfg.Enabled {
-		tlsConfig, err = buildKafkaTLSConfig(tlsCfg)
+		tlsConfig, err = tlsutil.BuildTLSConfig(tlsCfg)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
 	return brokers, tlsConfig, nil
-}
-
-func buildKafkaTLSConfig(cfg TLSConfig) (*tls.Config, error) {
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: cfg.Insecure,
-	}
-
-	if cfg.CACert != "" {
-		caCert, err := os.ReadFile(cfg.CACert)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
-		}
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
-		}
-		tlsConfig.RootCAs = caCertPool
-	}
-
-	if cfg.ClientCert != "" && cfg.ClientKey != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load client certificate: %w", err)
-		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-	}
-
-	return tlsConfig, nil
 }
 
 // getSASLMechanism returns SASL mechanism if credentials are provided

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	natsclient "github.com/nats-io/nats.go"
 
@@ -16,10 +15,10 @@ import (
 
 // QueueAdapter adapts NATS JetStream to the QueueBackend interface.
 type QueueAdapter struct {
-	connArgs  ConnArguments
 	nc        *natsclient.Conn
 	js        natsclient.JetStreamContext
 	consumers map[string]*natsclient.Subscription // cached pull subscribers, keyed by queue name
+	ensured   map[string]struct{}                 // cached stream names that have been ensured
 }
 
 // NewQueueAdapter creates a new NATS JetStream queue adapter.
@@ -30,10 +29,10 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	}
 
 	return &QueueAdapter{
-		connArgs:  connArgs,
 		nc:        nc,
 		js:        js,
 		consumers: make(map[string]*natsclient.Subscription),
+		ensured:   make(map[string]struct{}),
 	}, nil
 }
 
@@ -70,7 +69,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return nil, err
 	}
 
-	timeout := receiveTimeout(opts.Timeout, opts.Wait)
+	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
 	msgs, err := sub.Fetch(1, natsclient.MaxWait(timeout))
 	if err != nil {
@@ -130,10 +129,15 @@ func (a *QueueAdapter) Close() error {
 
 func (a *QueueAdapter) ensureStream(queue string) error {
 	name := streamName(queue)
+	if _, ok := a.ensured[name]; ok {
+		return nil
+	}
+
 	subject := queueSubject(queue)
 
 	_, err := a.js.StreamInfo(name)
 	if err == nil {
+		a.ensured[name] = struct{}{}
 		return nil
 	}
 	if !errors.Is(err, natsclient.ErrStreamNotFound) {
@@ -149,6 +153,7 @@ func (a *QueueAdapter) ensureStream(queue string) error {
 		return fmt.Errorf("creating stream %s: %w", name, err)
 	}
 
+	a.ensured[name] = struct{}{}
 	return nil
 }
 
@@ -160,17 +165,6 @@ func streamName(queue string) string {
 // queueSubject returns the NATS subject for a queue.
 func queueSubject(queue string) string {
 	return fmt.Sprintf("xmc.queue.%s", queue)
-}
-
-// receiveTimeout converts ReceiveOptions timeout fields to a time.Duration.
-func receiveTimeout(timeout float32, wait bool) time.Duration {
-	if wait {
-		return 24 * time.Hour
-	}
-	if timeout <= 0 {
-		return 5 * time.Second
-	}
-	return time.Duration(float64(timeout) * float64(time.Second))
 }
 
 // natsToBackendMessage converts a NATS message to a backends.Message.

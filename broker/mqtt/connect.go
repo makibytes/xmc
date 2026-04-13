@@ -3,13 +3,12 @@
 package mqtt
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"math/rand"
 	"os"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
 // ConnArguments holds MQTT connection parameters.
@@ -21,14 +20,8 @@ type ConnArguments struct {
 	ClientID string // auto-generated if empty
 }
 
-// TLSConfig holds TLS parameters for the MQTT connection.
-type TLSConfig struct {
-	Enabled    bool
-	CACert     string
-	ClientCert string
-	ClientKey  string
-	Insecure   bool
-}
+// TLSConfig is an alias for the shared TLS configuration.
+type TLSConfig = tlsutil.TLSConfig
 
 // Connect creates and connects a new MQTT client using the provided arguments.
 func Connect(args ConnArguments) (pahomqtt.Client, error) {
@@ -49,7 +42,7 @@ func Connect(args ConnArguments) (pahomqtt.Client, error) {
 	}
 
 	if args.TLS.Enabled {
-		tlsCfg, err := buildTLSConfig(args.TLS)
+		tlsCfg, err := tlsutil.BuildTLSConfig(args.TLS)
 		if err != nil {
 			return nil, fmt.Errorf("TLS configuration error: %w", err)
 		}
@@ -66,30 +59,3 @@ func Connect(args ConnArguments) (pahomqtt.Client, error) {
 	return client, nil
 }
 
-func buildTLSConfig(cfg TLSConfig) (*tls.Config, error) {
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: cfg.Insecure, //nolint:gosec
-	}
-
-	if cfg.CACert != "" {
-		caPEM, err := os.ReadFile(cfg.CACert)
-		if err != nil {
-			return nil, fmt.Errorf("reading CA cert %q: %w", cfg.CACert, err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("failed to parse CA cert %q", cfg.CACert)
-		}
-		tlsCfg.RootCAs = pool
-	}
-
-	if cfg.ClientCert != "" && cfg.ClientKey != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
-		if err != nil {
-			return nil, fmt.Errorf("loading client cert/key: %w", err)
-		}
-		tlsCfg.Certificates = []tls.Certificate{cert}
-	}
-
-	return tlsCfg, nil
-}

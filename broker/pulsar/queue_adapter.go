@@ -12,12 +12,18 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
-const queueSubscription = "xmc-queue"
+const (
+	queueSubscription  = "xmc-queue"
+	propCorrelationID  = "correlation-id"
+	propReplyTo        = "reply-to"
+	propContentType    = "content-type"
+	propMessageID      = "message-id"
+	propTTLMs          = "ttl-ms"
+)
 
 // QueueAdapter adapts Pulsar to the QueueBackend interface using Shared subscriptions.
 type QueueAdapter struct {
-	connArgs ConnArguments
-	client   pulsar.Client
+	client pulsar.Client
 }
 
 // NewQueueAdapter creates a new Pulsar queue adapter.
@@ -26,7 +32,7 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &QueueAdapter{connArgs: connArgs, client: client}, nil
+	return &QueueAdapter{client: client}, nil
 }
 
 // Send implements backends.QueueBackend.
@@ -49,16 +55,16 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 		msg.Key = opts.MessageID
 	}
 	if opts.CorrelationID != "" {
-		msg.Properties["correlation-id"] = opts.CorrelationID
+		msg.Properties[propCorrelationID] = opts.CorrelationID
 	}
 	if opts.ReplyTo != "" {
-		msg.Properties["reply-to"] = opts.ReplyTo
+		msg.Properties[propReplyTo] = opts.ReplyTo
 	}
 	if opts.ContentType != "" {
-		msg.Properties["content-type"] = opts.ContentType
+		msg.Properties[propContentType] = opts.ContentType
 	}
 	if opts.TTL > 0 {
-		msg.Properties["ttl-ms"] = fmt.Sprintf("%d", opts.TTL)
+		msg.Properties[propTTLMs] = fmt.Sprintf("%d", opts.TTL)
 	}
 
 	_, err = producer.Send(ctx, msg)
@@ -81,7 +87,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	}
 	defer consumer.Close()
 
-	timeout := receiveTimeout(opts.Timeout, opts.Wait)
+	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 	receiveCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -114,16 +120,6 @@ func queueTopic(queue string) string {
 	return fmt.Sprintf("persistent://public/default/%s", queue)
 }
 
-func receiveTimeout(timeout float32, wait bool) time.Duration {
-	if wait {
-		return 24 * time.Hour
-	}
-	if timeout <= 0 {
-		return 5 * time.Second
-	}
-	return time.Duration(float64(timeout) * float64(time.Second))
-}
-
 func stringifyProps(props map[string]any) map[string]string {
 	result := make(map[string]string, len(props))
 	for k, v := range props {
@@ -133,16 +129,17 @@ func stringifyProps(props map[string]any) map[string]string {
 }
 
 func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
-	props := make(map[string]any, len(msg.Properties()))
-	for k, v := range msg.Properties() {
+	rawProps := msg.Properties()
+	props := make(map[string]any, len(rawProps))
+	for k, v := range rawProps {
 		props[k] = v
 	}
 	return &backends.Message{
 		Data:          msg.Payload(),
 		Properties:    props,
 		MessageID:     msg.Key(),
-		CorrelationID: msg.Properties()["correlation-id"],
-		ReplyTo:       msg.Properties()["reply-to"],
-		ContentType:   msg.Properties()["content-type"],
+		CorrelationID: rawProps[propCorrelationID],
+		ReplyTo:       rawProps[propReplyTo],
+		ContentType:   rawProps[propContentType],
 	}
 }

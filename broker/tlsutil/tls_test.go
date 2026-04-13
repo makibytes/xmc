@@ -1,4 +1,4 @@
-package amqpcommon
+package tlsutil
 
 import (
 	"crypto/ecdsa"
@@ -15,7 +15,7 @@ import (
 
 func TestBuildTLSConfig_Default(t *testing.T) {
 	cfg := TLSConfig{}
-	tlsConfig, err := buildTLSConfig(cfg)
+	tlsConfig, err := BuildTLSConfig(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestBuildTLSConfig_Default(t *testing.T) {
 
 func TestBuildTLSConfig_Insecure(t *testing.T) {
 	cfg := TLSConfig{Insecure: true}
-	tlsConfig, err := buildTLSConfig(cfg)
+	tlsConfig, err := BuildTLSConfig(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestBuildTLSConfig_Insecure(t *testing.T) {
 
 func TestBuildTLSConfig_InvalidCACertPath(t *testing.T) {
 	cfg := TLSConfig{CACert: "/nonexistent/path/ca.pem"}
-	_, err := buildTLSConfig(cfg)
+	_, err := BuildTLSConfig(cfg)
 	if err == nil {
 		t.Fatal("expected error for invalid CA cert path, got nil")
 	}
@@ -56,7 +56,7 @@ func TestBuildTLSConfig_InvalidCACertContent(t *testing.T) {
 	tmpFile.Close()
 
 	cfg := TLSConfig{CACert: tmpFile.Name()}
-	_, err = buildTLSConfig(cfg)
+	_, err = BuildTLSConfig(cfg)
 	if err == nil {
 		t.Fatal("expected error for invalid CA cert content, got nil")
 	}
@@ -89,7 +89,7 @@ func TestBuildTLSConfig_WithValidCACert(t *testing.T) {
 	tmpFile.Close()
 
 	cfg := TLSConfig{CACert: tmpFile.Name()}
-	tlsConfig, err := buildTLSConfig(cfg)
+	tlsConfig, err := BuildTLSConfig(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestBuildTLSConfig_InvalidClientCert(t *testing.T) {
 	keyFile.Close()
 
 	cfg := TLSConfig{ClientCert: certFile.Name(), ClientKey: keyFile.Name()}
-	_, err = buildTLSConfig(cfg)
+	_, err = BuildTLSConfig(cfg)
 	if err == nil {
 		t.Fatal("expected error for invalid client cert, got nil")
 	}
@@ -159,7 +159,7 @@ func TestBuildTLSConfig_WithValidClientCert(t *testing.T) {
 	keyFile.Close()
 
 	cfg := TLSConfig{ClientCert: certFile.Name(), ClientKey: keyFile.Name()}
-	tlsConfig, err := buildTLSConfig(cfg)
+	tlsConfig, err := BuildTLSConfig(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

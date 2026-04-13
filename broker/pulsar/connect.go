@@ -3,13 +3,11 @@
 package pulsar
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"os"
 	"time"
 
 	pulsar "github.com/apache/pulsar-client-go/pulsar"
+	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
 // ConnArguments holds parameters for establishing a Pulsar connection.
@@ -20,14 +18,8 @@ type ConnArguments struct {
 	TLS      TLSConfig
 }
 
-// TLSConfig holds TLS parameters for Pulsar connections.
-type TLSConfig struct {
-	Enabled    bool
-	CACert     string
-	ClientCert string
-	ClientKey  string
-	Insecure   bool
-}
+// TLSConfig is an alias for the shared TLS configuration.
+type TLSConfig = tlsutil.TLSConfig
 
 // Connect creates and returns a Pulsar client.
 func Connect(args ConnArguments) (pulsar.Client, error) {
@@ -42,12 +34,11 @@ func Connect(args ConnArguments) (pulsar.Client, error) {
 	}
 
 	if args.TLS.Enabled || args.TLS.CACert != "" || args.TLS.ClientCert != "" {
-		tlsCfg, err := buildTLSConfig(args.TLS)
+		tlsCfg, err := tlsutil.BuildTLSConfig(args.TLS)
 		if err != nil {
 			return nil, fmt.Errorf("building TLS config: %w", err)
 		}
 		opts.TLSConfig = tlsCfg
-		opts.TLSTrustCertsFilePath = args.TLS.CACert
 		opts.TLSAllowInsecureConnection = args.TLS.Insecure
 		if args.TLS.ClientCert != "" {
 			opts.Authentication = pulsar.NewAuthenticationTLS(args.TLS.ClientCert, args.TLS.ClientKey)
@@ -61,25 +52,3 @@ func Connect(args ConnArguments) (pulsar.Client, error) {
 	return client, nil
 }
 
-func buildTLSConfig(cfg TLSConfig) (*tls.Config, error) {
-	tlsCfg := &tls.Config{InsecureSkipVerify: cfg.Insecure} //nolint:gosec
-	if cfg.CACert != "" {
-		caCert, err := os.ReadFile(cfg.CACert)
-		if err != nil {
-			return nil, fmt.Errorf("reading CA cert: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA cert")
-		}
-		tlsCfg.RootCAs = pool
-	}
-	if cfg.ClientCert != "" && cfg.ClientKey != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
-		if err != nil {
-			return nil, fmt.Errorf("loading client cert: %w", err)
-		}
-		tlsCfg.Certificates = []tls.Certificate{cert}
-	}
-	return tlsCfg, nil
-}

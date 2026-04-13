@@ -119,9 +119,3 @@ func convertMessage(msg pahomqtt.Message) *backends.Message {
 	return &backends.Message{Data: data}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

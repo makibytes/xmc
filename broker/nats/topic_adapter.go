@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	natsclient "github.com/nats-io/nats.go"
 
@@ -15,8 +14,7 @@ import (
 
 // TopicAdapter adapts core NATS pub/sub to the TopicBackend interface.
 type TopicAdapter struct {
-	connArgs ConnArguments
-	nc       *natsclient.Conn
+	nc *natsclient.Conn
 }
 
 // NewTopicAdapter creates a new NATS topic adapter.
@@ -27,8 +25,7 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	}
 
 	return &TopicAdapter{
-		connArgs: connArgs,
-		nc:       nc,
+		nc: nc,
 	}, nil
 }
 
@@ -49,7 +46,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 
 // Subscribe implements backends.TopicBackend.
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	timeout := subscribeTimeout(opts.Timeout, opts.Wait)
+	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
 	var (
 		sub *natsclient.Subscription
@@ -85,13 +82,3 @@ func (a *TopicAdapter) Close() error {
 	return nil
 }
 
-// subscribeTimeout converts SubscribeOptions timeout fields to a time.Duration.
-func subscribeTimeout(timeout float32, wait bool) time.Duration {
-	if wait {
-		return 24 * time.Hour
-	}
-	if timeout <= 0 {
-		return 5 * time.Second
-	}
-	return time.Duration(float64(timeout) * float64(time.Second))
-}

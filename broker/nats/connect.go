@@ -3,12 +3,10 @@
 package nats
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"os"
 
 	natsclient "github.com/nats-io/nats.go"
+	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
 // ConnArguments holds parameters for establishing a NATS connection.
@@ -19,14 +17,8 @@ type ConnArguments struct {
 	TLS      TLSConfig
 }
 
-// TLSConfig holds TLS parameters for NATS connections.
-type TLSConfig struct {
-	Enabled    bool
-	CACert     string
-	ClientCert string
-	ClientKey  string
-	Insecure   bool
-}
+// TLSConfig is an alias for the shared TLS configuration.
+type TLSConfig = tlsutil.TLSConfig
 
 // Connect creates and returns a NATS connection.
 func Connect(args ConnArguments) (*natsclient.Conn, error) {
@@ -37,7 +29,7 @@ func Connect(args ConnArguments) (*natsclient.Conn, error) {
 	}
 
 	if args.TLS.Enabled || args.TLS.CACert != "" || args.TLS.ClientCert != "" {
-		tlsCfg, err := buildTLSConfig(args.TLS)
+		tlsCfg, err := tlsutil.BuildTLSConfig(args.TLS)
 		if err != nil {
 			return nil, fmt.Errorf("building TLS config: %w", err)
 		}
@@ -68,30 +60,3 @@ func ConnectWithJetStream(args ConnArguments) (*natsclient.Conn, natsclient.JetS
 	return nc, js, nil
 }
 
-func buildTLSConfig(cfg TLSConfig) (*tls.Config, error) {
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: cfg.Insecure, //nolint:gosec
-	}
-
-	if cfg.CACert != "" {
-		caCert, err := os.ReadFile(cfg.CACert)
-		if err != nil {
-			return nil, fmt.Errorf("reading CA cert: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA cert")
-		}
-		tlsCfg.RootCAs = pool
-	}
-
-	if cfg.ClientCert != "" && cfg.ClientKey != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
-		if err != nil {
-			return nil, fmt.Errorf("loading client certificate: %w", err)
-		}
-		tlsCfg.Certificates = []tls.Certificate{cert}
-	}
-
-	return tlsCfg, nil
-}

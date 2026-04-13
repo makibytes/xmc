@@ -13,8 +13,7 @@ import (
 
 // TopicAdapter adapts Pulsar pub/sub to the TopicBackend interface.
 type TopicAdapter struct {
-	connArgs ConnArguments
-	client   pulsar.Client
+	client pulsar.Client
 }
 
 // NewTopicAdapter creates a new Pulsar topic adapter.
@@ -23,7 +22,7 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{connArgs: connArgs, client: client}, nil
+	return &TopicAdapter{client: client}, nil
 }
 
 // Publish implements backends.TopicBackend.
@@ -44,16 +43,16 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 		msg.Key = opts.Key
 	}
 	if opts.MessageID != "" {
-		msg.Properties["message-id"] = opts.MessageID
+		msg.Properties[propMessageID] = opts.MessageID
 	}
 	if opts.CorrelationID != "" {
-		msg.Properties["correlation-id"] = opts.CorrelationID
+		msg.Properties[propCorrelationID] = opts.CorrelationID
 	}
 	if opts.ReplyTo != "" {
-		msg.Properties["reply-to"] = opts.ReplyTo
+		msg.Properties[propReplyTo] = opts.ReplyTo
 	}
 	if opts.ContentType != "" {
-		msg.Properties["content-type"] = opts.ContentType
+		msg.Properties[propContentType] = opts.ContentType
 	}
 
 	_, err = producer.Send(ctx, msg)
@@ -65,15 +64,12 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	subType := pulsar.Exclusive
 	subName := "xmc-sub"
+	if opts.Durable {
+		subName = "xmc-durable"
+	}
 	if opts.GroupID != "" {
 		subType = pulsar.Shared
 		subName = opts.GroupID
-	}
-	if opts.Durable {
-		subName = "xmc-durable"
-		if opts.GroupID != "" {
-			subName = opts.GroupID
-		}
 	}
 
 	consumer, err := a.client.Subscribe(pulsar.ConsumerOptions{
@@ -86,7 +82,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	}
 	defer consumer.Close()
 
-	timeout := receiveTimeout(opts.Timeout, opts.Wait)
+	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 	receiveCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

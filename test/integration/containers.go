@@ -207,7 +207,6 @@ func StartIBMMQ(ctx context.Context) (*BrokerContainer, error) {
 // Uses a GenericContainer to avoid the testcontainers Pulsar module's log-based
 // wait strategy which doesn't work with Pulsar 3.x images.
 func StartPulsar(ctx context.Context) (*BrokerContainer, error) {
-	const pulsarCmd = "/bin/bash -c '/pulsar/bin/apply-config-from-env.py /pulsar/conf/standalone.conf && bin/pulsar standalone --no-functions-worker -nss'"
 	req := testcontainers.ContainerRequest{
 		Image:        "apachepulsar/pulsar:3.3.0",
 		ExposedPorts: []string{"6650/tcp", "8080/tcp"},
