@@ -19,16 +19,14 @@ type SendArguments struct {
 }
 
 type ReceiveArguments struct {
-	Acknowledge               bool
-	Durable                   bool
-	DurableSubscription       bool
-	Multicast                 bool
-	Number                    int
-	Queue                     string
-	Selector                  string
-	SubscriptionName          string
-	Timeout                   float32
-	Wait                      bool
-	WithHeaderAndProperties   bool
-	WithApplicationProperties bool
+	Acknowledge         bool
+	Durable             bool
+	DurableSubscription bool
+	Multicast           bool
+	Number              int
+	Queue               string
+	Selector            string
+	SubscriptionName    string
+	Timeout             float32
+	Wait                bool
 }

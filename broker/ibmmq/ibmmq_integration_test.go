@@ -194,10 +194,10 @@ func TestIBMMQ_QueueProperties(t *testing.T) {
 	defer receiver.Close()
 
 	msg, err := receiver.Receive(context.Background(), backends.ReceiveOptions{
-		Queue:                     queue,
-		Acknowledge:               true,
-		Timeout:                   5,
-		WithApplicationProperties: true,
+		Queue:       queue,
+		Acknowledge: true,
+		Timeout:     5,
+		Verbosity:   backends.VerbosityNormal,
 	})
 	if err != nil {
 		t.Fatalf("Receive: %v", err)

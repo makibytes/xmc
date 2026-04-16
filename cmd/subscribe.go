@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/makibytes/xmc/broker/backends"
-	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
@@ -42,18 +41,14 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	selector, _ := cmd.Flags().GetString("selector")
 	durable, _ := cmd.Flags().GetBool("durable")
 
-	withHeaderAndProperties := log.IsVerbose
-	withApplicationProperties := !quiet || log.IsVerbose
-
 	opts := backends.SubscribeOptions{
-		Topic:                     args[0],
-		GroupID:                   groupID,
-		Timeout:                   timeout,
-		Wait:                      wait,
-		WithHeaderAndProperties:   withHeaderAndProperties,
-		WithApplicationProperties: withApplicationProperties,
-		Selector:                  selector,
-		Durable:                   durable,
+		Topic:     args[0],
+		GroupID:   groupID,
+		Timeout:   timeout,
+		Wait:      wait,
+		Verbosity: commandVerbosity(quiet),
+		Selector:  selector,
+		Durable:   durable,
 	}
 
 	received := 0
@@ -77,7 +72,7 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 				return err
 			}
 		} else {
-			if err := displayMessage(message, opts.WithHeaderAndProperties, !quiet); err != nil {
+			if err := displayMessage(message, opts.Verbosity); err != nil {
 				return err
 			}
 		}

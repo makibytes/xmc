@@ -23,12 +23,9 @@ func ListTopics(connArgs ConnArguments) ([]TopicInfo, error) {
 		return nil, err
 	}
 
-	dialer := &kafkago.Dialer{}
-	if tlsConfig != nil {
-		dialer.TLS = tlsConfig
-	}
-	if sasl := getSASLMechanism(connArgs.User, connArgs.Password); sasl != nil {
-		dialer.SASLMechanism = sasl
+	dialer := buildDialer(connArgs, tlsConfig)
+	if dialer == nil {
+		dialer = &kafkago.Dialer{}
 	}
 
 	log.Verbose("connecting to %s to list topics...", brokers[0])

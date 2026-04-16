@@ -41,17 +41,13 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	selector, _ := cmd.Flags().GetString("selector")
 
-	withHeaderAndProperties := log.IsVerbose
-	withApplicationProperties := !quiet || log.IsVerbose
-
 	opts := backends.ReceiveOptions{
-		Queue:                     args[0],
-		Timeout:                   timeout,
-		Wait:                      wait,
-		Acknowledge:               acknowledge,
-		WithHeaderAndProperties:   withHeaderAndProperties,
-		WithApplicationProperties: withApplicationProperties,
-		Selector:                  selector,
+		Queue:       args[0],
+		Timeout:     timeout,
+		Wait:        wait,
+		Acknowledge: acknowledge,
+		Verbosity:   commandVerbosity(quiet),
+		Selector:    selector,
 	}
 
 	received := 0
@@ -75,7 +71,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 				return err
 			}
 		} else {
-			if err := displayMessage(message, opts.WithHeaderAndProperties, !quiet); err != nil {
+			if err := displayMessage(message, opts.Verbosity); err != nil {
 				return err
 			}
 		}
@@ -85,14 +81,27 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 	return nil
 }
 
-func displayMessage(message *backends.Message, withHeader, withProps bool) error {
-	if withHeader && len(message.InternalMetadata) > 0 {
+// commandVerbosity derives Verbosity from the common --quiet flag and
+// the global log.IsVerbose toggle.
+func commandVerbosity(quiet bool) backends.Verbosity {
+	switch {
+	case log.IsVerbose:
+		return backends.VerbosityVerbose
+	case quiet:
+		return backends.VerbosityQuiet
+	default:
+		return backends.VerbosityNormal
+	}
+}
+
+func displayMessage(message *backends.Message, verbosity backends.Verbosity) error {
+	if verbosity >= backends.VerbosityVerbose && len(message.InternalMetadata) > 0 {
 		for k, v := range message.InternalMetadata {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", k, v)
 		}
 	}
 
-	if withProps && len(message.Properties) > 0 {
+	if verbosity >= backends.VerbosityNormal && len(message.Properties) > 0 {
 		propertiesString := ""
 		for k, v := range message.Properties {
 			if propertiesString != "" {

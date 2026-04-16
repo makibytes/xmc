@@ -35,13 +35,12 @@ type SendOptions struct {
 
 // ReceiveOptions contains options for receiving messages from a queue
 type ReceiveOptions struct {
-	Queue                     string
-	Timeout                   float32
-	Wait                      bool
-	Acknowledge               bool // true = destructive read (get), false = browse (peek)
-	WithHeaderAndProperties   bool
-	WithApplicationProperties bool
-	Selector                  string // JMS-style message selector expression
+	Queue       string
+	Timeout     float32
+	Wait        bool
+	Acknowledge bool // true = destructive read (get), false = browse (peek)
+	Verbosity   Verbosity
+	Selector    string // JMS-style message selector expression
 }
 
 // QueueBackend defines the interface for queue-based messaging brokers

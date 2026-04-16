@@ -19,14 +19,13 @@ type PublishOptions struct {
 
 // SubscribeOptions contains options for subscribing to messages from a topic
 type SubscribeOptions struct {
-	Topic                     string
-	GroupID                   string // Consumer group (Kafka)
-	Timeout                   float32
-	Wait                      bool
-	WithHeaderAndProperties   bool
-	WithApplicationProperties bool
-	Selector                  string // JMS-style message selector expression
-	Durable                   bool   // Create a durable subscription
+	Topic     string
+	GroupID   string // Consumer group (Kafka)
+	Timeout   float32
+	Wait      bool
+	Verbosity Verbosity
+	Selector  string // JMS-style message selector expression
+	Durable   bool   // Create a durable subscription
 }
 
 // TopicBackend defines the interface for topic-based messaging brokers

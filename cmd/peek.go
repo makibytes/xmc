@@ -36,13 +36,12 @@ func doPeek(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 	selector, _ := cmd.Flags().GetString("selector")
 
 	opts := backends.ReceiveOptions{
-		Queue:                     args[0],
-		Timeout:                   timeout,
-		Wait:                      wait,
-		Acknowledge:               false, // peek = non-destructive
-		WithHeaderAndProperties:   true,
-		WithApplicationProperties: true,
-		Selector:                  selector,
+		Queue:       args[0],
+		Timeout:     timeout,
+		Wait:        wait,
+		Acknowledge: false, // peek = non-destructive
+		Verbosity:   backends.VerbosityVerbose,
+		Selector:    selector,
 	}
 
 	received := 0
@@ -66,7 +65,7 @@ func doPeek(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 				return err
 			}
 		} else {
-			if err := displayMessage(message, opts.WithHeaderAndProperties, opts.WithApplicationProperties); err != nil {
+			if err := displayMessage(message, opts.Verbosity); err != nil {
 				return err
 			}
 		}

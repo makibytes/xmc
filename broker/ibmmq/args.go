@@ -16,12 +16,10 @@ type SendArguments struct {
 }
 
 type ReceiveArguments struct {
-	Queue                     string
-	Timeout                   float32
-	Wait                      bool
-	Number                    int
-	Acknowledge               bool // get = true, peek = false
-	Selector                  string
-	WithApplicationProperties bool
-	WithHeaderAndProperties   bool
+	Queue       string
+	Timeout     float32
+	Wait        bool
+	Number      int
+	Acknowledge bool // get = true, peek = false
+	Selector    string
 }

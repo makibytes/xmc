@@ -135,10 +135,10 @@ func TestRabbitMQ_QueueSendReceive_Properties(t *testing.T) {
 	defer receiver.Close()
 
 	msg, err := receiver.Receive(ctx, backends.ReceiveOptions{
-		Queue:                     queue,
-		Acknowledge:               true,
-		Timeout:                   5,
-		WithApplicationProperties: true,
+		Queue:       queue,
+		Acknowledge: true,
+		Timeout:     5,
+		Verbosity:   backends.VerbosityNormal,
 	})
 	if err != nil {
 		t.Fatalf("Receive: %v", err)

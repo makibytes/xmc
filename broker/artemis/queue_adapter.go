@@ -55,16 +55,14 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 // Receive implements backends.QueueBackend
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Acknowledge:               opts.Acknowledge,
-		Durable:                   false,
-		Multicast:                 false, // Queue = ANYCAST
-		Number:                    1,
-		Queue:                     opts.Queue,
-		Selector:                  opts.Selector,
-		Timeout:                   opts.Timeout,
-		Wait:                      opts.Wait,
-		WithHeaderAndProperties:   opts.WithHeaderAndProperties,
-		WithApplicationProperties: opts.WithApplicationProperties,
+		Acknowledge: opts.Acknowledge,
+		Durable:     false,
+		Multicast:   false, // Queue = ANYCAST
+		Number:      1,
+		Queue:       opts.Queue,
+		Selector:    opts.Selector,
+		Timeout:     opts.Timeout,
+		Wait:        opts.Wait,
 	}
 
 	message, err := ReceiveMessage(a.session, args)
@@ -75,7 +73,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return nil, errors.New("no message available")
 	}
 
-	return amqpcommon.ConvertAMQPToBackendMessage(message), nil
+	return amqpcommon.ConvertAMQPToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil
 }
 
 // Close implements backends.QueueBackend

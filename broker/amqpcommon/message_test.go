@@ -4,13 +4,12 @@ import (
 	"testing"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/xmc/log"
 )
 
 func TestConvertAMQPToBackendMessage_BasicData(t *testing.T) {
 	msg := amqp.NewMessage([]byte("test data"))
 
-	result := ConvertAMQPToBackendMessage(msg)
+	result := ConvertAMQPToBackendMessage(msg, false)
 
 	if string(result.Data) != "test data" {
 		t.Errorf("Data = %q, want %q", result.Data, "test data")
@@ -32,7 +31,7 @@ func TestConvertAMQPToBackendMessage_WithProperties(t *testing.T) {
 		ContentType:   &contentType,
 	}
 
-	result := ConvertAMQPToBackendMessage(msg)
+	result := ConvertAMQPToBackendMessage(msg, false)
 
 	if result.MessageID != "msg-123" {
 		t.Errorf("MessageID = %q, want %q", result.MessageID, "msg-123")
@@ -55,7 +54,7 @@ func TestConvertAMQPToBackendMessage_WithHeader(t *testing.T) {
 		Priority: 7,
 	}
 
-	result := ConvertAMQPToBackendMessage(msg)
+	result := ConvertAMQPToBackendMessage(msg, false)
 
 	if result.Priority != 7 {
 		t.Errorf("Priority = %d, want %d", result.Priority, 7)
@@ -72,7 +71,7 @@ func TestConvertAMQPToBackendMessage_ApplicationProperties(t *testing.T) {
 		"tier": "premium",
 	}
 
-	result := ConvertAMQPToBackendMessage(msg)
+	result := ConvertAMQPToBackendMessage(msg, false)
 
 	if result.Properties["env"] != "production" {
 		t.Errorf("env property = %v, want %q", result.Properties["env"], "production")
@@ -86,7 +85,7 @@ func TestConvertAMQPToBackendMessage_NilProperties(t *testing.T) {
 	msg := amqp.NewMessage([]byte("test"))
 	// Properties and Header are nil by default
 
-	result := ConvertAMQPToBackendMessage(msg)
+	result := ConvertAMQPToBackendMessage(msg, false)
 
 	if result.Priority != 0 {
 		t.Errorf("Priority = %d, want 0", result.Priority)
@@ -97,10 +96,6 @@ func TestConvertAMQPToBackendMessage_NilProperties(t *testing.T) {
 }
 
 func TestConvertAMQPToBackendMessage_VerboseMetadata(t *testing.T) {
-	origVerbose := log.IsVerbose
-	log.IsVerbose = true
-	defer func() { log.IsVerbose = origVerbose }()
-
 	msg := amqp.NewMessage([]byte("test"))
 	contentType := "text/plain"
 	msg.Properties = &amqp.MessageProperties{
@@ -108,30 +103,26 @@ func TestConvertAMQPToBackendMessage_VerboseMetadata(t *testing.T) {
 	}
 	msg.Header = &amqp.MessageHeader{Priority: 5}
 
-	result := ConvertAMQPToBackendMessage(msg)
+	result := ConvertAMQPToBackendMessage(msg, true)
 
 	if _, ok := result.InternalMetadata["Header"]; !ok {
-		t.Error("expected Header in InternalMetadata when verbose")
+		t.Error("expected Header in InternalMetadata when withMetadata=true")
 	}
 	if _, ok := result.InternalMetadata["MessageProperties"]; !ok {
-		t.Error("expected MessageProperties in InternalMetadata when verbose")
+		t.Error("expected MessageProperties in InternalMetadata when withMetadata=true")
 	}
 }
 
 func TestConvertAMQPToBackendMessage_NonVerboseNoMetadata(t *testing.T) {
-	origVerbose := log.IsVerbose
-	log.IsVerbose = false
-	defer func() { log.IsVerbose = origVerbose }()
-
 	msg := amqp.NewMessage([]byte("test"))
 	contentType := "text/plain"
 	msg.Properties = &amqp.MessageProperties{
 		ContentType: &contentType,
 	}
 
-	result := ConvertAMQPToBackendMessage(msg)
+	result := ConvertAMQPToBackendMessage(msg, false)
 
 	if len(result.InternalMetadata) != 0 {
-		t.Errorf("expected empty InternalMetadata when not verbose, got %d entries", len(result.InternalMetadata))
+		t.Errorf("expected empty InternalMetadata when withMetadata=false, got %d entries", len(result.InternalMetadata))
 	}
 }

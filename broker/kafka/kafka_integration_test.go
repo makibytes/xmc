@@ -106,10 +106,10 @@ func TestKafka_TopicPublishSubscribe_Properties(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		msg, err := adapter.Subscribe(ctx, backends.SubscribeOptions{
-			Topic:                     topic,
-			GroupID:                   "test-group-props",
-			Timeout:                   25,
-			WithApplicationProperties: true,
+			Topic:     topic,
+			GroupID:   "test-group-props",
+			Timeout:   25,
+			Verbosity: backends.VerbosityNormal,
 		})
 		if err != nil {
 			errCh <- err
@@ -168,10 +168,10 @@ func TestKafka_TopicPublishSubscribe_Key(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		msg, err := adapter.Subscribe(ctx, backends.SubscribeOptions{
-			Topic:                   topic,
-			GroupID:                 "test-group-key",
-			Timeout:                 25,
-			WithHeaderAndProperties: true,
+			Topic:     topic,
+			GroupID:   "test-group-key",
+			Timeout:   25,
+			Verbosity: backends.VerbosityVerbose,
 		})
 		if err != nil {
 			errCh <- err
@@ -199,7 +199,6 @@ func TestKafka_TopicPublishSubscribe_Key(t *testing.T) {
 		if string(msg.Data) != "keyed message" {
 			t.Errorf("expected payload %q, got %q", "keyed message", msg.Data)
 		}
-		// Key is exposed in InternalMetadata when WithHeaderAndProperties=true
 		if k, ok := msg.InternalMetadata["Key"]; !ok || k != messageKey {
 			t.Errorf("expected InternalMetadata[Key]=%q, got %v", messageKey, msg.InternalMetadata)
 		}

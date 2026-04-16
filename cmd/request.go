@@ -103,17 +103,12 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 
-	// Wait for the reply on the reply queue
-	withHeaderAndProperties := log.IsVerbose
-	withApplicationProperties := !quiet || log.IsVerbose
-
 	receiveOpts := backends.ReceiveOptions{
-		Queue:                     replyto,
-		Timeout:                   timeout,
-		Wait:                      false,
-		Acknowledge:               true,
-		WithHeaderAndProperties:   withHeaderAndProperties,
-		WithApplicationProperties: withApplicationProperties,
+		Queue:       replyto,
+		Timeout:     timeout,
+		Wait:        false,
+		Acknowledge: true,
+		Verbosity:   commandVerbosity(quiet),
 	}
 
 	log.Verbose("waiting for reply on %s (timeout: %.1fs)...", replyto, timeout)
@@ -131,5 +126,5 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 	if jsonOutput {
 		return displayMessageJSON(message)
 	}
-	return displayMessage(message, withHeaderAndProperties, !quiet)
+	return displayMessage(message, receiveOpts.Verbosity)
 }

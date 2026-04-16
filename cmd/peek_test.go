@@ -29,11 +29,8 @@ func TestPeekCommand_NonDestructive(t *testing.T) {
 	if mock.lastReceiveOpts.Acknowledge {
 		t.Error("acknowledge = true, want false (peek is non-destructive)")
 	}
-	if !mock.lastReceiveOpts.WithHeaderAndProperties {
-		t.Error("WithHeaderAndProperties = false, want true for peek")
-	}
-	if !mock.lastReceiveOpts.WithApplicationProperties {
-		t.Error("WithApplicationProperties = false, want true for peek")
+	if mock.lastReceiveOpts.Verbosity != backends.VerbosityVerbose {
+		t.Errorf("Verbosity = %v, want VerbosityVerbose for peek", mock.lastReceiveOpts.Verbosity)
 	}
 }
 

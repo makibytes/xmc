@@ -5,7 +5,6 @@ package pulsar
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	pulsar "github.com/apache/pulsar-client-go/pulsar"
 	"github.com/makibytes/xmc/broker/backends"
@@ -13,7 +12,7 @@ import (
 
 // TopicAdapter adapts Pulsar pub/sub to the TopicBackend interface.
 type TopicAdapter struct {
-	client pulsar.Client
+	*clientCache
 }
 
 // NewTopicAdapter creates a new Pulsar topic adapter.
@@ -22,37 +21,34 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{client: client}, nil
+	return &TopicAdapter{clientCache: newClientCache(client)}, nil
 }
 
 // Publish implements backends.TopicBackend.
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	producer, err := a.client.CreateProducer(pulsar.ProducerOptions{
-		Topic: opts.Topic,
-	})
+	producer, err := a.getProducer(opts.Topic)
 	if err != nil {
-		return fmt.Errorf("creating producer for topic %s: %w", opts.Topic, err)
+		return err
 	}
-	defer producer.Close()
 
 	msg := &pulsar.ProducerMessage{
 		Payload:    opts.Message,
-		Properties: stringifyProps(opts.Properties),
+		Properties: backends.StringifyProps(opts.Properties),
 	}
 	if opts.Key != "" {
 		msg.Key = opts.Key
 	}
 	if opts.MessageID != "" {
-		msg.Properties[propMessageID] = opts.MessageID
+		msg.Properties[backends.PropMessageID] = opts.MessageID
 	}
 	if opts.CorrelationID != "" {
-		msg.Properties[propCorrelationID] = opts.CorrelationID
+		msg.Properties[backends.PropCorrelationID] = opts.CorrelationID
 	}
 	if opts.ReplyTo != "" {
-		msg.Properties[propReplyTo] = opts.ReplyTo
+		msg.Properties[backends.PropReplyTo] = opts.ReplyTo
 	}
 	if opts.ContentType != "" {
-		msg.Properties[propContentType] = opts.ContentType
+		msg.Properties[backends.PropContentType] = opts.ContentType
 	}
 
 	_, err = producer.Send(ctx, msg)
@@ -72,15 +68,14 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		subName = opts.GroupID
 	}
 
-	consumer, err := a.client.Subscribe(pulsar.ConsumerOptions{
+	consumer, err := a.getConsumer(pulsar.ConsumerOptions{
 		Topic:            opts.Topic,
 		SubscriptionName: subName,
 		Type:             subType,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("subscribing to topic %s: %w", opts.Topic, err)
+		return nil, err
 	}
-	defer consumer.Close()
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 	receiveCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -100,8 +95,6 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 
 // Close implements backends.TopicBackend.
 func (a *TopicAdapter) Close() error {
-	if a.client != nil {
-		a.client.Close()
-	}
+	a.close()
 	return nil
 }

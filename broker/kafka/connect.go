@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/makibytes/xmc/broker/tlsutil"
+	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
 )
@@ -60,4 +61,14 @@ func getSASLMechanism(user, password string) sasl.Mechanism {
 		}
 	}
 	return nil
+}
+
+// buildDialer returns a *kafka.Dialer configured for tlsConfig/SASL, or nil when
+// neither applies. Writers and readers only need a dialer when one of them is set.
+func buildDialer(connArgs ConnArguments, tlsConfig *tls.Config) *kafka.Dialer {
+	sasl := getSASLMechanism(connArgs.User, connArgs.Password)
+	if tlsConfig == nil && sasl == nil {
+		return nil
+	}
+	return &kafka.Dialer{TLS: tlsConfig, SASLMechanism: sasl}
 }

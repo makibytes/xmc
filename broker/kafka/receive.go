@@ -33,21 +33,7 @@ func SubscribeMessage(ctx context.Context, connArgs ConnArguments, args ReceiveA
 		GroupID:  args.GroupID,
 		MinBytes: 10e3, // 10KB
 		MaxBytes: 10e6, // 10MB
-	}
-
-	// Configure TLS if needed
-	if tlsConfig != nil {
-		readerConfig.Dialer = &kafka.Dialer{
-			TLS: tlsConfig,
-		}
-	}
-
-	// Configure SASL if credentials provided
-	if sasl := getSASLMechanism(connArgs.User, connArgs.Password); sasl != nil {
-		if readerConfig.Dialer == nil {
-			readerConfig.Dialer = &kafka.Dialer{}
-		}
-		readerConfig.Dialer.SASLMechanism = sasl
+		Dialer:   buildDialer(connArgs, tlsConfig),
 	}
 
 	reader := kafka.NewReader(readerConfig)

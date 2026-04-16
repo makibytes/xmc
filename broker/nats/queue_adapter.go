@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	natsclient "github.com/nats-io/nats.go"
@@ -18,7 +19,7 @@ type QueueAdapter struct {
 	nc        *natsclient.Conn
 	js        natsclient.JetStreamContext
 	consumers map[string]*natsclient.Subscription // cached pull subscribers, keyed by queue name
-	ensured   map[string]struct{}                 // cached stream names that have been ensured
+	ensured   map[string]struct{}                 // stream names already confirmed this process
 }
 
 // NewQueueAdapter creates a new NATS JetStream queue adapter.
@@ -50,8 +51,8 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	if opts.MessageID != "" {
 		msg.Header.Set(natsclient.MsgIdHdr, opts.MessageID)
 	}
-	for k, v := range opts.Properties {
-		msg.Header.Set(k, fmt.Sprintf("%v", v))
+	for k, v := range backends.StringifyProps(opts.Properties) {
+		msg.Header.Set(k, v)
 	}
 
 	_, err := a.js.PublishMsg(msg)
@@ -132,16 +133,23 @@ func (a *QueueAdapter) ensureStream(queue string) error {
 	if _, ok := a.ensured[name]; ok {
 		return nil
 	}
-
 	subject := queueSubject(queue)
 
-	_, err := a.js.StreamInfo(name)
+	// Validate any pre-existing stream: a non-WorkQueue retention or a stream that
+	// doesn't route this subject would silently produce wrong delivery semantics.
+	info, err := a.js.StreamInfo(name)
 	if err == nil {
+		if info.Config.Retention != natsclient.WorkQueuePolicy {
+			return fmt.Errorf("stream %s has retention %v, expected WorkQueuePolicy", name, info.Config.Retention)
+		}
+		if !slices.Contains(info.Config.Subjects, subject) {
+			return fmt.Errorf("stream %s does not route subject %s (has %v)", name, subject, info.Config.Subjects)
+		}
 		a.ensured[name] = struct{}{}
 		return nil
 	}
 	if !errors.Is(err, natsclient.ErrStreamNotFound) {
-		return fmt.Errorf("checking stream %s: %w", name, err)
+		return fmt.Errorf("fetching stream %s: %w", name, err)
 	}
 
 	_, err = a.js.AddStream(&natsclient.StreamConfig{
@@ -152,7 +160,6 @@ func (a *QueueAdapter) ensureStream(queue string) error {
 	if err != nil {
 		return fmt.Errorf("creating stream %s: %w", name, err)
 	}
-
 	a.ensured[name] = struct{}{}
 	return nil
 }

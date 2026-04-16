@@ -5,11 +5,11 @@ import (
 
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/broker/backends"
-	"github.com/makibytes/xmc/log"
 )
 
-// ConvertAMQPToBackendMessage converts an AMQP 1.0 message to the common backend Message type
-func ConvertAMQPToBackendMessage(msg *amqp.Message) *backends.Message {
+// ConvertAMQPToBackendMessage converts an AMQP 1.0 message to the common backend Message type.
+// withMetadata controls whether AMQP header/properties debug strings are surfaced via InternalMetadata.
+func ConvertAMQPToBackendMessage(msg *amqp.Message, withMetadata bool) *backends.Message {
 	result := &backends.Message{
 		Data:             msg.GetData(),
 		Properties:       msg.ApplicationProperties,
@@ -30,7 +30,7 @@ func ConvertAMQPToBackendMessage(msg *amqp.Message) *backends.Message {
 			result.ContentType = *msg.Properties.ContentType
 		}
 
-		if log.IsVerbose {
+		if withMetadata {
 			result.InternalMetadata["Header"] = fmt.Sprintf("%+v", msg.Header)
 			result.InternalMetadata["MessageProperties"] = fmt.Sprintf("%+v", msg.Properties)
 		}

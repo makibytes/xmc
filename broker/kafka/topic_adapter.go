@@ -5,55 +5,79 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/log"
 	"github.com/segmentio/kafka-go"
 )
+
+const propTTL = "ttl"
 
 // TopicAdapter adapts Kafka to the TopicBackend interface
 type TopicAdapter struct {
 	connArgs ConnArguments
+	writer   *kafka.Writer
 }
 
 // NewTopicAdapter creates a new Kafka topic adapter
 func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
-	return &TopicAdapter{
-		connArgs: connArgs,
-	}, nil
+	brokers, tlsConfig, err := parseKafkaURL(connArgs.Server, connArgs.TLS)
+	if err != nil {
+		return nil, err
+	}
+
+	writer := kafka.NewWriter(kafka.WriterConfig{
+		Brokers:  brokers,
+		Balancer: &kafka.LeastBytes{},
+		Dialer:   buildDialer(connArgs, tlsConfig),
+	})
+	writer.AllowAutoTopicCreation = true
+
+	return &TopicAdapter{connArgs: connArgs, writer: writer}, nil
 }
 
 // Publish implements backends.TopicBackend
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	properties := make(map[string]string)
-	for k, v := range opts.Properties {
-		properties[k] = fmt.Sprintf("%v", v)
+	var headers []kafka.Header
+	addHeader := func(key, value string) {
+		if value != "" {
+			headers = append(headers, kafka.Header{Key: key, Value: []byte(value)})
+		}
+	}
+	addHeader(backends.PropContentType, opts.ContentType)
+	addHeader(backends.PropCorrelationID, opts.CorrelationID)
+	addHeader(backends.PropMessageID, opts.MessageID)
+	addHeader(backends.PropReplyTo, opts.ReplyTo)
+	if opts.TTL > 0 {
+		addHeader(propTTL, strconv.FormatInt(opts.TTL, 10))
+	}
+	for k, v := range backends.StringifyProps(opts.Properties) {
+		addHeader(k, v)
 	}
 
-	args := SendArguments{
-		Topic:         opts.Topic,
-		Message:       opts.Message,
-		Key:           opts.Key,
-		Properties:    properties,
-		MessageID:     opts.MessageID,
-		CorrelationID: opts.CorrelationID,
-		ReplyTo:       opts.ReplyTo,
-		ContentType:   opts.ContentType,
-		TTL:           opts.TTL,
+	message := kafka.Message{
+		Topic:   opts.Topic,
+		Key:     []byte(opts.Key),
+		Value:   opts.Message,
+		Headers: headers,
 	}
 
-	return PublishMessage(ctx, a.connArgs, args)
+	log.Verbose("💌 publishing message to topic %s...", opts.Topic)
+	if err := a.writer.WriteMessages(ctx, message); err != nil {
+		return fmt.Errorf("failed to publish message: %w", err)
+	}
+	return nil
 }
 
 // Subscribe implements backends.TopicBackend
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Topic:                     opts.Topic,
-		GroupID:                   opts.GroupID,
-		Timeout:                   opts.Timeout,
-		Wait:                      opts.Wait,
-		Number:                    1,
-		WithHeaderAndProperties:   opts.WithHeaderAndProperties,
-		WithApplicationProperties: opts.WithApplicationProperties,
+		Topic:   opts.Topic,
+		GroupID: opts.GroupID,
+		Timeout: opts.Timeout,
+		Wait:    opts.Wait,
+		Number:  1,
 	}
 
 	message, err := SubscribeMessage(ctx, a.connArgs, args)
@@ -64,12 +88,14 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		return nil, fmt.Errorf("no message available")
 	}
 
-	return convertKafkaToBackendMessage(message, opts.WithHeaderAndProperties), nil
+	return convertKafkaToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil
 }
 
 // Close implements backends.TopicBackend
 func (a *TopicAdapter) Close() error {
-	// Kafka connections are per-operation, no persistent connection to close
+	if a.writer != nil {
+		return a.writer.Close()
+	}
 	return nil
 }
 
@@ -80,36 +106,27 @@ func convertKafkaToBackendMessage(msg *kafka.Message, withMetadata bool) *backen
 		InternalMetadata: make(map[string]any),
 	}
 
-	// Convert headers to properties
 	for _, h := range msg.Headers {
 		result.Properties[h.Key] = string(h.Value)
 	}
 
-	// Extract standard metadata from headers if present
-	if contentType, ok := result.Properties["content-type"]; ok {
-		result.ContentType = fmt.Sprintf("%v", contentType)
-		delete(result.Properties, "content-type")
+	extract := func(key string, target *string) {
+		if v, ok := result.Properties[key]; ok {
+			*target = v.(string)
+			delete(result.Properties, key)
+		}
 	}
-	if correlID, ok := result.Properties["correlation-id"]; ok {
-		result.CorrelationID = fmt.Sprintf("%v", correlID)
-		delete(result.Properties, "correlation-id")
-	}
-	if msgID, ok := result.Properties["message-id"]; ok {
-		result.MessageID = fmt.Sprintf("%v", msgID)
-		delete(result.Properties, "message-id")
-	}
-	if replyTo, ok := result.Properties["reply-to"]; ok {
-		result.ReplyTo = fmt.Sprintf("%v", replyTo)
-		delete(result.Properties, "reply-to")
-	}
+	extract(backends.PropContentType, &result.ContentType)
+	extract(backends.PropCorrelationID, &result.CorrelationID)
+	extract(backends.PropMessageID, &result.MessageID)
+	extract(backends.PropReplyTo, &result.ReplyTo)
 
-	// Add internal metadata for verbose display
 	if withMetadata {
 		result.InternalMetadata["Topic"] = msg.Topic
 		result.InternalMetadata["Partition"] = msg.Partition
 		result.InternalMetadata["Offset"] = msg.Offset
 		result.InternalMetadata["Time"] = msg.Time
-		if msg.Key != nil && len(msg.Key) > 0 {
+		if len(msg.Key) > 0 {
 			result.InternalMetadata["Key"] = string(msg.Key)
 		}
 	}

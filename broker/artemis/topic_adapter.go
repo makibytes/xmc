@@ -59,18 +59,16 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 // Subscribe implements backends.TopicBackend
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Acknowledge:               true, // Always acknowledge for topics
-		Durable:                   false,
-		DurableSubscription:       opts.Durable,
-		Multicast:                 true, // Topic = MULTICAST
-		Number:                    1,
-		Queue:                     opts.Topic,
-		Selector:                  opts.Selector,
-		SubscriptionName:          opts.GroupID,
-		Timeout:                   opts.Timeout,
-		Wait:                      opts.Wait,
-		WithHeaderAndProperties:   opts.WithHeaderAndProperties,
-		WithApplicationProperties: opts.WithApplicationProperties,
+		Acknowledge:         true, // Always acknowledge for topics
+		Durable:             false,
+		DurableSubscription: opts.Durable,
+		Multicast:           true, // Topic = MULTICAST
+		Number:              1,
+		Queue:               opts.Topic,
+		Selector:            opts.Selector,
+		SubscriptionName:    opts.GroupID,
+		Timeout:             opts.Timeout,
+		Wait:                opts.Wait,
 	}
 
 	message, err := ReceiveMessage(a.session, args)
@@ -81,7 +79,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		return nil, errors.New("no message available")
 	}
 
-	return amqpcommon.ConvertAMQPToBackendMessage(message), nil
+	return amqpcommon.ConvertAMQPToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil
 }
 
 // Close implements backends.TopicBackend

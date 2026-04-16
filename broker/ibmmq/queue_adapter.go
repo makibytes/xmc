@@ -32,22 +32,15 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 
 // Send implements backends.QueueBackend
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
-	properties := make(map[string]string)
-	for k, v := range opts.Properties {
-		properties[k] = fmt.Sprintf("%v", v)
-	}
-
 	var persistence int
 	if opts.Persistent {
 		persistence = 1
-	} else {
-		persistence = 0
 	}
 
 	args := SendArguments{
 		Queue:         opts.Queue,
 		Message:       opts.Message,
-		Properties:    properties,
+		Properties:    backends.StringifyProps(opts.Properties),
 		MessageID:     opts.MessageID,
 		CorrelationID: opts.CorrelationID,
 		ReplyTo:       opts.ReplyTo,
@@ -63,14 +56,12 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 // Receive implements backends.QueueBackend
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Queue:                     opts.Queue,
-		Timeout:                   opts.Timeout,
-		Wait:                      opts.Wait,
-		Number:                    1,
-		Acknowledge:               opts.Acknowledge,
-		Selector:                  opts.Selector,
-		WithHeaderAndProperties:   opts.WithHeaderAndProperties,
-		WithApplicationProperties: opts.WithApplicationProperties,
+		Queue:       opts.Queue,
+		Timeout:     opts.Timeout,
+		Wait:        opts.Wait,
+		Number:      1,
+		Acknowledge: opts.Acknowledge,
+		Selector:    opts.Selector,
 	}
 
 	md, data, msgHandle, err := ReceiveMessage(a.qMgr, args)
@@ -84,7 +75,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return nil, fmt.Errorf("no message available")
 	}
 
-	return convertMQMDToBackendMessage(md, data, msgHandle, opts.WithHeaderAndProperties), nil
+	return convertMQMDToBackendMessage(md, data, msgHandle, opts.Verbosity >= backends.VerbosityVerbose), nil
 }
 
 // Close implements backends.QueueBackend

@@ -72,17 +72,15 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	args := ReceiveArguments{
 		// For RabbitMQ native AMQP 1.0: /exchange/{exchange}/{routing-key} creates a
 		// temporary exclusive queue bound to the exchange with the routing key.
-		Queue:                     "/exchange/" + a.exchange + "/" + opts.Topic,
-		Acknowledge:               true,
-		Durable:                   false,
-		DurableSubscription:       opts.Durable,
-		Number:                    1,
-		Selector:                  opts.Selector,
-		SubscriptionName:          opts.GroupID,
-		Timeout:                   opts.Timeout,
-		Wait:                      opts.Wait,
-		WithHeaderAndProperties:   opts.WithHeaderAndProperties,
-		WithApplicationProperties: opts.WithApplicationProperties,
+		Queue:               "/exchange/" + a.exchange + "/" + opts.Topic,
+		Acknowledge:         true,
+		Durable:             false,
+		DurableSubscription: opts.Durable,
+		Number:              1,
+		Selector:            opts.Selector,
+		SubscriptionName:    opts.GroupID,
+		Timeout:             opts.Timeout,
+		Wait:                opts.Wait,
 	}
 
 	message, err := ReceiveMessage(a.session, args)
@@ -93,7 +91,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		return nil, errors.New("no message available")
 	}
 
-	return amqpcommon.ConvertAMQPToBackendMessage(message), nil
+	return amqpcommon.ConvertAMQPToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil
 }
 
 // Close implements backends.TopicBackend

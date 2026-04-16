@@ -132,10 +132,10 @@ func TestArtemis_QueueSendReceive_Properties(t *testing.T) {
 	defer receiver.Close()
 
 	msg, err := receiver.Receive(context.Background(), backends.ReceiveOptions{
-		Queue:                     queue,
-		Acknowledge:               true,
-		Timeout:                   5,
-		WithApplicationProperties: true,
+		Queue:       queue,
+		Acknowledge: true,
+		Timeout:     5,
+		Verbosity:   backends.VerbosityNormal,
 	})
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
@@ -268,10 +268,10 @@ func TestArtemis_QueueSendReceive_MessageID(t *testing.T) {
 	defer receiver.Close()
 
 	msg, err := receiver.Receive(context.Background(), backends.ReceiveOptions{
-		Queue:                   queue,
-		Acknowledge:             true,
-		Timeout:                 5,
-		WithHeaderAndProperties: true,
+		Queue:       queue,
+		Acknowledge: true,
+		Timeout:     5,
+		Verbosity:   backends.VerbosityVerbose,
 	})
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
@@ -363,10 +363,10 @@ func TestArtemis_TopicPublishSubscribe_Properties(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		msg, err := adapter.Subscribe(ctx, backends.SubscribeOptions{
-			Topic:                     topic,
-			Timeout:                   10,
-			Wait:                      false,
-			WithApplicationProperties: true,
+			Topic:     topic,
+			Timeout:   10,
+			Wait:      false,
+			Verbosity: backends.VerbosityNormal,
 		})
 		if err != nil {
 			errCh <- err

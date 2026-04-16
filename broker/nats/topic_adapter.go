@@ -37,8 +37,8 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	if opts.MessageID != "" {
 		msg.Header.Set(natsclient.MsgIdHdr, opts.MessageID)
 	}
-	for k, v := range opts.Properties {
-		msg.Header.Set(k, fmt.Sprintf("%v", v))
+	for k, v := range backends.StringifyProps(opts.Properties) {
+		msg.Header.Set(k, v)
 	}
 
 	return a.nc.PublishMsg(msg)

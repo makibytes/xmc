@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	pulsar "github.com/apache/pulsar-client-go/pulsar"
@@ -13,17 +14,13 @@ import (
 )
 
 const (
-	queueSubscription  = "xmc-queue"
-	propCorrelationID  = "correlation-id"
-	propReplyTo        = "reply-to"
-	propContentType    = "content-type"
-	propMessageID      = "message-id"
-	propTTLMs          = "ttl-ms"
+	queueSubscription = "xmc-queue"
+	propTTLMs         = "ttl-ms"
 )
 
 // QueueAdapter adapts Pulsar to the QueueBackend interface using Shared subscriptions.
 type QueueAdapter struct {
-	client pulsar.Client
+	*clientCache
 }
 
 // NewQueueAdapter creates a new Pulsar queue adapter.
@@ -32,39 +29,35 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &QueueAdapter{client: client}, nil
+	return &QueueAdapter{clientCache: newClientCache(client)}, nil
 }
 
 // Send implements backends.QueueBackend.
-// Topic: persistent://public/default/{queue}
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	topic := queueTopic(opts.Queue)
-	producer, err := a.client.CreateProducer(pulsar.ProducerOptions{
-		Topic: topic,
-	})
+	producer, err := a.getProducer(topic)
 	if err != nil {
-		return fmt.Errorf("creating producer for %s: %w", topic, err)
+		return err
 	}
-	defer producer.Close()
 
 	msg := &pulsar.ProducerMessage{
 		Payload:    opts.Message,
-		Properties: stringifyProps(opts.Properties),
+		Properties: backends.StringifyProps(opts.Properties),
 	}
 	if opts.MessageID != "" {
 		msg.Key = opts.MessageID
 	}
 	if opts.CorrelationID != "" {
-		msg.Properties[propCorrelationID] = opts.CorrelationID
+		msg.Properties[backends.PropCorrelationID] = opts.CorrelationID
 	}
 	if opts.ReplyTo != "" {
-		msg.Properties[propReplyTo] = opts.ReplyTo
+		msg.Properties[backends.PropReplyTo] = opts.ReplyTo
 	}
 	if opts.ContentType != "" {
-		msg.Properties[propContentType] = opts.ContentType
+		msg.Properties[backends.PropContentType] = opts.ContentType
 	}
 	if opts.TTL > 0 {
-		msg.Properties[propTTLMs] = fmt.Sprintf("%d", opts.TTL)
+		msg.Properties[propTTLMs] = strconv.FormatInt(opts.TTL, 10)
 	}
 
 	_, err = producer.Send(ctx, msg)
@@ -75,7 +68,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 // Uses Shared subscription for queue semantics (each message delivered to one consumer).
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	topic := queueTopic(opts.Queue)
-	consumer, err := a.client.Subscribe(pulsar.ConsumerOptions{
+	consumer, err := a.getConsumer(pulsar.ConsumerOptions{
 		Topic:                       topic,
 		SubscriptionName:            queueSubscription,
 		Type:                        pulsar.Shared,
@@ -83,9 +76,8 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		NackRedeliveryDelay:         1 * time.Second,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("subscribing to %s: %w", topic, err)
+		return nil, err
 	}
-	defer consumer.Close()
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 	receiveCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -110,22 +102,12 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 // Close implements backends.QueueBackend.
 func (a *QueueAdapter) Close() error {
-	if a.client != nil {
-		a.client.Close()
-	}
+	a.close()
 	return nil
 }
 
 func queueTopic(queue string) string {
 	return fmt.Sprintf("persistent://public/default/%s", queue)
-}
-
-func stringifyProps(props map[string]any) map[string]string {
-	result := make(map[string]string, len(props))
-	for k, v := range props {
-		result[k] = fmt.Sprintf("%v", v)
-	}
-	return result
 }
 
 func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
@@ -138,8 +120,8 @@ func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
 		Data:          msg.Payload(),
 		Properties:    props,
 		MessageID:     msg.Key(),
-		CorrelationID: rawProps[propCorrelationID],
-		ReplyTo:       rawProps[propReplyTo],
-		ContentType:   rawProps[propContentType],
+		CorrelationID: rawProps[backends.PropCorrelationID],
+		ReplyTo:       rawProps[backends.PropReplyTo],
+		ContentType:   rawProps[backends.PropContentType],
 	}
 }
