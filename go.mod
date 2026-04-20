@@ -7,7 +7,7 @@ require (
 	github.com/apache/pulsar-client-go v0.19.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/ibm-messaging/mq-golang/v5 v5.7.1
-	github.com/nats-io/nats.go v1.50.0
+	github.com/nats-io/nats.go v1.51.0
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/spf13/cobra v1.10.2
 	github.com/testcontainers/testcontainers-go v0.42.0
