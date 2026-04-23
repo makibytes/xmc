@@ -3,7 +3,7 @@ module github.com/makibytes/xmc
 go 1.26
 
 require (
-	github.com/Azure/go-amqp v1.5.1
+	github.com/Azure/go-amqp v1.6.0
 	github.com/apache/pulsar-client-go v0.19.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/ibm-messaging/mq-golang/v5 v5.7.1
