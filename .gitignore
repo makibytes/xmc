@@ -37,4 +37,5 @@ test.bin
 test.out.bin
 
 /dist
+/.claude
 
