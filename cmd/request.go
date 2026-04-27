@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -51,28 +51,14 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 
-	// Parse properties
-	properties := make(map[string]any)
-	propertySlice, _ := cmd.Flags().GetStringSlice("property")
-	for _, property := range propertySlice {
-		keyValue := strings.SplitN(property, "=", 2)
-		if len(keyValue) == 2 {
-			properties[keyValue[0]] = keyValue[1]
-		} else {
-			return fmt.Errorf("invalid property: %s", property)
-		}
+	properties, err := parsePropertiesFlag(cmd.Flags())
+	if err != nil {
+		return err
 	}
 
-	// Get message content (from args or stdin)
-	var data []byte
-	if len(args) > 1 {
-		data = []byte(args[1])
-	} else {
-		var err error
-		data, err = readFromStdin()
-		if err != nil {
-			return err
-		}
+	data, err := readCommandMessage(args)
+	if err != nil {
+		return err
 	}
 
 	// Reply queue is required for request-reply pattern
@@ -114,8 +100,11 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 	log.Verbose("waiting for reply on %s (timeout: %.1fs)...", replyto, timeout)
 	message, err := backend.Receive(context.Background(), receiveOpts)
 	if err != nil {
-		if err == context.DeadlineExceeded {
+		if errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("no reply received within %.1f seconds", timeout)
+		}
+		if errors.Is(err, backends.ErrNoMessageAvailable) {
+			return fmt.Errorf("no reply received")
 		}
 		return fmt.Errorf("failed to receive reply: %w", err)
 	}

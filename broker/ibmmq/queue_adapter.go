@@ -72,7 +72,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return nil, err
 	}
 	if data == nil {
-		return nil, fmt.Errorf("no message available")
+		return nil, backends.ErrNoMessageAvailable
 	}
 
 	return convertMQMDToBackendMessage(md, data, msgHandle, opts.Verbosity >= backends.VerbosityVerbose), nil

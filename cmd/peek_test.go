@@ -29,8 +29,8 @@ func TestPeekCommand_NonDestructive(t *testing.T) {
 	if mock.lastReceiveOpts.Acknowledge {
 		t.Error("acknowledge = true, want false (peek is non-destructive)")
 	}
-	if mock.lastReceiveOpts.Verbosity != backends.VerbosityVerbose {
-		t.Errorf("Verbosity = %v, want VerbosityVerbose for peek", mock.lastReceiveOpts.Verbosity)
+	if mock.lastReceiveOpts.Verbosity != backends.VerbosityNormal {
+		t.Errorf("Verbosity = %v, want VerbosityNormal for peek", mock.lastReceiveOpts.Verbosity)
 	}
 }
 
@@ -146,41 +146,87 @@ func TestPeekCommand_SelectorFlag(t *testing.T) {
 	}
 }
 
+func TestPeekCommand_QuietFlag(t *testing.T) {
+	msg := &backends.Message{
+		Data:       []byte("peek quietly"),
+		Properties: map[string]any{"key": "val"},
+	}
+	mock := &mockQueueBackend{receiveMsg: msg}
+	cmd := NewPeekCommand(mock)
+	cmd.SetArgs([]string{"test-queue", "-q"})
+
+	oldStderr := os.Stderr
+	rErr, wErr, _ := os.Pipe()
+	os.Stderr = wErr
+
+	oldStdout := os.Stdout
+	rOut, wOut, _ := os.Pipe()
+	os.Stdout = wOut
+	origIsStdout := log.IsStdout
+	log.IsStdout = false
+	defer func() { log.IsStdout = origIsStdout }()
+
+	err := cmd.Execute()
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastReceiveOpts.Verbosity != backends.VerbosityQuiet {
+		t.Errorf("verbosity = %v, want %v", mock.lastReceiveOpts.Verbosity, backends.VerbosityQuiet)
+	}
+
+	var bufOut bytes.Buffer
+	bufOut.ReadFrom(rOut)
+	if bufOut.String() != "peek quietly" {
+		t.Errorf("stdout = %q, want %q", bufOut.String(), "peek quietly")
+	}
+
+	var bufErr bytes.Buffer
+	bufErr.ReadFrom(rErr)
+	if strings.Contains(bufErr.String(), "Properties") {
+		t.Errorf("stderr should not contain properties in quiet mode, got: %q", bufErr.String())
+	}
+}
+
 func TestPeekCommand_NilMessageAfterFirst(t *testing.T) {
-msgs := []*backends.Message{
-{Data: []byte("first peek")},
-nil,
-}
-mock := &mockQueueBackend{receiveMsgs: msgs}
-cmd := NewPeekCommand(mock)
-cmd.SetArgs([]string{"test-queue", "-n", "5"})
+	msgs := []*backends.Message{
+		{Data: []byte("first peek")},
+		nil,
+	}
+	mock := &mockQueueBackend{receiveMsgs: msgs}
+	cmd := NewPeekCommand(mock)
+	cmd.SetArgs([]string{"test-queue", "-n", "5"})
 
-old := os.Stdout
-_, w, _ := os.Pipe()
-os.Stdout = w
-origIsStdout := log.IsStdout
-log.IsStdout = false
-defer func() { log.IsStdout = origIsStdout }()
+	old := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+	origIsStdout := log.IsStdout
+	log.IsStdout = false
+	defer func() { log.IsStdout = origIsStdout }()
 
-err := cmd.Execute()
-w.Close()
-os.Stdout = old
+	err := cmd.Execute()
+	w.Close()
+	os.Stdout = old
 
-if err != nil {
-t.Fatalf("expected nil error when message stream ends, got: %v", err)
-}
-if mock.receiveCount != 2 {
-t.Errorf("receiveCount = %d, want 2", mock.receiveCount)
-}
+	if err != nil {
+		t.Fatalf("expected nil error when message stream ends, got: %v", err)
+	}
+	if mock.receiveCount != 2 {
+		t.Errorf("receiveCount = %d, want 2", mock.receiveCount)
+	}
 }
 
 func TestPeekCommand_NilMessageFirst(t *testing.T) {
-mock := &mockQueueBackend{receiveMsg: nil}
-cmd := NewPeekCommand(mock)
-cmd.SetArgs([]string{"test-queue"})
+	mock := &mockQueueBackend{receiveMsg: nil}
+	cmd := NewPeekCommand(mock)
+	cmd.SetArgs([]string{"test-queue"})
 
-err := cmd.Execute()
-if err == nil {
-t.Fatal("expected error for nil message, got nil")
-}
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for nil message, got nil")
+	}
 }

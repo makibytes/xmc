@@ -51,4 +51,3 @@ func Connect(args ConnArguments) (pulsar.Client, error) {
 	}
 	return client, nil
 }
-

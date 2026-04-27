@@ -77,20 +77,20 @@ func TestWrapTopicCommand_FactoryError(t *testing.T) {
 }
 
 func TestVersionCommand_Execute(t *testing.T) {
-cmd := NewVersionCommand()
+	cmd := NewVersionCommand()
 
-old := os.Stdout
-r, w, _ := os.Pipe()
-os.Stdout = w
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
 
-cmd.Execute()
-w.Close()
-os.Stdout = old
+	cmd.Execute()
+	w.Close()
+	os.Stdout = old
 
-var buf bytes.Buffer
-buf.ReadFrom(r)
-got := strings.TrimSpace(buf.String())
-if got != "dev" {
-t.Errorf("version = %q, want %q", got, "dev")
-}
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	got := strings.TrimSpace(buf.String())
+	if got != "dev" {
+		t.Errorf("version = %q, want %q", got, "dev")
+	}
 }

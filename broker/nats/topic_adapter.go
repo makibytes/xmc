@@ -66,7 +66,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	msg, err := sub.NextMsg(timeout)
 	if err != nil {
 		if errors.Is(err, natsclient.ErrTimeout) {
-			return nil, errors.New("no message available")
+			return nil, backends.ErrNoMessageAvailable
 		}
 		return nil, err
 	}
@@ -81,4 +81,3 @@ func (a *TopicAdapter) Close() error {
 	}
 	return nil
 }
-

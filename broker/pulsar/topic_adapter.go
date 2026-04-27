@@ -84,7 +84,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	msg, err := consumer.Receive(receiveCtx)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, errors.New("no message available")
+			return nil, backends.ErrNoMessageAvailable
 		}
 		return nil, err
 	}

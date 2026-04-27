@@ -1,13 +1,7 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
-	"errors"
-	"fmt"
-	"io"
-	"os"
-	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -20,7 +14,7 @@ func NewSendCommand(backend backends.QueueBackend) *cobra.Command {
 		Use:     "send <queue> [message]",
 		Aliases: []string{"put"},
 		Short:   "Send a message to a queue",
-		Args:  cobra.MinimumNArgs(1),
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doSend(cmd, args, backend)
 		},
@@ -52,16 +46,9 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 	ttl, _ := cmd.Flags().GetInt64("ttl")
 	lines, _ := cmd.Flags().GetBool("lines")
 
-	// Parse properties
-	properties := make(map[string]any)
-	propertySlice, _ := cmd.Flags().GetStringSlice("property")
-	for _, property := range propertySlice {
-		keyValue := strings.SplitN(property, "=", 2)
-		if len(keyValue) == 2 {
-			properties[keyValue[0]] = keyValue[1]
-		} else {
-			return fmt.Errorf("invalid property: %s", property)
-		}
+	properties, err := parsePropertiesFlag(cmd.Flags())
+	if err != nil {
+		return err
 	}
 
 	// Line-delimited mode: read stdin line by line, send each as a separate message
@@ -69,16 +56,9 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 		return sendLines(backend, args[0], properties, contenttype, correlationid, messageid, replyto, priority, persistent, ttl)
 	}
 
-	// Get message content (from args or stdin)
-	var data []byte
-	if len(args) > 1 {
-		data = []byte(args[1])
-	} else {
-		var err error
-		data, err = readFromStdin()
-		if err != nil {
-			return err
-		}
+	data, err := readCommandMessage(args)
+	if err != nil {
+		return err
 	}
 
 	// Create send options
@@ -108,10 +88,7 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 }
 
 func sendLines(backend backends.QueueBackend, queue string, properties map[string]any, contenttype, correlationid, messageid, replyto string, priority int, persistent bool, ttl int64) error {
-	scanner := bufio.NewScanner(os.Stdin)
-	sent := 0
-	for scanner.Scan() {
-		line := scanner.Text()
+	sent, err := forEachInputLine(func(line string) error {
 		opts := backends.SendOptions{
 			Queue:         queue,
 			Message:       []byte(line),
@@ -127,25 +104,11 @@ func sendLines(backend backends.QueueBackend, queue string, properties map[strin
 		if err := backend.Send(context.Background(), opts); err != nil {
 			return err
 		}
-		sent++
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading stdin: %w", err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	log.Verbose("sent %d messages", sent)
 	return nil
-}
-
-func readFromStdin() ([]byte, error) {
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) != 0 {
-		return nil, errors.New("no message provided and no data in stdin")
-	}
-
-	data, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
 }

@@ -4,7 +4,6 @@ package artemis
 
 import (
 	"context"
-	"errors"
 
 	"github.com/makibytes/xmc/broker/amqpcommon"
 	"github.com/makibytes/xmc/broker/backends"
@@ -70,7 +69,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return nil, err
 	}
 	if message == nil {
-		return nil, errors.New("no message available")
+		return nil, backends.ErrNoMessageAvailable
 	}
 
 	return amqpcommon.ConvertAMQPToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil

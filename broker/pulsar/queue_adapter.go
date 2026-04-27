@@ -86,7 +86,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	msg, err := consumer.Receive(receiveCtx)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, errors.New("no message available")
+			return nil, backends.ErrNoMessageAvailable
 		}
 		return nil, err
 	}

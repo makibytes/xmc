@@ -211,68 +211,68 @@ func TestSendCommand_SendError(t *testing.T) {
 }
 
 func TestSendCommand_StdinData(t *testing.T) {
-mock := &mockQueueBackend{}
-cmd := NewSendCommand(mock)
-cmd.SetArgs([]string{"test-queue"})
+	mock := &mockQueueBackend{}
+	cmd := NewSendCommand(mock)
+	cmd.SetArgs([]string{"test-queue"})
 
-// Pipe data into stdin
-r, w, _ := os.Pipe()
-oldStdin := os.Stdin
-os.Stdin = r
-defer func() { os.Stdin = oldStdin }()
+	// Pipe data into stdin
+	r, w, _ := os.Pipe()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
 
-w.WriteString("stdin message")
-w.Close()
+	w.WriteString("stdin message")
+	w.Close()
 
-err := cmd.Execute()
-if err != nil {
-t.Fatalf("unexpected error: %v", err)
-}
-if string(mock.lastSendOpts.Message) != "stdin message" {
-t.Errorf("message = %q, want %q", mock.lastSendOpts.Message, "stdin message")
-}
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(mock.lastSendOpts.Message) != "stdin message" {
+		t.Errorf("message = %q, want %q", mock.lastSendOpts.Message, "stdin message")
+	}
 }
 
 func TestSendCommand_LinesMode(t *testing.T) {
-mock := &mockQueueBackend{}
-cmd := NewSendCommand(mock)
-cmd.SetArgs([]string{"test-queue", "-l"})
+	mock := &mockQueueBackend{}
+	cmd := NewSendCommand(mock)
+	cmd.SetArgs([]string{"test-queue", "-l"})
 
-r, w, _ := os.Pipe()
-oldStdin := os.Stdin
-os.Stdin = r
-defer func() { os.Stdin = oldStdin }()
+	r, w, _ := os.Pipe()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
 
-w.WriteString("line one\nline two\nline three\n")
-w.Close()
+	w.WriteString("line one\nline two\nline three\n")
+	w.Close()
 
-err := cmd.Execute()
-if err != nil {
-t.Fatalf("unexpected error: %v", err)
-}
-if mock.sendCount != 3 {
-t.Errorf("sendCount = %d, want 3", mock.sendCount)
-}
-if string(mock.lastSendOpts.Message) != "line three" {
-t.Errorf("last message = %q, want %q", mock.lastSendOpts.Message, "line three")
-}
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.sendCount != 3 {
+		t.Errorf("sendCount = %d, want 3", mock.sendCount)
+	}
+	if string(mock.lastSendOpts.Message) != "line three" {
+		t.Errorf("last message = %q, want %q", mock.lastSendOpts.Message, "line three")
+	}
 }
 
 func TestSendCommand_LinesModeWithError(t *testing.T) {
-mock := &mockQueueBackend{sendErr: fmt.Errorf("broker error")}
-cmd := NewSendCommand(mock)
-cmd.SetArgs([]string{"test-queue", "-l"})
+	mock := &mockQueueBackend{sendErr: fmt.Errorf("broker error")}
+	cmd := NewSendCommand(mock)
+	cmd.SetArgs([]string{"test-queue", "-l"})
 
-r, w, _ := os.Pipe()
-oldStdin := os.Stdin
-os.Stdin = r
-defer func() { os.Stdin = oldStdin }()
+	r, w, _ := os.Pipe()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
 
-w.WriteString("line one\n")
-w.Close()
+	w.WriteString("line one\n")
+	w.Close()
 
-err := cmd.Execute()
-if err == nil {
-t.Fatal("expected error, got nil")
-}
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -67,6 +68,17 @@ func TestReceiveCommand_TimeoutReturnsNil(t *testing.T) {
 	}
 }
 
+func TestReceiveCommand_WrappedTimeoutReturnsNil(t *testing.T) {
+	mock := &mockQueueBackend{receiveErr: fmt.Errorf("wrapped: %w", context.DeadlineExceeded)}
+	cmd := NewReceiveCommand(mock)
+	cmd.SetArgs([]string{"test-queue"})
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("expected nil error on wrapped timeout, got: %v", err)
+	}
+}
+
 func TestReceiveCommand_NilMessageReturnsError(t *testing.T) {
 	mock := &mockQueueBackend{receiveMsg: nil}
 	cmd := NewReceiveCommand(mock)
@@ -75,6 +87,20 @@ func TestReceiveCommand_NilMessageReturnsError(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for nil message, got nil")
+	}
+}
+
+func TestReceiveCommand_NoMessageErrorReturnsError(t *testing.T) {
+	mock := &mockQueueBackend{receiveErr: backends.ErrNoMessageAvailable}
+	cmd := NewReceiveCommand(mock)
+	cmd.SetArgs([]string{"test-queue"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing message, got nil")
+	}
+	if err.Error() != backends.ErrNoMessageAvailable.Error() {
+		t.Fatalf("error = %q, want %q", err.Error(), backends.ErrNoMessageAvailable.Error())
 	}
 }
 
@@ -259,107 +285,107 @@ func TestReceiveCommand_AcknowledgeTrue(t *testing.T) {
 }
 
 func TestReceiveCommand_DisplaysNewlineWhenIsStdout(t *testing.T) {
-msg := &backends.Message{Data: []byte("hello")}
-mock := &mockQueueBackend{receiveMsg: msg}
-cmd := NewReceiveCommand(mock)
-cmd.SetArgs([]string{"test-queue"})
+	msg := &backends.Message{Data: []byte("hello")}
+	mock := &mockQueueBackend{receiveMsg: msg}
+	cmd := NewReceiveCommand(mock)
+	cmd.SetArgs([]string{"test-queue"})
 
-old := os.Stdout
-r, w, _ := os.Pipe()
-os.Stdout = w
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
 
-origIsStdout := log.IsStdout
-log.IsStdout = true
-defer func() { log.IsStdout = origIsStdout }()
+	origIsStdout := log.IsStdout
+	log.IsStdout = true
+	defer func() { log.IsStdout = origIsStdout }()
 
-err := cmd.Execute()
-w.Close()
-os.Stdout = old
+	err := cmd.Execute()
+	w.Close()
+	os.Stdout = old
 
-if err != nil {
-t.Fatalf("unexpected error: %v", err)
-}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-var buf bytes.Buffer
-buf.ReadFrom(r)
-if buf.String() != "hello\n" {
-t.Errorf("output = %q, want %q", buf.String(), "hello\n")
-}
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	if buf.String() != "hello\n" {
+		t.Errorf("output = %q, want %q", buf.String(), "hello\n")
+	}
 }
 
 func TestReceiveCommand_NilMessageAfterFirst(t *testing.T) {
-msgs := []*backends.Message{
-{Data: []byte("first")},
-nil,
-}
-mock := &mockQueueBackend{receiveMsgs: msgs}
-cmd := NewReceiveCommand(mock)
-cmd.SetArgs([]string{"test-queue", "-n", "5"})
+	msgs := []*backends.Message{
+		{Data: []byte("first")},
+		nil,
+	}
+	mock := &mockQueueBackend{receiveMsgs: msgs}
+	cmd := NewReceiveCommand(mock)
+	cmd.SetArgs([]string{"test-queue", "-n", "5"})
 
-old := os.Stdout
-_, w, _ := os.Pipe()
-os.Stdout = w
-origIsStdout := log.IsStdout
-log.IsStdout = false
-defer func() { log.IsStdout = origIsStdout }()
+	old := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+	origIsStdout := log.IsStdout
+	log.IsStdout = false
+	defer func() { log.IsStdout = origIsStdout }()
 
-err := cmd.Execute()
-w.Close()
-os.Stdout = old
+	err := cmd.Execute()
+	w.Close()
+	os.Stdout = old
 
-if err != nil {
-t.Fatalf("expected nil error when message stream ends, got: %v", err)
-}
-if mock.receiveCount != 2 {
-t.Errorf("receiveCount = %d, want 2", mock.receiveCount)
-}
+	if err != nil {
+		t.Fatalf("expected nil error when message stream ends, got: %v", err)
+	}
+	if mock.receiveCount != 2 {
+		t.Errorf("receiveCount = %d, want 2", mock.receiveCount)
+	}
 }
 
 func TestReceiveCommand_JSONOutputAllFields(t *testing.T) {
-msg := &backends.Message{
-Data:             []byte("full"),
-MessageID:        "m1",
-CorrelationID:    "c1",
-ReplyTo:          "reply-q",
-ContentType:      "text/xml",
-Priority:         8,
-Persistent:       true,
-Properties:       map[string]any{"k": "v"},
-InternalMetadata: map[string]any{"Header": "hdr"},
-}
-mock := &mockQueueBackend{receiveMsg: msg}
-cmd := NewReceiveCommand(mock)
-cmd.SetArgs([]string{"test-queue", "-J"})
+	msg := &backends.Message{
+		Data:             []byte("full"),
+		MessageID:        "m1",
+		CorrelationID:    "c1",
+		ReplyTo:          "reply-q",
+		ContentType:      "text/xml",
+		Priority:         8,
+		Persistent:       true,
+		Properties:       map[string]any{"k": "v"},
+		InternalMetadata: map[string]any{"Header": "hdr"},
+	}
+	mock := &mockQueueBackend{receiveMsg: msg}
+	cmd := NewReceiveCommand(mock)
+	cmd.SetArgs([]string{"test-queue", "-J"})
 
-old := os.Stdout
-r, w, _ := os.Pipe()
-os.Stdout = w
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
 
-err := cmd.Execute()
-w.Close()
-os.Stdout = old
+	err := cmd.Execute()
+	w.Close()
+	os.Stdout = old
 
-if err != nil {
-t.Fatalf("unexpected error: %v", err)
-}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-var buf bytes.Buffer
-buf.ReadFrom(r)
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
 
-var result map[string]any
-if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
-t.Fatalf("failed to parse JSON: %v\noutput: %s", err, buf.String())
-}
-if result["replyTo"] != "reply-q" {
-t.Errorf("replyTo = %v, want %q", result["replyTo"], "reply-q")
-}
-if result["priority"] == nil {
-t.Error("priority should be present")
-}
-if result["persistent"] != true {
-t.Errorf("persistent = %v, want true", result["persistent"])
-}
-if result["metadata"] == nil {
-t.Error("metadata should be present")
-}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
+		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, buf.String())
+	}
+	if result["replyTo"] != "reply-q" {
+		t.Errorf("replyTo = %v, want %q", result["replyTo"], "reply-q")
+	}
+	if result["priority"] == nil {
+		t.Error("priority should be present")
+	}
+	if result["persistent"] != true {
+		t.Errorf("persistent = %v, want true", result["persistent"])
+	}
+	if result["metadata"] == nil {
+		t.Error("metadata should be present")
+	}
 }

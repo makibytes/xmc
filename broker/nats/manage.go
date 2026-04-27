@@ -26,4 +26,3 @@ func ListStreams(connArgs ConnArguments) ([]StreamInfo, error) {
 
 	return streams, nil
 }
-

@@ -140,6 +140,17 @@ func TestSubscribeCommand_TimeoutReturnsNil(t *testing.T) {
 	}
 }
 
+func TestSubscribeCommand_WrappedTimeoutReturnsNil(t *testing.T) {
+	mock := &mockTopicBackend{subscribeErr: fmt.Errorf("wrapped: %w", context.DeadlineExceeded)}
+	cmd := NewSubscribeCommand(mock)
+	cmd.SetArgs([]string{"test-topic"})
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("expected nil error on wrapped timeout, got: %v", err)
+	}
+}
+
 func TestPublishCommand_CountFlag(t *testing.T) {
 	mock := &mockTopicBackend{}
 	cmd := NewPublishCommand(mock)
@@ -359,45 +370,45 @@ func TestSubscribeCommand_NilMessageReturnsError(t *testing.T) {
 }
 
 func TestPublishCommand_LinesMode(t *testing.T) {
-mock := &mockTopicBackend{}
-cmd := NewPublishCommand(mock)
-cmd.SetArgs([]string{"test-topic", "-l"})
+	mock := &mockTopicBackend{}
+	cmd := NewPublishCommand(mock)
+	cmd.SetArgs([]string{"test-topic", "-l"})
 
-r, w, _ := os.Pipe()
-oldStdin := os.Stdin
-os.Stdin = r
-defer func() { os.Stdin = oldStdin }()
+	r, w, _ := os.Pipe()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
 
-w.WriteString("msg one\nmsg two\n")
-w.Close()
+	w.WriteString("msg one\nmsg two\n")
+	w.Close()
 
-err := cmd.Execute()
-if err != nil {
-t.Fatalf("unexpected error: %v", err)
-}
-if mock.publishCount != 2 {
-t.Errorf("publishCount = %d, want 2", mock.publishCount)
-}
-if string(mock.lastPublishOpts.Message) != "msg two" {
-t.Errorf("last message = %q, want %q", mock.lastPublishOpts.Message, "msg two")
-}
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.publishCount != 2 {
+		t.Errorf("publishCount = %d, want 2", mock.publishCount)
+	}
+	if string(mock.lastPublishOpts.Message) != "msg two" {
+		t.Errorf("last message = %q, want %q", mock.lastPublishOpts.Message, "msg two")
+	}
 }
 
 func TestPublishCommand_LinesModeWithError(t *testing.T) {
-mock := &mockTopicBackend{publishErr: fmt.Errorf("broker error")}
-cmd := NewPublishCommand(mock)
-cmd.SetArgs([]string{"test-topic", "-l"})
+	mock := &mockTopicBackend{publishErr: fmt.Errorf("broker error")}
+	cmd := NewPublishCommand(mock)
+	cmd.SetArgs([]string{"test-topic", "-l"})
 
-r, w, _ := os.Pipe()
-oldStdin := os.Stdin
-os.Stdin = r
-defer func() { os.Stdin = oldStdin }()
+	r, w, _ := os.Pipe()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
 
-w.WriteString("line one\n")
-w.Close()
+	w.WriteString("line one\n")
+	w.Close()
 
-err := cmd.Execute()
-if err == nil {
-t.Fatal("expected error, got nil")
-}
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
 }

@@ -1,11 +1,7 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
-	"fmt"
-	"os"
-	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -51,16 +47,9 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend)
 	ttl, _ := cmd.Flags().GetInt64("ttl")
 	lines, _ := cmd.Flags().GetBool("lines")
 
-	// Parse properties
-	properties := make(map[string]any)
-	propertySlice, _ := cmd.Flags().GetStringSlice("property")
-	for _, property := range propertySlice {
-		keyValue := strings.SplitN(property, "=", 2)
-		if len(keyValue) == 2 {
-			properties[keyValue[0]] = keyValue[1]
-		} else {
-			return fmt.Errorf("invalid property: %s", property)
-		}
+	properties, err := parsePropertiesFlag(cmd.Flags())
+	if err != nil {
+		return err
 	}
 
 	// Line-delimited mode
@@ -68,16 +57,9 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend)
 		return publishLines(backend, args[0], key, properties, contenttype, correlationid, messageid, replyto, priority, persistent, ttl)
 	}
 
-	// Get message content (from args or stdin)
-	var data []byte
-	if len(args) > 1 {
-		data = []byte(args[1])
-	} else {
-		var err error
-		data, err = readFromStdin()
-		if err != nil {
-			return err
-		}
+	data, err := readCommandMessage(args)
+	if err != nil {
+		return err
 	}
 
 	// Create publish options
@@ -108,10 +90,7 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend)
 }
 
 func publishLines(backend backends.TopicBackend, topic, key string, properties map[string]any, contenttype, correlationid, messageid, replyto string, priority int, persistent bool, ttl int64) error {
-	scanner := bufio.NewScanner(os.Stdin)
-	sent := 0
-	for scanner.Scan() {
-		line := scanner.Text()
+	sent, err := forEachInputLine(func(line string) error {
 		opts := backends.PublishOptions{
 			Topic:         topic,
 			Message:       []byte(line),
@@ -128,10 +107,10 @@ func publishLines(backend backends.TopicBackend, topic, key string, properties m
 		if err := backend.Publish(context.Background(), opts); err != nil {
 			return err
 		}
-		sent++
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading stdin: %w", err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	log.Verbose("published %d messages", sent)
 	return nil

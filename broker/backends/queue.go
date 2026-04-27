@@ -69,8 +69,8 @@ type ManageableBackend interface {
 
 // QueueInfo contains basic information about a queue
 type QueueInfo struct {
-	Name         string
-	MessageCount int64
+	Name          string
+	MessageCount  int64
 	ConsumerCount int
 }
 

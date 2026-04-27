@@ -4,7 +4,6 @@ package rabbitmq
 
 import (
 	"context"
-	"errors"
 
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/broker/amqpcommon"
@@ -67,7 +66,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return nil, err
 	}
 	if message == nil {
-		return nil, errors.New("no message available")
+		return nil, backends.ErrNoMessageAvailable
 	}
 
 	return amqpcommon.ConvertAMQPToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil

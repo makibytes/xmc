@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
@@ -51,33 +50,11 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 		Durable:   durable,
 	}
 
-	received := 0
-	for received < count {
-		message, err := backend.Subscribe(context.Background(), opts)
-		if err != nil {
-			if err == context.DeadlineExceeded {
-				return nil
-			}
-			return err
-		}
-		if message == nil {
-			if received == 0 {
-				return fmt.Errorf("no message available")
-			}
-			return nil
-		}
-
-		if jsonOutput {
-			if err := displayMessageJSON(message); err != nil {
-				return err
-			}
-		} else {
-			if err := displayMessage(message, opts.Verbosity); err != nil {
-				return err
-			}
-		}
-		received++
-	}
-
-	return nil
+	return consumeMessages(context.Background(), func(ctx context.Context) (*backends.Message, error) {
+		return backend.Subscribe(ctx, opts)
+	}, consumeConfig{
+		count:      count,
+		jsonOutput: jsonOutput,
+		verbosity:  opts.Verbosity,
+	})
 }

@@ -75,12 +75,12 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	msgs, err := sub.Fetch(1, natsclient.MaxWait(timeout))
 	if err != nil {
 		if errors.Is(err, natsclient.ErrTimeout) {
-			return nil, errors.New("no message available")
+			return nil, backends.ErrNoMessageAvailable
 		}
 		return nil, err
 	}
 	if len(msgs) == 0 {
-		return nil, errors.New("no message available")
+		return nil, backends.ErrNoMessageAvailable
 	}
 
 	m := msgs[0]

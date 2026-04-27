@@ -85,7 +85,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		return nil, err
 	}
 	if message == nil {
-		return nil, fmt.Errorf("no message available")
+		return nil, backends.ErrNoMessageAvailable
 	}
 
 	return convertKafkaToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil

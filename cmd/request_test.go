@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -195,6 +196,20 @@ func TestRequestCommand_TimeoutError(t *testing.T) {
 	}
 }
 
+func TestRequestCommand_WrappedTimeoutError(t *testing.T) {
+	mock := &mockQueueBackend{receiveErr: fmt.Errorf("wrapped: %w", context.DeadlineExceeded)}
+	cmd := NewRequestCommand(mock)
+	cmd.SetArgs([]string{"req-queue", "msg"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error on timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "no reply received") {
+		t.Errorf("error = %q, want to contain %q", err.Error(), "no reply received")
+	}
+}
+
 func TestRequestCommand_NilReplyReturnsError(t *testing.T) {
 	mock := &mockQueueBackend{receiveMsg: nil}
 	cmd := NewRequestCommand(mock)
@@ -203,6 +218,20 @@ func TestRequestCommand_NilReplyReturnsError(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for nil reply, got nil")
+	}
+}
+
+func TestRequestCommand_NoReplyErrorReturnsError(t *testing.T) {
+	mock := &mockQueueBackend{receiveErr: backends.ErrNoMessageAvailable}
+	cmd := NewRequestCommand(mock)
+	cmd.SetArgs([]string{"req-queue", "msg"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing reply, got nil")
+	}
+	if !strings.Contains(err.Error(), "no reply received") {
+		t.Fatalf("error = %q, want to contain %q", err.Error(), "no reply received")
 	}
 }
 

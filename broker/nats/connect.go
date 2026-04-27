@@ -5,8 +5,8 @@ package nats
 import (
 	"fmt"
 
-	natsclient "github.com/nats-io/nats.go"
 	"github.com/makibytes/xmc/broker/tlsutil"
+	natsclient "github.com/nats-io/nats.go"
 )
 
 // ConnArguments holds parameters for establishing a NATS connection.
@@ -59,4 +59,3 @@ func ConnectWithJetStream(args ConnArguments) (*natsclient.Conn, natsclient.JetS
 
 	return nc, js, nil
 }
-
