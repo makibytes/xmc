@@ -1,0 +1,96 @@
+# xmc MCP server — in-cluster deployment for Apache Artemis.
+#
+# Deploy it next to the broker so it reaches Artemis over the in-cluster AMQP
+# Service, and expose it as a ClusterIP Service that agents connect to at
+# http://xmc-mcp.<namespace>.svc.cluster.local:8080/mcp
+#
+# Quick start (an agent with cluster credentials can run this directly):
+#   kubectl apply -f deploy/kubernetes/xmc-mcp.yaml
+#
+# Adjust AMC_SERVER to your Artemis Service, and put real credentials in the
+# Secret (or replace it with an existing one / external-secrets entry).
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xmc-mcp-broker
+  labels:
+    app.kubernetes.io/name: xmc-mcp
+type: Opaque
+stringData:
+  # Replace with your Artemis SASL credentials.
+  AMC_USER: "app"
+  AMC_PASSWORD: "change-me"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xmc-mcp
+  labels:
+    app.kubernetes.io/name: xmc-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: xmc-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: xmc-mcp
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: xmc-mcp
+          image: ghcr.io/makibytes/xmc-mcp:artemis
+          args: ["mcp", "--http", ":8080", "--http-path", "/mcp"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Point this at your in-cluster Artemis AMQP Service.
+            - name: AMC_SERVER
+              value: "amqp://artemis.default.svc.cluster.local:5672"
+          envFrom:
+            - secretRef:
+                name: xmc-mcp-broker
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "32Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xmc-mcp
+  labels:
+    app.kubernetes.io/name: xmc-mcp
+spec:
+  selector:
+    app.kubernetes.io/name: xmc-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,0 +1,39 @@
+# Multi-stage build for the xmc MCP server.
+#
+# The broker backend is selected at build time via Go build tags (the same
+# mechanism the CLI uses), so each image is purpose-built for one broker — a
+# clean fit for MCP, where one server == one broker family.
+#
+#   docker build -f Dockerfile.mcp -t ghcr.io/makibytes/xmc-mcp:artemis .
+#   docker run --rm -p 8080:8080 \
+#     -e AMC_SERVER=amqp://artemis:5672 -e AMC_USER=app -e AMC_PASSWORD=secret \
+#     ghcr.io/makibytes/xmc-mcp:artemis
+#
+# Build a different flavor by overriding the args, e.g.:
+#   docker build -f Dockerfile.mcp --build-arg BROKER=rabbitmq --build-arg BINARY=rmc -t xmc-mcp:rabbitmq .
+
+ARG BROKER=artemis
+ARG BINARY=amc
+
+FROM golang:1.26 AS build
+ARG BROKER
+ARG BINARY
+ARG VERSION=dev
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# CGO disabled for a fully static binary that runs on distroless/static.
+# (Note: the IBM MQ flavor requires CGO and a different base image — see
+# scripts/build-imc-in-container.sh — so this Dockerfile targets the pure-Go
+# brokers: artemis, kafka, mqtt, nats, pulsar, rabbitmq.)
+RUN CGO_ENABLED=0 go build -tags "${BROKER}" \
+    -ldflags "-s -w -X 'github.com/makibytes/xmc/cmd.version=${VERSION}'" \
+    -o /out/${BINARY} .
+
+FROM gcr.io/distroless/static:nonroot
+ARG BINARY
+COPY --from=build /out/${BINARY} /usr/local/bin/xmc-broker
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/xmc-broker", "mcp", "--http", ":8080"]
