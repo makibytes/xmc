@@ -1,0 +1,118 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync/atomic"
+	"time"
+)
+
+// streamContext returns a context that is cancelled on interrupt (Ctrl-C) and,
+// when duration > 0, also after that wall-clock duration elapses. It underpins
+// the streaming features: --for bounds a stream by time, while the interrupt
+// handler lets an unbounded stream stop cleanly and print its summary.
+//
+// The returned CancelFunc must be called (typically via defer).
+func streamContext(duration time.Duration) (context.Context, context.CancelFunc) {
+	ctx, stop := interruptContext()
+	if duration <= 0 {
+		return ctx, stop
+	}
+	timed, cancelTimed := context.WithTimeout(ctx, duration)
+	return timed, func() {
+		cancelTimed()
+		stop()
+	}
+}
+
+// parseDurationFlag parses a --for value. An empty string means "no limit".
+func parseDurationFlag(value string) (time.Duration, error) {
+	if value == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --for duration %q: %w", value, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("--for duration must not be negative: %q", value)
+	}
+	return d, nil
+}
+
+// streamStats accumulates message counts and byte totals for the --stats option.
+// Counters are atomic so a background reporter goroutine can read them while the
+// consume/forward loop updates them.
+type streamStats struct {
+	count atomic.Int64
+	bytes atomic.Int64
+	start time.Time
+}
+
+func newStreamStats() *streamStats {
+	return &streamStats{start: time.Now()}
+}
+
+func (s *streamStats) record(payloadLen int) {
+	s.count.Add(1)
+	s.bytes.Add(int64(payloadLen))
+}
+
+// summary returns the one-line totals printed when a stream ends.
+func (s *streamStats) summary() string {
+	elapsed := time.Since(s.start)
+	count := s.count.Load()
+	secs := elapsed.Seconds()
+	rate := 0.0
+	if secs > 0 {
+		rate = float64(count) / secs
+	}
+	return fmt.Sprintf("[stats] done: %d msgs in %s (%.0f msg/s, %s)",
+		count, elapsed.Round(time.Millisecond), rate, humanBytes(s.bytes.Load()))
+}
+
+// startStatsReporter periodically prints throughput to stderr until the returned
+// stop function is called. Reporting goes to stderr so stdout stays a clean
+// message stream (e.g. for piping NDJSON).
+func startStatsReporter(s *streamStats, interval time.Duration) (stop func()) {
+	stopCh := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		lastCount := int64(0)
+		lastTime := time.Now()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case now := <-ticker.C:
+				count := s.count.Load()
+				secs := now.Sub(lastTime).Seconds()
+				rate := 0.0
+				if secs > 0 {
+					rate = float64(count-lastCount) / secs
+				}
+				fmt.Fprintf(os.Stderr, "[stats] %d msgs, %.0f msg/s, %s total\n",
+					count, rate, humanBytes(s.bytes.Load()))
+				lastCount = count
+				lastTime = now
+			}
+		}
+	}()
+	return func() { close(stopCh) }
+}
+
+// humanBytes renders a byte count in a compact human-readable form.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}

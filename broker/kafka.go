@@ -54,6 +54,7 @@ func GetRootCommand() *cobra.Command {
 	})
 	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewPublishCommand, topicFactory))
 	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewSubscribeCommand, topicFactory))
+	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewForwardTopicCommand, topicFactory))
 
 	// Management commands
 	mgmtCmd := &cobra.Command{
@@ -76,7 +77,11 @@ func GetRootCommand() *cobra.Command {
 	})
 	rootCmd.AddCommand(mgmtCmd)
 
-	// Version command
+	// Connectivity check
+	rootCmd.AddCommand(cmd.NewPingCommand(func() (cmd.Closeable, error) {
+		return kafka.NewTopicAdapter(connArgs)
+	}))
+
 	rootCmd.AddCommand(cmd.NewVersionCommand())
 
 	return rootCmd

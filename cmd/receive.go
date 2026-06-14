@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
@@ -19,23 +20,37 @@ func NewReceiveCommand(backend backends.QueueBackend) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Float32P("timeout", "t", 0.1, "Seconds to wait")
+	cmd.Flags().VarP(newDurationValue(100*time.Millisecond, time.Second), "timeout", "t", "Time to wait for a message (e.g. \"100ms\", \"5s\")")
 	cmd.Flags().BoolP("quiet", "q", false, "Quiet about properties, show data only")
 	cmd.Flags().BoolP("wait", "w", false, "Wait (endless) for a message to arrive")
-	cmd.Flags().IntP("count", "n", 1, "Number of messages to receive")
+	cmd.Flags().IntP("count", "n", 1, "Number of messages to receive (0 = drain all available)")
 	cmd.Flags().BoolP("json", "J", false, "Output messages as JSON")
+	cmd.Flags().StringP("format", "F", "", "Output format string, e.g. \"%i %s\\n\" (overrides --json)")
+	cmd.Flags().Bool("ndjson", false, "Output one lossless JSON record per line (overrides --format/--json)")
 	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
+	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
+	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
 
 	return cmd
 }
 
 func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend, acknowledge bool) error {
-	timeout, _ := cmd.Flags().GetFloat32("timeout")
+	timeout := float32(getDuration(cmd, "timeout").Seconds())
 	wait, _ := cmd.Flags().GetBool("wait")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	count, _ := cmd.Flags().GetInt("count")
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	selector, _ := cmd.Flags().GetString("selector")
+	format, _ := cmd.Flags().GetString("format")
+	ndjson, _ := cmd.Flags().GetBool("ndjson")
+	forStr, _ := cmd.Flags().GetString("for")
+	stats, _ := cmd.Flags().GetBool("stats")
+
+	duration, err := parseDurationFlag(forStr)
+	if err != nil {
+		return err
+	}
+	follow := duration > 0 || stats
 
 	opts := backends.ReceiveOptions{
 		Queue:       args[0],
@@ -46,11 +61,14 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 		Selector:    selector,
 	}
 
-	return consumeMessages(context.Background(), func(ctx context.Context) (*backends.Message, error) {
+	return runConsume(func(ctx context.Context) (*backends.Message, error) {
 		return backend.Receive(ctx, opts)
 	}, consumeConfig{
 		count:      count,
 		jsonOutput: jsonOutput,
 		verbosity:  opts.Verbosity,
-	})
+		format:     format,
+		ndjson:     ndjson,
+		follow:     follow,
+	}, duration, stats)
 }

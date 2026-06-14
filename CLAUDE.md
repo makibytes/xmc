@@ -77,9 +77,13 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 Uses `spf13/cobra` for CLI:
 - Root command provides persistent flags (`--server`, `--user`, `--password`, `--verbose`, TLS flags)
 - Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ)
-- Queue commands: `send`, `receive`, `peek`, `request`
-- Topic commands: `publish`, `subscribe`
+- Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`, `forward`
+- Topic commands: `publish`, `subscribe` (Kafka also has topic `forward`)
+- Connectivity: `ping` (all brokers; connects and reports reachability)
 - Management commands: `manage list`, `manage purge`, `manage stats`
+- Output: `-J` JSON, `-F`/`--format` template, or `--ndjson` lossless records, shared across read commands
+- Bulk/load: `-l`/`--lines`, `--ndjson` (input), `-n`/`--count` repeat, `--rate` throttle on send/publish; `-n 0` drains on read commands
+- Streaming: `forward` (continuous relay, optional `-x`/`--command` shell command), `--for <duration>` (time-bounded), `--stats` (live throughput) on read commands and `forward`
 - Connection parameters apply globally across all commands
 
 ### Message Handling
@@ -124,9 +128,19 @@ Each broker uses its native management API:
 
 - `cmd/` - Generic command implementations using backend interfaces
   - `command.go` - `WrapQueueCommand`/`WrapTopicCommand` adapter factories
+  - `flags.go` - shared flag helpers: dual number/duration time flags (`--timeout`, `--interval`, `--ttl`), kebab-case aliases (`--content-type`, etc.)
   - `send.go`, `receive.go`, `peek.go` - Queue commands
   - `request.go` - Request-reply command (send + wait for reply)
+  - `reply.go` - Request-reply responder (consume requests, reply to each reply-to)
+  - `move.go` - Move/redrive messages between queues on the same broker
+  - `forward.go` - Continuous streaming relay between queues/topics (optional `-x`/`--command` shell command)
   - `publish.go`, `subscribe.go` - Topic commands
+  - `format.go` - `-F`/`--format` output templating shared by the read commands
+  - `signal.go` - interrupt-aware context for long-running commands (reply, move, ping)
+  - `stream.go` - streaming infra: timed/interruptible context (`--for`), throughput stats (`--stats`)
+  - `ndjson.go` - lossless NDJSON record schema + `--ndjson` export/import helpers
+  - `rate.go` - `--rate` producer throughput limiter
+  - `ping.go` - broker connectivity health-check command (all brokers)
 - `broker/` - Broker abstraction layer and implementations
   - `amqpcommon/` - Shared AMQP 1.0 code (Artemis + RabbitMQ)
   - `artemis/` - Apache Artemis (AMQP 1.0) + Jolokia management

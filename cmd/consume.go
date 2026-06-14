@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -30,41 +31,96 @@ type consumeConfig struct {
 	count      int
 	jsonOutput bool
 	verbosity  backends.Verbosity
+	format     string // optional kcat-style output template; overrides jsonOutput
+	ndjson     bool   // emit one lossless JSON record per line; overrides format/json
+	follow     bool   // streaming: keep polling across empty reads until ctx ends
+	stats      *streamStats
 }
 
 func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeConfig) error {
-	for received := 0; received < cfg.count; received++ {
+	// count <= 0 means "drain": keep consuming until the source is exhausted
+	// (or, with --wait, until interrupted). This is consistent with the reply
+	// and move commands, where 0 also means "no fixed limit".
+	//
+	// In follow mode (streaming: --for or --stats), empty reads do not end the
+	// loop; it keeps polling until the context is cancelled or its deadline
+	// passes, which is what makes time-bounded and continuous streaming work.
+	unbounded := cfg.count <= 0
+	received := 0
+	for unbounded || received < cfg.count {
+		if cfg.follow && ctx.Err() != nil {
+			return nil
+		}
+
 		message, err := receive(ctx)
 		switch {
-		case errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, context.Canceled):
 			return nil
-		case errors.Is(err, backends.ErrNoMessageAvailable):
-			if received == 0 {
+		case errors.Is(err, context.DeadlineExceeded):
+			if cfg.follow {
+				continue
+			}
+			return nil
+		case errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
+			if cfg.follow {
+				continue
+			}
+			if received == 0 && !unbounded {
 				return backends.ErrNoMessageAvailable
 			}
 			return nil
 		case err != nil:
 			return err
-		case message == nil:
-			if received == 0 {
-				return backends.ErrNoMessageAvailable
-			}
-			return nil
 		}
 
 		if err := outputMessage(message, cfg); err != nil {
 			return err
 		}
+		if cfg.stats != nil {
+			cfg.stats.record(len(message.Data))
+		}
+		received++
 	}
 
 	return nil
 }
 
-func outputMessage(message *backends.Message, cfg consumeConfig) error {
-	if cfg.jsonOutput {
-		return displayMessageJSON(message)
+// runConsume wraps consumeMessages with the streaming context (--for) and the
+// optional live throughput reporter (--stats), printing a final summary when the
+// stream ends. When neither streaming option is active it behaves exactly like a
+// plain consumeMessages call on a background context.
+func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool) error {
+	ctx := context.Background()
+	cancel := func() {}
+	if cfg.follow {
+		ctx, cancel = streamContext(duration)
 	}
-	return displayMessage(message, cfg.verbosity)
+	defer cancel()
+
+	if stats {
+		st := newStreamStats()
+		cfg.stats = st
+		stop := startStatsReporter(st, time.Second)
+		defer func() {
+			stop()
+			fmt.Fprintln(os.Stderr, st.summary())
+		}()
+	}
+
+	return consumeMessages(ctx, receive, cfg)
+}
+
+func outputMessage(message *backends.Message, cfg consumeConfig) error {
+	switch {
+	case cfg.ndjson:
+		return displayMessageNDJSON(message)
+	case cfg.format != "":
+		return displayMessageFormat(message, cfg.format)
+	case cfg.jsonOutput:
+		return displayMessageJSON(message)
+	default:
+		return displayMessage(message, cfg.verbosity)
+	}
 }
 
 // commandVerbosity derives Verbosity from the common --quiet flag and

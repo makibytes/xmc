@@ -56,6 +56,9 @@ func GetRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReceiveCommand, queueFactory))
 	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewPeekCommand, queueFactory))
 	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewRequestCommand, queueFactory))
+	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReplyCommand, queueFactory))
+	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewMoveCommand, queueFactory))
+	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewForwardCommand, queueFactory))
 
 	// Topic commands
 	topicFactory := cmd.TopicAdapterFactory(func() (backends.TopicBackend, error) {
@@ -67,7 +70,11 @@ func GetRootCommand() *cobra.Command {
 	// Management commands
 	rootCmd.AddCommand(newManageCommand(connArgs))
 
-	// Version command
+	// Connectivity check
+	rootCmd.AddCommand(cmd.NewPingCommand(func() (cmd.Closeable, error) {
+		return artemis.NewQueueAdapter(connArgs)
+	}))
+
 	rootCmd.AddCommand(cmd.NewVersionCommand())
 
 	return rootCmd

@@ -7,6 +7,16 @@
 | Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes |
 | Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes |
 | Request-reply | Yes | Yes | - | Yes | - | Yes | Yes |
+| Reply / responder | Yes | Yes | - | Yes | - | Yes | Yes |
+| Move / redrive | Yes | Yes | - | Yes | Yes | Yes | Yes |
+| Custom output format (`-F`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| NDJSON export/import (`--ndjson`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Drain all (`-n 0`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Producer rate limit (`--rate`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Connectivity check (`ping`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Streaming relay (`forward`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Time-bounded streaming (`--for`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Live throughput (`--stats`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes |
 | Message selectors | Yes | Yes | - | Yes | - | - | - |
 | Durable subscriptions | Yes | Yes | - | - | - | - | Yes |
@@ -17,6 +27,24 @@
 | Management: list | Yes | Yes | Yes | - | - | Yes | Yes |
 | Management: purge | Yes | Yes | - | - | - | - | - |
 | Management: stats | Yes | Yes | - | - | - | - | - |
+
+The `reply`, `move` and `-F`/`--format` features live in the generic command layer
+(`cmd/`) on top of the queue/topic interfaces, so they are available for every broker
+that exposes the underlying operation. `reply` and `move` require queue support (hence
+unavailable for Kafka), and end-to-end `reply` additionally depends on the broker
+conveying a reply-to address (use `--replyto` as a fallback where it does not).
+`-F`/`--format` is purely client-side rendering and works for every broker's read commands.
+
+Likewise, `--ndjson` (lossless export/import), `-n 0` (drain), `--rate` (producer rate
+limiting) and `ping` (connectivity check) are implemented generically and work for every
+broker. `--ndjson` and `--rate` apply wherever the relevant read or write command exists;
+`ping` connects via the broker's queue adapter (or its topic adapter for Kafka).
+
+The streaming features are also generic. `forward` relays continuously between two
+destinations on the same broker (queue-to-queue for queue brokers, topic-to-topic for
+Kafka), with an optional `-x`/`--command` shell command. `--for` (time-bounded streaming) and
+`--stats` (live throughput to stderr) apply to every read command and to `forward`, so
+any broker can be sampled for a fixed window or monitored for throughput while streaming.
 
 ## Traditional Message Brokers
 

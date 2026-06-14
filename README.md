@@ -71,21 +71,30 @@ Send a message to a queue:
 xmc send <queue> <message>
 xmc send <queue> < message.dat           # read from stdin
 echo -e "line1\nline2" | xmc send -l <queue>  # send each line as separate message
+xmc send --ndjson <queue> < backup.ndjson     # restore messages with full metadata
+xmc send -n 100000 --rate 5000 <queue> hi     # load test: 100k messages at 5000/s
 ```
 
 Flags:
 
 ```
-  -T, --contenttype string     MIME type (default "text/plain")
-  -C, --correlationid string   correlation ID
-  -I, --messageid string       message ID
+  -T, --content-type string    MIME type (default "text/plain")
+  -C, --correlation-id string  correlation ID
+  -I, --message-id string      message ID
   -Y, --priority int           priority 0-9 (default 4)
   -d, --persistent             make message persistent
-  -R, --replyto string         reply-to queue
+  -R, --reply-to string        reply-to queue
   -P, --property strings       properties in key=value format
   -n, --count int              send the message N times (default 1)
-  -E, --ttl int                time-to-live in milliseconds (0 = no expiry)
+  -E, --ttl duration           time-to-live, e.g. "5s" (0 = no expiry)
   -l, --lines                  read stdin line by line, send each as separate message
+      --ndjson                 read NDJSON records from stdin, send each (lossless import)
+      --rate float             throttle to at most N messages/second (0 = unlimited)
+
+Legacy concatenated names (`--contenttype`, `--correlationid`, `--messageid`,
+`--replyto`) are still accepted as aliases. Time flags such as `--ttl` accept a
+human-readable duration (`100ms`, `5s`, `1m`) or a plain number (milliseconds for
+`--ttl`, seconds for `--timeout`/`--interval`).
 ```
 
 #### receive
@@ -97,18 +106,23 @@ xmc receive <queue>
 xmc receive -w <queue>             # wait for a message
 xmc receive -n 10 <queue>          # receive 10 messages
 xmc receive -J <queue>             # output as JSON
+xmc receive -n 0 <queue>           # drain all currently available messages
 xmc receive -S "color='red'" <queue>  # filter by selector
 ```
 
 Flags:
 
 ```
-  -t, --timeout float32    seconds to wait (default 0.1)
+  -t, --timeout duration   time to wait, e.g. "100ms" (default 100ms)
   -w, --wait               wait endlessly for a message
   -q, --quiet              show data only, suppress properties
-  -n, --count int          number of messages to receive (default 1)
+  -n, --count int          number of messages to receive (default 1, 0 = drain all)
   -J, --json               output as JSON
+  -F, --format string      render each message with a kcat-style template
+      --ndjson             output one lossless JSON record per line (export)
   -S, --selector string    JMS-style message selector expression
+      --for duration       stream for a bounded time then stop (e.g. "30s", "5m")
+      --stats              print live throughput statistics to stderr while streaming
 ```
 
 #### peek
@@ -135,13 +149,100 @@ xmc request -J <queue> <message>   # output reply as JSON
 Flags:
 
 ```
-  -R, --replyto string     reply queue (default "xmc.reply")
-  -t, --timeout float32    seconds to wait for reply (default 30)
+  -R, --reply-to string    reply queue (default "xmc.reply")
+  -t, --timeout duration   time to wait for the reply, e.g. "30s" (default 30s)
   -J, --json               output reply as JSON
   -q, --quiet              show data only
 ```
 
 Plus all `send` flags for the outgoing message.
+
+#### reply
+
+Reply to requests on a queue (the responder side of request-reply):
+
+```sh
+xmc reply <queue> <response>            # reply with a fixed payload
+xmc reply <queue> --echo                # echo each request back
+xmc reply <queue> --command "jq .data"  # pipe each request through a command
+xmc reply -n 1 <queue> "pong"           # serve a single request, then exit
+```
+
+Flags:
+
+```
+  -e, --echo                 echo the request payload back as the response
+  -x, --command string       run a shell command per request; its stdout is the reply
+  -R, --reply-to string      fallback reply destination if a request carries no reply-to
+  -T, --content-type string  MIME type of the response (default "text/plain")
+  -P, --property strings     response properties in key=value format
+  -n, --count int            number of requests to serve (0 = serve until interrupted)
+  -t, --timeout duration     time to wait per request, e.g. "5s" (0 = indefinitely)
+  -S, --selector string      only handle requests matching the selector
+  -q, --quiet                suppress per-request logging
+```
+
+The reply's correlation ID is taken from the request's correlation ID, falling back
+to its message ID, so the original `request` caller can match the response. The
+responder runs until interrupted (Ctrl-C) unless `--count` is given.
+
+#### move
+
+Move messages from one queue to another on the same broker — typically to redrive
+a dead-letter queue back onto its processing queue after fixing the cause of failure:
+
+```sh
+xmc move <source> <destination>          # move all available messages
+xmc move -n 10 <source> <destination>    # move at most 10
+xmc move -S "attempts > 3" dlq orders     # move only matching messages
+```
+
+Flags:
+
+```
+  -n, --count int          maximum messages to move (0 = all available)
+  -S, --selector string    only move messages matching the selector
+  -t, --timeout duration   time to wait for the next source message (default 100ms)
+  -q, --quiet              print only the final summary
+```
+
+The move is destructive: each message is consumed from the source before being sent
+to the destination. Message metadata (correlation ID, content type, reply-to,
+priority, persistence, and application properties) is preserved; the destination
+assigns a fresh message ID. If a send fails, the in-flight message is written to
+stdout so it can be recovered, and the command stops.
+
+#### forward
+
+Continuously relay messages from one queue to another on the same broker. Unlike
+`move`, which drains what is present and stops, `forward` keeps streaming as new
+messages arrive — useful for live bridging, mirroring traffic while debugging, or
+continuously redriving a dead-letter queue:
+
+```sh
+xmc forward <source> <destination>             # relay until interrupted (Ctrl-C)
+xmc forward --for 5m orders orders-backup       # relay for five minutes
+xmc forward -n 100 orders orders-backup         # relay 100 messages then stop
+xmc forward -x "jq -c ." raw normalized         # transform each message in flight
+xmc forward --stats orders mirror               # show live throughput on stderr
+```
+
+Flags:
+
+```
+  -x, --command string     pipe each message through a shell command; its stdout is forwarded
+  -n, --count int          maximum messages to forward (0 = until interrupted)
+  -t, --timeout duration   time to wait for the next source message per poll (default 100ms)
+      --for duration       relay for a bounded time then stop (e.g. "30s", "5m")
+      --stats              print live throughput statistics to stderr
+  -S, --selector string    only forward messages matching the selector
+  -q, --quiet              print only the final summary
+```
+
+Like `move`, the relay is destructive on the source and preserves message
+metadata (the destination assigns a fresh message ID). If a transform or send
+fails, the consumed message is written to stdout so it can be recovered. On
+topic-only brokers (Kafka) `forward` relays between topics instead of queues.
 
 ### Topic Commands
 
@@ -224,6 +325,122 @@ Use `-J` to get structured JSON output from receive, peek, subscribe, and reques
 $ xmc receive -J test-queue
 {"data":"hello world","messageId":"ID:123","properties":{"env":"prod"}}
 ```
+
+### Custom Output Format
+
+Use `-F`/`--format` with `receive`, `peek`, `subscribe`, and `request` to render
+each message through a template (this overrides `-J`):
+
+```sh
+xmc receive -F "%i %s\n" orders
+xmc subscribe -F "tenant=%p{tenant} body=%s\n" events
+```
+
+Format tokens:
+
+```
+  %s        message payload (data)
+  %S        payload length in bytes
+  %i        message ID
+  %c        correlation ID
+  %r        reply-to
+  %y        content type
+  %P        priority
+  %u        persistent (true/false)
+  %h        all properties as sorted key=value pairs
+  %p{key}   value of application property "key"
+  %m{key}   value of internal metadata "key"
+  %%        a literal percent sign
+```
+
+The escapes `\n`, `\t`, `\r`, and `\\` are interpreted in the template, and unknown
+tokens are emitted verbatim. Unlike the default output, no trailing newline is added,
+so include `\n` where you want one.
+
+### Export and Import (NDJSON)
+
+`--ndjson` provides a lossless, round-trippable representation of messages as
+newline-delimited JSON — one record per line. Unlike `-J` (a human-readable
+dump), NDJSON is designed to be re-imported: binary payloads are base64-encoded
+and all metadata (message ID, correlation ID, reply-to, content type, priority,
+persistence, and properties) is preserved.
+
+Export by consuming with `--ndjson`; import by producing with `--ndjson`:
+
+```sh
+# Back up an entire queue to a file (drain everything)
+xmc receive -n 0 --ndjson orders > orders.ndjson
+
+# Restore it (or load it onto a different broker / queue)
+xmc send --ndjson orders < orders.ndjson
+
+# Topics work the same way
+xmc subscribe -n 0 --ndjson events > events.ndjson
+xmc publish --ndjson events < events.ndjson
+```
+
+This makes queue backup/restore, migration between brokers, and offline
+inspection or transformation (e.g. with `jq`) straightforward. On the consuming
+side `--ndjson` overrides `-F` and `-J`.
+
+### Rate Limiting
+
+`--rate` caps producer throughput (messages per second) on `send` and `publish`.
+Combined with `-n` (repeat) or `-l`/`--ndjson` (bulk input), it turns xmc into a
+simple, controllable load generator:
+
+```sh
+xmc send -n 1000000 --rate 10000 work "payload"   # 1M messages at 10k/s
+xmc send --ndjson --rate 500 work < big.ndjson      # replay a capture at 500/s
+```
+
+A rate of 0 (the default) means no limit.
+
+### Connectivity (ping)
+
+Check that the broker is reachable, including authentication and TLS handshake:
+
+```sh
+xmc ping                  # single connection attempt
+xmc ping -n 5             # five attempts, one per second
+xmc ping -n 0 -i 2        # keep pinging every 2s until interrupted
+```
+
+```
+  -n, --count int          number of attempts (0 = until interrupted, default 1)
+  -i, --interval duration  time between attempts, e.g. "500ms" (default 1s)
+```
+
+`ping` exits non-zero if any attempt fails, which makes it convenient for
+readiness checks and CI pipelines. It is available for every broker.
+
+### Streaming
+
+`xmc` can run as a continuous stream processor rather than a one-shot client.
+Three composable options turn the read commands (`receive`, `peek`, `subscribe`)
+and `forward` into streaming tools:
+
+- **`forward`** — a continuous relay that consumes from a source and produces to
+  a destination as messages arrive, optionally transforming each one with `-x`.
+- **`--for <duration>`** — bound a stream to a wall-clock window, then stop
+  cleanly (e.g. capture 30 seconds of a topic). Accepts Go duration strings such
+  as `30s`, `5m`, `1h30m`.
+- **`--stats`** — print live throughput (messages, msgs/sec, byte total) to
+  stderr while streaming, with a final summary when the stream ends. Because the
+  report goes to stderr, stdout stays a clean message stream you can pipe.
+
+They combine naturally:
+
+```sh
+xmc subscribe -n 0 --for 30s --stats events       # sample a topic for 30s with metrics
+xmc subscribe -n 0 --ndjson events > capture.ndjson # capture a live stream to a file
+xmc forward --for 1h --stats orders mirror          # mirror a queue for an hour with metrics
+```
+
+A streaming read uses the per-poll `--timeout` to pace itself and stops at the
+next message boundary when the window elapses or on Ctrl-C, so `--stats` totals
+are always printed. Combined with `-n` (count) you get "whichever comes first":
+`xmc receive -n 1000 --for 10s q` stops at 1000 messages or 10 seconds.
 
 ### Version
 

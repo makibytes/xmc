@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"os"
+	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -19,42 +21,56 @@ func NewPublishCommand(backend backends.TopicBackend) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringP("contenttype", "T", "text/plain", "MIME type of message data")
-	cmd.Flags().StringP("correlationid", "C", "", "Correlation ID for request/response")
+	cmd.Flags().StringP("content-type", "T", "text/plain", "MIME type of message data")
+	cmd.Flags().StringP("correlation-id", "C", "", "Correlation ID for request/response")
 	cmd.Flags().StringP("key", "K", "", "Message key for partitioning")
-	cmd.Flags().StringP("messageid", "I", "", "Message ID")
+	cmd.Flags().StringP("message-id", "I", "", "Message ID")
 	cmd.Flags().IntP("priority", "Y", 4, "Priority of the message (0-9)")
 	cmd.Flags().BoolP("persistent", "d", false, "Make message persistent")
-	cmd.Flags().StringP("replyto", "R", "", "Reply to address for request/response")
+	cmd.Flags().StringP("reply-to", "R", "", "Reply to address for request/response")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Message properties in key=value format")
 	cmd.Flags().IntP("count", "n", 1, "Number of times to publish the message")
-	cmd.Flags().Int64P("ttl", "E", 0, "Message time-to-live in milliseconds (0 = no expiry)")
+	cmd.Flags().VarP(newDurationValue(0, time.Millisecond), "ttl", "E", "Message time-to-live (e.g. \"5s\", \"1m\"; 0 = no expiry)")
 	cmd.Flags().BoolP("lines", "l", false, "Read stdin line by line, publish each line as a separate message")
+	cmd.Flags().Bool("ndjson", false, "Read newline-delimited JSON records from stdin and publish each (lossless import)")
+	cmd.Flags().Float64("rate", 0, "Throttle to at most this many messages per second (0 = unlimited)")
+	// Accept legacy concatenated spellings (--contenttype) as aliases of the
+	// kebab-case names (--content-type).
+	cmd.Flags().SetNormalizeFunc(aliasNormalize)
 
 	return cmd
 }
 
 func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend) error {
 	// Parse command flags
-	contenttype, _ := cmd.Flags().GetString("contenttype")
-	correlationid, _ := cmd.Flags().GetString("correlationid")
+	contenttype, _ := cmd.Flags().GetString("content-type")
+	correlationid, _ := cmd.Flags().GetString("correlation-id")
 	key, _ := cmd.Flags().GetString("key")
-	messageid, _ := cmd.Flags().GetString("messageid")
+	messageid, _ := cmd.Flags().GetString("message-id")
 	priority, _ := cmd.Flags().GetInt("priority")
 	persistent, _ := cmd.Flags().GetBool("persistent")
-	replyto, _ := cmd.Flags().GetString("replyto")
+	replyto, _ := cmd.Flags().GetString("reply-to")
 	count, _ := cmd.Flags().GetInt("count")
-	ttl, _ := cmd.Flags().GetInt64("ttl")
+	ttl := getDuration(cmd, "ttl").Milliseconds()
 	lines, _ := cmd.Flags().GetBool("lines")
+	ndjson, _ := cmd.Flags().GetBool("ndjson")
+	rate, _ := cmd.Flags().GetFloat64("rate")
 
 	properties, err := parsePropertiesFlag(cmd.Flags())
 	if err != nil {
 		return err
 	}
 
+	limiter := newRateLimiter(rate)
+
+	// NDJSON import: each stdin record carries its own metadata.
+	if ndjson {
+		return publishNDJSON(backend, args[0], key, limiter)
+	}
+
 	// Line-delimited mode
 	if lines {
-		return publishLines(backend, args[0], key, properties, contenttype, correlationid, messageid, replyto, priority, persistent, ttl)
+		return publishLines(backend, args[0], key, properties, contenttype, correlationid, messageid, replyto, priority, persistent, ttl, limiter)
 	}
 
 	data, err := readCommandMessage(args)
@@ -78,6 +94,7 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend)
 	}
 
 	for i := 0; i < count; i++ {
+		limiter.wait()
 		if err := backend.Publish(context.Background(), opts); err != nil {
 			return err
 		}
@@ -89,7 +106,7 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend)
 	return nil
 }
 
-func publishLines(backend backends.TopicBackend, topic, key string, properties map[string]any, contenttype, correlationid, messageid, replyto string, priority int, persistent bool, ttl int64) error {
+func publishLines(backend backends.TopicBackend, topic, key string, properties map[string]any, contenttype, correlationid, messageid, replyto string, priority int, persistent bool, ttl int64, limiter *rateLimiter) error {
 	sent, err := forEachInputLine(func(line string) error {
 		opts := backends.PublishOptions{
 			Topic:         topic,
@@ -104,10 +121,46 @@ func publishLines(backend backends.TopicBackend, topic, key string, properties m
 			Persistent:    persistent,
 			TTL:           ttl,
 		}
+		limiter.wait()
 		if err := backend.Publish(context.Background(), opts); err != nil {
 			return err
 		}
 		return nil
+	})
+	if err != nil {
+		return err
+	}
+	log.Verbose("published %d messages", sent)
+	return nil
+}
+
+// publishNDJSON reads NDJSON message records from stdin and publishes each one,
+// restoring the metadata stored in the record (including the partition key). It
+// is the import counterpart to `subscribe --ndjson`.
+func publishNDJSON(backend backends.TopicBackend, topic, key string, limiter *rateLimiter) error {
+	sent, err := forEachRecord(os.Stdin, func(rec messageRecord) error {
+		data, err := rec.payload()
+		if err != nil {
+			return err
+		}
+		// A key on the record takes precedence; otherwise fall back to --key.
+		recordKey := rec.Key
+		if recordKey == "" {
+			recordKey = key
+		}
+		limiter.wait()
+		return backend.Publish(context.Background(), backends.PublishOptions{
+			Topic:         topic,
+			Message:       data,
+			Key:           recordKey,
+			Properties:    rec.Properties,
+			MessageID:     rec.MessageID,
+			CorrelationID: rec.CorrelationID,
+			ReplyTo:       rec.ReplyTo,
+			ContentType:   rec.ContentType,
+			Priority:      rec.Priority,
+			Persistent:    rec.Persistent,
+		})
 	})
 	if err != nil {
 		return err
