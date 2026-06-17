@@ -41,14 +41,10 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 		durability = amqp.DurabilityNone
 	}
 
-	// Determine target address based on queue vs exchange
 	targetAddress := args.Queue
 	if args.Exchange != "" {
-		// For RabbitMQ native AMQP 1.0: /exchange/{exchange}/{routing-key} publishes
-		// to the exchange with the given routing key.
-		routingKey := args.RoutingKey
-		targetAddress = "/exchange/" + args.Exchange + "/" + routingKey
-		log.Verbose("📤 sending to exchange %s (routing key: %s)...", args.Exchange, routingKey)
+		targetAddress = "/exchanges/" + args.Exchange + "/" + args.RoutingKey
+		log.Verbose("📤 sending to exchange %s (routing key: %s)...", args.Exchange, args.RoutingKey)
 	} else {
 		log.Verbose("📤 sending to queue %s...", args.Queue)
 	}

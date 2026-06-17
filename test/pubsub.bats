@@ -14,7 +14,7 @@ export xmc="$XMC_BINARY -u artemis -p artemis"
 }
 
 @test "subscribe with timeout exits cleanly" {
-    run $xmc subscribe test-topic -t 1
-    # exit 0 (message received from previous publish) or exit 0 (timeout) are both acceptable
+    run $xmc subscribe test-topic -t 1 -w=false
+    # exit 0 (message received from previous publish) or exit 1 (no message) are both acceptable
     [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 }

@@ -20,8 +20,9 @@ import (
 
 // BrokerContainer holds a running test broker container.
 type BrokerContainer struct {
-	Container testcontainers.Container
-	URL       string
+	Container     testcontainers.Container
+	URL           string
+	ManagementURL string // HTTP management URL (RabbitMQ only)
 }
 
 func (b *BrokerContainer) Terminate(ctx context.Context) {
@@ -80,7 +81,13 @@ func StartRabbitMQ(ctx context.Context) (*BrokerContainer, error) {
 		return nil, err
 	}
 
-	return &BrokerContainer{Container: c, URL: url}, nil
+	mgmtURL, err := c.HttpURL(ctx)
+	if err != nil {
+		c.Terminate(ctx) //nolint:errcheck
+		return nil, err
+	}
+
+	return &BrokerContainer{Container: c, URL: url, ManagementURL: mgmtURL}, nil
 }
 
 // StartKafka starts a Redpanda container (Kafka-compatible API, arm64 native)
@@ -210,7 +217,12 @@ func StartPulsar(ctx context.Context) (*BrokerContainer, error) {
 	req := testcontainers.ContainerRequest{
 		Image:        "apachepulsar/pulsar:3.3.0",
 		ExposedPorts: []string{"6650/tcp", "8080/tcp"},
-		Cmd:          []string{"/bin/bash", "-c", "bin/pulsar standalone --no-functions-worker -nss"},
+		Env: map[string]string{
+			"PULSAR_STANDALONE_USE_ZOOKEEPER":            "1",
+			"PULSAR_PREFIX_allowAutoTopicCreationType":   "non-partitioned",
+			"PULSAR_PREFIX_allowAutoSubscriptionCreation": "true",
+		},
+		Cmd: []string{"/bin/bash", "-c", "bin/pulsar standalone --no-functions-worker -nss"},
 		WaitingFor: wait.ForHTTP("/admin/v2/clusters").
 			WithPort("8080/tcp").
 			WithStartupTimeout(120 * time.Second).

@@ -4,11 +4,21 @@ package rabbitmq
 
 import (
 	"context"
+	"strings"
 
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/broker/amqpcommon"
 	"github.com/makibytes/xmc/broker/backends"
 )
+
+// queueAddress returns the AMQP 1.0 v2 address for a queue on RabbitMQ 4.x.
+// Names already using an absolute path prefix are returned as-is.
+func queueAddress(name string) string {
+	if strings.HasPrefix(name, "/") {
+		return name
+	}
+	return "/queues/" + name
+}
 
 // QueueAdapter adapts RabbitMQ to the QueueBackend interface using direct queue routing
 type QueueAdapter struct {
@@ -34,7 +44,7 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 // Send implements backends.QueueBackend
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	args := SendArguments{
-		Queue:         opts.Queue,
+		Queue:         queueAddress(opts.Queue),
 		Message:       opts.Message,
 		Properties:    opts.Properties,
 		MessageID:     opts.MessageID,
@@ -52,7 +62,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 // Receive implements backends.QueueBackend
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Queue:       opts.Queue,
+		Queue:       queueAddress(opts.Queue),
 		Acknowledge: opts.Acknowledge,
 		Durable:     false,
 		Number:      1,

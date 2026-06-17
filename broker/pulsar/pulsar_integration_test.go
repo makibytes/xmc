@@ -223,7 +223,7 @@ func TestPulsar_TopicPublishSubscribe(t *testing.T) {
 	}()
 
 	// Give subscriber time to attach before publishing
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	if err := pubAdapter.Publish(ctx, backends.PublishOptions{Topic: topic, Message: payload}); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -262,7 +262,7 @@ func TestPulsar_TopicPublishSubscribe_Key(t *testing.T) {
 		ch <- result{msg, err}
 	}()
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	if err := pubAdapter.Publish(ctx, backends.PublishOptions{
 		Topic:   topic,
@@ -313,7 +313,7 @@ func TestPulsar_TopicSubscribe_GroupID(t *testing.T) {
 		ch <- result{msg, err}
 	}()
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	if err := pubAdapter.Publish(ctx, backends.PublishOptions{Topic: topic, Message: payload}); err != nil {
 		t.Fatalf("Publish: %v", err)

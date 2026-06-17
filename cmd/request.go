@@ -67,19 +67,14 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 		return err
 	}
 
-	// Reply queue is required for request-reply pattern
-	if replyto == "" {
-		replyto = "xmc.reply"
-	}
+	verbosity := commandVerbosity(quiet)
 
-	// Set correlation ID if not provided
-	if correlationid == "" && messageid != "" {
-		correlationid = messageid
-	}
-
-	// Send the request
-	sendOpts := backends.SendOptions{
-		Queue:         args[0],
+	// Delegate to the request/reply capability: it auto-generates a correlation
+	// id when absent, defaults the reply destination, and (on brokers that
+	// implement RequestReplyBackend natively, e.g. Artemis) matches the reply by
+	// correlation id server-side.
+	requestOpts := backends.RequestOptions{
+		Address:       args[0],
 		Message:       data,
 		Properties:    properties,
 		MessageID:     messageid,
@@ -88,31 +83,22 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 		ContentType:   contenttype,
 		Priority:      priority,
 		Persistent:    persistent,
+		Timeout:       timeout,
 	}
 
-	log.Verbose("sending request to %s, expecting reply on %s...", args[0], replyto)
-	if err := backend.Send(context.Background(), sendOpts); err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-
-	receiveOpts := backends.ReceiveOptions{
-		Queue:       replyto,
-		Timeout:     timeout,
-		Wait:        false,
-		Acknowledge: true,
-		Verbosity:   commandVerbosity(quiet),
-	}
-
-	log.Verbose("waiting for reply on %s (timeout: %.1fs)...", replyto, timeout)
-	message, err := backend.Receive(context.Background(), receiveOpts)
+	log.Verbose("sending request to %s (timeout: %.1fs)...", args[0], timeout)
+	message, err := backends.Request(context.Background(), backend, requestOpts)
 	if err != nil {
+		if sendErr, ok := errors.AsType[*backends.RequestSendError](err); ok {
+			return fmt.Errorf("failed to send request: %w", sendErr.Err)
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("no reply received within %.1f seconds", timeout)
 		}
 		if errors.Is(err, backends.ErrNoMessageAvailable) {
 			return fmt.Errorf("no reply received")
 		}
-		return fmt.Errorf("failed to receive reply: %w", err)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	if message == nil {
 		return fmt.Errorf("no reply received")
@@ -124,5 +110,5 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 	if jsonOutput {
 		return displayMessageJSON(message)
 	}
-	return displayMessage(message, receiveOpts.Verbosity)
+	return displayMessage(message, verbosity)
 }

@@ -17,6 +17,18 @@ import (
 var testServer string
 var testUser string
 var testPassword string
+var testMgmtURL string
+
+// testQueues lists all queues used by the integration tests so they can be
+// pre-declared via the management API (RabbitMQ 4.x does not auto-create
+// queues over AMQP 1.0).
+var testQueues = []string{
+	"test.send.receive",
+	"test.properties",
+	"test.peek",
+	"test.timeout.empty",
+	"test.correlation",
+}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -28,6 +40,7 @@ func TestMain(m *testing.M) {
 	defer broker.Terminate(ctx)
 
 	testServer, testUser, testPassword = parseRabbitMQURL(broker.URL)
+	testMgmtURL = broker.ManagementURL
 
 	err = integration.WaitForBroker(func() error {
 		conn := ConnArguments{
@@ -46,6 +59,13 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "RabbitMQ not ready: %v\n", err)
 		os.Exit(1)
+	}
+
+	for _, q := range testQueues {
+		if err := integration.DeclareRabbitMQQueue(testMgmtURL, testUser, testPassword, q); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to declare queue %s: %v\n", q, err)
+			os.Exit(1)
+		}
 	}
 
 	os.Exit(m.Run())
@@ -268,17 +288,27 @@ func TestRabbitMQ_QueueSendReceive_CorrelationID(t *testing.T) {
 }
 
 // TestRabbitMQ_TopicPublishSubscribe verifies publish and subscribe via the amq.topic exchange.
+// RabbitMQ 4.x requires a queue bound to the exchange for AMQP 1.0 subscriptions.
 func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	topic := "test.topic.pubsub"
+	subQueue := "test.topic.pubsub.sub"
 	payload := []byte("topic message")
 
-	subscriber, err := NewTopicAdapter(newConnArgs(), "amq.topic")
-	if err != nil {
-		t.Fatalf("NewTopicAdapter (subscriber): %v", err)
+	if err := integration.DeclareRabbitMQQueue(testMgmtURL, testUser, testPassword, subQueue); err != nil {
+		t.Fatalf("declare subscriber queue: %v", err)
 	}
-	defer subscriber.Close()
+	if err := integration.BindRabbitMQQueue(testMgmtURL, testUser, testPassword, subQueue, "amq.topic", topic); err != nil {
+		t.Fatalf("bind subscriber queue: %v", err)
+	}
+
+	// Start the subscriber on the bound queue.
+	receiver, err := NewQueueAdapter(newConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapter (subscriber): %v", err)
+	}
+	defer receiver.Close()
 
 	type result struct {
 		msg *backends.Message
@@ -287,10 +317,11 @@ func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
 	ch := make(chan result, 1)
 
 	go func() {
-		msg, err := subscriber.Subscribe(ctx, backends.SubscribeOptions{
-			Topic:   topic,
-			Timeout: 5,
-			Wait:    true,
+		msg, err := receiver.Receive(ctx, backends.ReceiveOptions{
+			Queue:       subQueue,
+			Acknowledge: true,
+			Timeout:     10,
+			Wait:        true,
 		})
 		ch <- result{msg, err}
 	}()

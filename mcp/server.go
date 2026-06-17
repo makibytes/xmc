@@ -285,25 +285,13 @@ func (s *Server) ServeStdio(ctx context.Context) error {
 	}
 }
 
-// readLine reads a single message terminated by '\n'. Messages can be large
-// (base64 payloads), so it accumulates fragments rather than relying on a fixed
-// scanner buffer.
+// readLine reads a single newline-terminated message. bufio.Reader.ReadBytes
+// grows its result as needed, so large messages (e.g. base64 payloads) are
+// returned whole; the trailing newline is stripped. A non-nil error (including
+// io.EOF for a final unterminated line) is returned alongside any bytes read.
 func readLine(r *bufio.Reader) ([]byte, error) {
-	var buf []byte
-	for {
-		chunk, err := r.ReadBytes('\n')
-		buf = append(buf, chunk...)
-		if err == nil {
-			return trimNewline(buf), nil
-		}
-		if errors.Is(err, io.EOF) {
-			return trimNewline(buf), io.EOF
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		return trimNewline(buf), err
-	}
+	line, err := r.ReadBytes('\n')
+	return trimNewline(line), err
 }
 
 func trimNewline(b []byte) []byte {

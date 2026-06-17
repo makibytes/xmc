@@ -47,6 +47,26 @@ for recovery, rather than as opaque protocol faults.
 Management tools are only registered for brokers that support management
 operations (currently Artemis).
 
+### Request/reply and correlation ids
+
+`request` is built on the `backends.RequestReplyBackend` capability. A
+correlation id is the portable contract: it is carried on the request and
+auto-generated when the caller omits one, and the requestor matches the reply by
+it. Responders are expected to echo the correlation id onto the reply.
+
+How the matching reply is retrieved is left to each broker's native mechanism,
+so no single messaging pattern is forced onto brokers where it would be alien:
+
+- **Artemis** implements the capability natively and filters the reply
+  **server-side** by correlation id (JMS selector), so a shared reply address is
+  concurrency-safe with no per-request temporary queue.
+- **Other queue brokers** (RabbitMQ, IBM MQ, MQTT, NATS, Pulsar) fall back to
+  the broker-neutral default in `backends.Request`, which sends, waits on the
+  reply destination, and rejects a non-matching reply with `ErrReplyMismatch`.
+  A broker gains native, concurrency-safe matching by implementing
+  `RequestReplyBackend` with its own idiom (MQ `MATCH_CORREL_ID`, a NATS inbox,
+  a Rabbit `direct reply-to` callback queue, etc.).
+
 ## Deploy on Kubernetes
 
 Build a broker-specific image and run it next to the broker:

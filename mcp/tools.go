@@ -199,9 +199,10 @@ func registerRequest(s *Server, d Deps) {
 	s.AddTool(&Tool{
 		Name: "request",
 		Description: "Send a message and wait for a single reply (request-reply pattern). " +
-			"This is the tool to use for a 'ping' that expects a 'pong': it sends to the address, " +
-			"then consumes one message from the reply address and returns it. Returns isError if no reply " +
-			"arrives within the timeout. For one-way delivery with no reply, use 'send'.",
+			"This is the tool to use for a 'ping' that expects a 'pong': it sends to the address with a " +
+			"correlation id, then returns the matching reply. A correlation id is generated automatically " +
+			"when not supplied. Returns isError if no reply arrives within the timeout. For one-way " +
+			"delivery with no reply, use 'send'.",
 		InputSchema: object(map[string]any{
 			"address":         stringProp("Target queue or address to send the request to, e.g. \"A.foo\"."),
 			"body":            stringProp("Request payload as text (e.g. \"ping\")."),
@@ -209,7 +210,7 @@ func registerRequest(s *Server, d Deps) {
 			"timeout_seconds": numberProp("How long to wait for the reply, in seconds (default 30)."),
 			"properties":      mapProp("Optional application properties."),
 			"content_type":    stringProp("MIME type of the body (default \"text/plain\")."),
-			"correlation_id":  stringProp("Optional correlation ID for matching the reply."),
+			"correlation_id":  stringProp("Optional correlation ID; auto-generated when omitted."),
 			"priority":        intProp("Message priority 0-9 (default 4)."),
 		}, "address", "body"),
 		Annotations: map[string]any{
@@ -226,8 +227,8 @@ func registerRequest(s *Server, d Deps) {
 			if a.Address == "" {
 				return nil, errors.New("address is required")
 			}
-			replyTo := orDefault(a.ReplyTo, "xmc.reply")
-			timeout := float32(30)
+			replyTo := orDefault(a.ReplyTo, backends.DefaultReplyQueue)
+			timeout := backends.DefaultRequestTimeout
 			if a.TimeoutSeconds != nil {
 				timeout = float32(*a.TimeoutSeconds)
 			}
@@ -240,29 +241,29 @@ func registerRequest(s *Server, d Deps) {
 			defer cancel()
 
 			return withQueue(d, func(q backends.QueueBackend) (*ToolResult, error) {
-				sendOpts := backends.SendOptions{
-					Queue:         a.Address,
+				// backends.Request handles correlation-id generation/matching and
+				// dispatches to the broker's native RequestReplyBackend when present.
+				msg, err := backends.Request(callCtx, q, backends.RequestOptions{
+					Address:       a.Address,
 					Message:       []byte(a.Body),
 					Properties:    a.Properties,
 					CorrelationID: a.CorrelationID,
-					ReplyTo:       replyTo,
+					ReplyTo:       a.ReplyTo,
 					ContentType:   orDefault(a.ContentType, "text/plain"),
 					Priority:      priority,
-				}
-				if err := q.Send(callCtx, sendOpts); err != nil {
-					return nil, fmt.Errorf("failed to send request to %s: %v", a.Address, err)
-				}
-				msg, err := q.Receive(callCtx, backends.ReceiveOptions{
-					Queue:       replyTo,
-					Timeout:     timeout,
-					Acknowledge: true,
-					Verbosity:   backends.VerbosityNormal,
+					Timeout:       timeout,
 				})
 				if err != nil {
+					if sendErr, ok := errors.AsType[*backends.RequestSendError](err); ok {
+						return nil, fmt.Errorf("failed to send request to %s: %v", a.Address, sendErr.Err)
+					}
 					if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, backends.ErrNoMessageAvailable) {
 						return nil, fmt.Errorf("no reply received on %s within %.0fs", replyTo, timeout)
 					}
-					return nil, fmt.Errorf("failed to receive reply: %v", err)
+					if errors.Is(err, backends.ErrReplyMismatch) {
+						return nil, fmt.Errorf("received a reply that did not match this request on %s: %v", replyTo, err)
+					}
+					return nil, fmt.Errorf("request to %s failed: %v", a.Address, err)
 				}
 				if msg == nil {
 					return nil, fmt.Errorf("no reply received on %s within %.0fs", replyTo, timeout)

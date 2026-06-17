@@ -72,6 +72,8 @@ flowchart LR
 ### RabbitMQ
 
 - Protocol: AMQP 1.0 (RabbitMQ v4+)
+- AMQP 1.0 address format: v2 (`/queues/<name>`, `/exchanges/<exchange>/<routing-key>`)
+- Queues must be pre-declared (RabbitMQ does not auto-create queues over AMQP 1.0)
 - Choose between exchange/queue model (also for topics & subscriptions) and simple queue model
 - Choose between `fanout`, `direct`, `topic` and `headers` exchange types
 - Topics use exchange-based routing (default exchange: `amq.topic`, configurable via `--exchange/-e`)
