@@ -6,7 +6,7 @@ require (
 	github.com/Azure/go-amqp v1.7.0
 	github.com/apache/pulsar-client-go v0.20.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/ibm-messaging/mq-golang/v5 v5.7.1
+	github.com/ibm-messaging/mq-golang/v5 v5.7.2
 	github.com/nats-io/nats.go v1.52.0
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/spf13/cobra v1.10.2

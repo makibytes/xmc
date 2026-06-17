@@ -99,8 +99,8 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/hamba/avro/v2 v2.29.0 h1:fkqoWEPxfygZxrkktgSHEpd0j/P7RKTBTDbcEeMdVEY=
 github.com/hamba/avro/v2 v2.29.0/go.mod h1:Pk3T+x74uJoJOFmHrdJ8PRdgSEL/kEKteJ31NytCKxI=
-github.com/ibm-messaging/mq-golang/v5 v5.7.1 h1:CSITrun6yG3uOY/FHhYjapBiE+psz6zMUUCqaZD79ag=
-github.com/ibm-messaging/mq-golang/v5 v5.7.1/go.mod h1:xCV0vl1+ik3VyWZnwAj++2J89vSTzhXP1gXhG0X3IYE=
+github.com/ibm-messaging/mq-golang/v5 v5.7.2 h1:ONq3Wykce9lBqTAeFlngpr5ikW2mxpzmC/q6iweDNtg=
+github.com/ibm-messaging/mq-golang/v5 v5.7.2/go.mod h1:xCV0vl1+ik3VyWZnwAj++2J89vSTzhXP1gXhG0X3IYE=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
