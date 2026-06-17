@@ -1,0 +1,135 @@
+//go:build redmc
+
+package redis
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+
+	"github.com/makibytes/xmc/broker/backends"
+)
+
+const topicMaxLen int64 = 10000
+
+type TopicAdapter struct {
+	client  *redis.Client
+	lastID  map[string]string
+	ensured map[string]struct{}
+}
+
+func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
+	client, err := Connect(connArgs)
+	if err != nil {
+		return nil, err
+	}
+	return &TopicAdapter{
+		client:  client,
+		lastID:  make(map[string]string),
+		ensured: make(map[string]struct{}),
+	}, nil
+}
+
+func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
+	key := topicKey(opts.Topic)
+	fields := buildFields(opts.Message, opts.Properties,
+		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
+
+	return a.client.XAdd(ctx, &redis.XAddArgs{
+		Stream: key,
+		MaxLen: topicMaxLen,
+		Approx: true,
+		Values: fields,
+	}).Err()
+}
+
+func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
+	key := topicKey(opts.Topic)
+	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
+
+	if opts.GroupID != "" {
+		return a.subscribeGroup(ctx, key, opts.GroupID, opts.Durable, timeout)
+	}
+	return a.subscribeIndependent(ctx, key, timeout)
+}
+
+func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, durable bool, timeout time.Duration) (*backends.Message, error) {
+	if err := a.ensureTopicGroup(ctx, key, group); err != nil {
+		return nil, err
+	}
+
+	result, err := a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    group,
+		Consumer: "xmc",
+		Streams:  []string{key, ">"},
+		Count:    1,
+		Block:    timeout,
+	}).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, backends.ErrNoMessageAvailable
+		}
+		return nil, fmt.Errorf("subscribing to topic group %s/%s: %w", key, group, err)
+	}
+
+	if len(result) == 0 || len(result[0].Messages) == 0 {
+		return nil, backends.ErrNoMessageAvailable
+	}
+
+	entry := result[0].Messages[0]
+	a.client.XAck(ctx, key, group, entry.ID) //nolint:errcheck
+
+	return streamToMessage(entry.ID, entry.Values), nil
+}
+
+func (a *TopicAdapter) subscribeIndependent(ctx context.Context, key string, timeout time.Duration) (*backends.Message, error) {
+	startID, ok := a.lastID[key]
+	if !ok {
+		startID = "$"
+		a.lastID[key] = startID
+	}
+
+	result, err := a.client.XRead(ctx, &redis.XReadArgs{
+		Streams: []string{key, startID},
+		Count:   1,
+		Block:   timeout,
+	}).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, backends.ErrNoMessageAvailable
+		}
+		return nil, fmt.Errorf("subscribing to topic %s: %w", key, err)
+	}
+
+	if len(result) == 0 || len(result[0].Messages) == 0 {
+		return nil, backends.ErrNoMessageAvailable
+	}
+
+	entry := result[0].Messages[0]
+	a.lastID[key] = entry.ID
+
+	return streamToMessage(entry.ID, entry.Values), nil
+}
+
+func (a *TopicAdapter) Close() error {
+	if a.client != nil {
+		return a.client.Close()
+	}
+	return nil
+}
+
+func (a *TopicAdapter) ensureTopicGroup(ctx context.Context, key, group string) error {
+	cacheKey := key + "/" + group
+	if _, ok := a.ensured[cacheKey]; ok {
+		return nil
+	}
+	err := a.client.XGroupCreateMkStream(ctx, key, group, "$").Err()
+	if err != nil && !isBusyGroupError(err) {
+		return fmt.Errorf("creating topic consumer group %s on %s: %w", group, key, err)
+	}
+	a.ensured[cacheKey] = struct{}{}
+	return nil
+}

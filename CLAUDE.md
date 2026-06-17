@@ -18,6 +18,8 @@ go build -tags mqtt -o mmc .      # MQTT Brokers
 go build -tags nats -o nmc .      # NATS / JetStream
 go build -tags pulsar -o pmc .    # Apache Pulsar
 go build -tags rabbitmq -o rmc .  # RabbitMQ v4+ (AMQP 1.0)
+go build -tags redmc -o redmc .   # Redis (Streams)
+go build -tags gmc -o gmc .       # Google Cloud Pub/Sub
 ```
 
 Default build (without tags) will fail with "No broker loaded" error at runtime.
@@ -76,7 +78,7 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 
 Uses `spf13/cobra` for CLI:
 - Root command provides persistent flags (`--server`, `--user`, `--password`, `--verbose`, TLS flags)
-- Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ)
+- Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ), `REDMC_` (Redis), `GMC_` (Google Pub/Sub)
 - Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`, `forward`
 - Topic commands: `publish`, `subscribe` (Kafka also has topic `forward`)
 - Connectivity: `ping` (all brokers; connects and reports reachability)
@@ -114,6 +116,8 @@ Each broker uses its native management API:
 - **IBM MQ**: No management commands (queue management via IBM tooling)
 - **NATS**: JetStream API (stream listing = queue listing)
 - **Pulsar**: Admin REST API (HTTP port 8080, `--admin-port` to override; topic listing only)
+- **Redis**: `SCAN` + `XLEN` + `XINFO GROUPS` (list, purge, stats)
+- **Google Pub/Sub**: Pub/Sub Admin API (list topics/subscriptions only)
 
 ## Key Design Decisions
 
@@ -150,6 +154,8 @@ Each broker uses its native management API:
   - `nats/` - NATS / JetStream (JetStream WorkQueue for queues, core NATS for topics)
   - `pulsar/` - Apache Pulsar (persistent:// topics; Shared subscription for queues, Exclusive/Shared for topics)
   - `rabbitmq/` - RabbitMQ (AMQP 1.0) + Management API
+  - `redis/` - Redis (Streams for queues and topics; consumer groups for competing consumers)
+  - `gcppubsub/` - Google Cloud Pub/Sub (topics + subscriptions; shared subs for queues)
   - `backends/` - Common queue/topic interfaces and types
 - `log/` - Logging utilities with verbose mode support
 - `rc/` - Return code constants

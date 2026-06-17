@@ -2,31 +2,31 @@
 
 ## Feature Matrix
 
-| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS | Pulsar |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes |
-| Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes |
-| Request-reply | Yes | Yes | - | Yes | - | Yes | Yes |
-| Reply / responder | Yes | Yes | - | Yes | - | Yes | Yes |
-| Move / redrive | Yes | Yes | - | Yes | Yes | Yes | Yes |
-| Custom output format (`-F`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| NDJSON export/import (`--ndjson`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Drain all (`-n 0`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Producer rate limit (`--rate`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Connectivity check (`ping`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Streaming relay (`forward`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Time-bounded streaming (`--for`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Live throughput (`--stats`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes |
-| Message selectors | Yes | Yes | - | Yes | - | - | - |
-| Durable subscriptions | Yes | Yes | - | - | - | - | Yes |
-| TTL / expiry | Yes | Yes | Yes | Yes | - | - | Partial |
-| Application properties | Yes | Yes | Yes | Yes | - | - | Yes |
-| Message priority | Yes | Yes | - | Yes | - | - | - |
-| Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) |
-| Management: list | Yes | Yes | Yes | - | - | Yes | Yes |
-| Management: purge | Yes | Yes | - | - | - | - | - |
-| Management: stats | Yes | Yes | - | - | - | - | - |
+| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS | Pulsar | Redis | GCP Pub/Sub |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes |
+| Request-reply | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes |
+| Reply / responder | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes |
+| Move / redrive | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| Custom output format (`-F`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| NDJSON export/import (`--ndjson`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Drain all (`-n 0`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Producer rate limit (`--rate`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Connectivity check (`ping`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Streaming relay (`forward`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Time-bounded streaming (`--for`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Live throughput (`--stats`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | - |
+| Message selectors | Yes | Yes | - | Yes | - | - | - | - | - |
+| Durable subscriptions | Yes | Yes | - | - | - | - | Yes | Yes | Yes |
+| TTL / expiry | Yes | Yes | Yes | Yes | - | - | Partial | - | - |
+| Application properties | Yes | Yes | Yes | Yes | - | - | Yes | Yes | Yes |
+| Message priority | Yes | Yes | - | Yes | - | - | - | - | - |
+| Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) | Yes (Streams) | Yes |
+| Management: list | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes |
+| Management: purge | Yes | Yes | - | - | - | - | - | Yes | - |
+| Management: stats | Yes | Yes | - | - | - | - | - | Yes | - |
 
 The `reply`, `move` and `-F`/`--format` features live in the generic command layer
 (`cmd/`) on top of the queue/topic interfaces, so they are available for every broker
@@ -195,6 +195,59 @@ flowchart LR
     F --> G(Consumer1)
 
     H[Producer] -->|persistent://public/default/topic| I{"Shared Sub (--group)"}
+    I --> J(Consumer1)
+    I --> K(Consumer2)
+```
+
+### Redis
+
+- Protocol: Redis Streams + consumer groups
+- Binary: `redmc`, build tag: `redmc`
+- **Queue topology**: Redis Streams (`xmc:queue:{name}`) with a single consumer group (`xmc-queue`). `XADD` to send, `XREADGROUP` + `XACK` + `XDEL` to receive (true work-queue semantics). Peek uses `XRANGE` (non-destructive, no ack needed).
+- **Topic topology**: Also Redis Streams (`xmc:topic:{name}`) with `MAXLEN ~ 10000` approximate trimming. Independent subscribers use `XREAD` starting from `$` (new-messages-only fan-out, each subscriber tracks its own offset). `--group` maps to consumer groups (`XREADGROUP` + `XACK`, competing consumers within the group). `--durable` groups persist their read offset across reconnections.
+- TLS: auto-detected via `rediss://` URL scheme or `--tls` flag
+- Application properties: stored with a `p:` prefix in stream entry fields to avoid colliding with reserved metadata fields (`data`, `message-id`, `correlation-id`, `reply-to`, `content-type`)
+- Management: `manage list` scans `xmc:queue:*` and `xmc:topic:*` keys; `manage purge` deletes the stream key; `manage stats` uses `XLEN` + `XINFO GROUPS`
+- Default server: `redis://localhost:6379` (env: `REDMC_SERVER`)
+- Library: `github.com/redis/go-redis/v9`
+- **Limitations**: no per-message TTL on streams (Streams have no built-in per-entry expiry); topic Pub/Sub channels are not used (Streams provide persistence and metadata that Pub/Sub lacks)
+
+```mermaid
+flowchart LR
+    A[Producer] -->|XADD xmc:queue:name| B{Consumer Group xmc-queue}
+    B -->|XREADGROUP + XACK + XDEL| C(Consumer1)
+    B -->|XREADGROUP + XACK + XDEL| D(Consumer2)
+
+    E[Producer] -->|XADD xmc:topic:name| F(Independent XREAD)
+    E -->|XADD xmc:topic:name| G{"Group (--group)"}
+    G -->|XREADGROUP + XACK| H(Consumer1)
+    G -->|XREADGROUP + XACK| I(Consumer2)
+```
+
+### Google Cloud Pub/Sub
+
+- Protocol: gRPC (Google Cloud Pub/Sub API)
+- Binary: `gmc`, build tag: `gmc`
+- **Queue topology**: A topic + a single shared subscription (`xmc-queue-{name}`) — messages are distributed among competing consumers, each delivered to exactly one. The subscription is auto-created on first `send` so messages are retained before the first `receive`.
+- **Topic topology**: Ephemeral per-subscriber subscriptions for true fan-out (auto-deleted on close). `--group` maps to a stable named subscription (competing consumers within the group). `--durable` uses a persistent subscription that retains its read position.
+- Peek: uses `Nack` so messages are redelivered
+- Authentication: Google Application Default Credentials (ADC) or `--credentials` (service account JSON). No TLS flags (gRPC handles transport).
+- Emulator: set `--endpoint` (or env `PUBSUB_EMULATOR_HOST`) for local development
+- Management: `manage list` enumerates topics and subscriptions. No purge/stats in v1 (purge requires SeekToTime; stats need Cloud Monitoring API).
+- Default project: env `GMC_PROJECT`; no default server (uses Google Cloud)
+- Library: `cloud.google.com/go/pubsub`
+- **Limitations**: no per-message TTL (retention is subscription-level); no `manage stats` (requires Cloud Monitoring API)
+
+```mermaid
+flowchart LR
+    A[Producer] -->|Topic| B{Subscription xmc-queue-name}
+    B -->|competing pull| C(Consumer1)
+    B -->|competing pull| D(Consumer2)
+
+    E[Producer] -->|Topic| F(Ephemeral Sub 1)
+    E -->|Topic| G(Ephemeral Sub 2)
+
+    H[Producer] -->|Topic| I{"Named Sub (--group)"}
     I --> J(Consumer1)
     I --> K(Consumer2)
 ```

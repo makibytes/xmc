@@ -12,7 +12,11 @@
 /imc
 /kmc
 /mmc
+/nmc
+/pmc
 /rmc
+/redmc
+/gmc
 
 # Test binary, built with `go test -c`
 *.test
