@@ -20,6 +20,8 @@ go build -tags pulsar -o pmc .    # Apache Pulsar
 go build -tags rabbitmq -o rmc .  # RabbitMQ v4+ (AMQP 1.0)
 go build -tags redmc -o redmc .   # Redis (Streams)
 go build -tags gmc -o gmc .       # Google Cloud Pub/Sub
+go build -tags awsmc -o awsmc .   # AWS SQS + SNS
+go build -tags azmc -o azmc .     # Azure Service Bus
 ```
 
 Default build (without tags) will fail with "No broker loaded" error at runtime.
@@ -78,7 +80,7 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 
 Uses `spf13/cobra` for CLI:
 - Root command provides persistent flags (`--server`, `--user`, `--password`, `--verbose`, TLS flags)
-- Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ), `REDMC_` (Redis), `GMC_` (Google Pub/Sub)
+- Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ), `REDMC_` (Redis), `GMC_` (Google Pub/Sub), `AWSMC_` (AWS SQS+SNS), `AZMC_` (Azure Service Bus)
 - Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`, `forward`
 - Topic commands: `publish`, `subscribe` (Kafka also has topic `forward`)
 - Connectivity: `ping` (all brokers; connects and reports reachability)
@@ -118,6 +120,8 @@ Each broker uses its native management API:
 - **Pulsar**: Admin REST API (HTTP port 8080, `--admin-port` to override; topic listing only)
 - **Redis**: `SCAN` + `XLEN` + `XINFO GROUPS` (list, purge, stats)
 - **Google Pub/Sub**: Pub/Sub Admin API (list topics/subscriptions only)
+- **AWS SQS+SNS**: Native SQS/SNS APIs (list, native purge, queue stats)
+- **Azure Service Bus**: Admin API (list queues/topics, queue stats, purge by draining)
 
 ## Key Design Decisions
 
@@ -156,6 +160,8 @@ Each broker uses its native management API:
   - `rabbitmq/` - RabbitMQ (AMQP 1.0) + Management API
   - `redis/` - Redis (Streams for queues and topics; consumer groups for competing consumers)
   - `gcppubsub/` - Google Cloud Pub/Sub (topics + subscriptions; shared subs for queues)
+  - `awssqs/` - AWS SQS (queues) + SNS (topics via SNS→SQS fan-out)
+  - `azuresb/` - Azure Service Bus (native queues + topics/subscriptions; native peek + TTL)
   - `backends/` - Common queue/topic interfaces and types
 - `log/` - Logging utilities with verbose mode support
 - `rc/` - Return code constants

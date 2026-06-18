@@ -17,6 +17,8 @@
 /rmc
 /redmc
 /gmc
+/awsmc
+/azmc
 
 # Test binary, built with `go test -c`
 *.test

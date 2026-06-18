@@ -2,31 +2,31 @@
 
 ## Feature Matrix
 
-| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS | Pulsar | Redis | GCP Pub/Sub |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
-| Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes |
-| Request-reply | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes |
-| Reply / responder | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes |
-| Move / redrive | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
-| Custom output format (`-F`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| NDJSON export/import (`--ndjson`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Drain all (`-n 0`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Producer rate limit (`--rate`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Connectivity check (`ping`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Streaming relay (`forward`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Time-bounded streaming (`--for`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Live throughput (`--stats`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | - |
-| Message selectors | Yes | Yes | - | Yes | - | - | - | - | - |
-| Durable subscriptions | Yes | Yes | - | - | - | - | Yes | Yes | Yes |
-| TTL / expiry | Yes | Yes | Yes | Yes | - | - | Partial | - | - |
-| Application properties | Yes | Yes | Yes | Yes | - | - | Yes | Yes | Yes |
-| Message priority | Yes | Yes | - | Yes | - | - | - | - | - |
-| Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) | Yes (Streams) | Yes |
-| Management: list | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes |
-| Management: purge | Yes | Yes | - | - | - | - | - | Yes | - |
-| Management: stats | Yes | Yes | - | - | - | - | - | Yes | - |
+| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS | Pulsar | Redis | GCP Pub/Sub | AWS SQS+SNS | Azure SB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Request-reply | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| Reply / responder | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| Move / redrive | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Custom output format (`-F`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| NDJSON export/import (`--ndjson`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Drain all (`-n 0`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Producer rate limit (`--rate`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Connectivity check (`ping`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Streaming relay (`forward`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Time-bounded streaming (`--for`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Live throughput (`--stats`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | - | - | - |
+| Message selectors | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
+| Durable subscriptions | Yes | Yes | - | - | - | - | Yes | Yes | Yes | Yes | Yes |
+| TTL / expiry | Yes | Yes | Yes | Yes | - | - | Partial | - | - | - | Yes |
+| Application properties | Yes | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes |
+| Message priority | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
+| Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) | Yes (Streams) | Yes | Yes | Yes |
+| Management: list | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| Management: purge | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes (drain) |
+| Management: stats | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes |
 
 The `reply`, `move` and `-F`/`--format` features live in the generic command layer
 (`cmd/`) on top of the queue/topic interfaces, so they are available for every broker
@@ -250,4 +250,57 @@ flowchart LR
     H[Producer] -->|Topic| I{"Named Sub (--group)"}
     I --> J(Consumer1)
     I --> K(Consumer2)
+```
+
+### AWS SQS + SNS
+
+- Protocol: AWS SDK v2 (HTTPS REST APIs)
+- Binary: `awsmc`, build tag: `awsmc`
+- **Queue topology**: SQS queues (native point-to-point). `CreateQueue` is idempotent. `ReceiveMessage` + `DeleteMessage` = ack. Peek uses `VisibilityTimeout: 0` + `ChangeMessageVisibility` so the message is not consumed.
+- **Topic topology**: SNS topics with SNS→SQS fan-out. Each subscriber gets an auto-created SQS queue subscribed to the SNS topic with `RawMessageDelivery: true` (preserves payload + message attributes). `--group` maps to a shared SQS queue name (competing consumers). Ephemeral subscriber queues are cleaned up on close.
+- Application properties: carried as SQS/SNS `MessageAttributes` (`DataType: "String"`). The four metadata keys (`message-id`, `correlation-id`, `reply-to`, `content-type`) are reserved attributes.
+- Authentication: standard AWS credential chain (env vars / shared config / IAM). `--region`, `--endpoint` (for LocalStack), `--profile`.
+- Management: `manage list` (SQS `ListQueues` + SNS `ListTopics`), `manage purge` (native `PurgeQueue`), `manage stats` (`GetQueueAttributes` for message counts)
+- Default region: `us-east-1` (env: `AWSMC_REGION`)
+- Library: `github.com/aws/aws-sdk-go-v2`
+- **Limitations**: no per-message TTL (SQS retention is queue-level); default reply queue name `xmc.reply` contains a dot which SQS doesn't allow — use `--reply-to xmc-reply` (or any alphanumeric/hyphen/underscore name)
+
+```mermaid
+flowchart LR
+    A[Producer] -->|SQS SendMessage| B(Queue)
+    B -->|ReceiveMessage + DeleteMessage| C(Consumer1)
+    B -->|ReceiveMessage + DeleteMessage| D(Consumer2)
+
+    E[Producer] -->|SNS Publish| F{SNS Topic}
+    F -->|Subscribe + Raw Delivery| G(SQS Sub Queue 1)
+    F -->|Subscribe + Raw Delivery| H(SQS Sub Queue 2)
+    G --> I(Consumer1)
+    H --> J(Consumer2)
+```
+
+### Azure Service Bus
+
+- Protocol: AMQP 1.0 (via Azure SDK)
+- Binary: `azmc`, build tag: `azmc`
+- **Queue topology**: Native Service Bus queues. `NewSender` + `SendMessage` to send; `NewReceiverForQueue` + `ReceiveMessages` + `CompleteMessage` to receive (ack). **Native `PeekMessages`** — the only broker alongside Service Bus with true non-destructive peek at the API level.
+- **Topic topology**: Native Service Bus topics + subscriptions. Each subscriber gets a subscription; `--group` maps to a shared subscription name (competing consumers). `--durable` creates a persistent subscription. Ephemeral subscriptions are deleted on close.
+- **Native per-message TTL**: `TimeToLive` field on the message (maps to `--ttl`). This is the only cloud broker with first-class per-message expiry.
+- Application properties: carried in Service Bus `ApplicationProperties` (native `map[string]any`). Message metadata (`MessageID`, `CorrelationID`, `ReplyTo`, `ContentType`) maps to first-class Service Bus message fields (not custom properties).
+- Authentication: `--connection-string` (SAS, primary) or `--namespace` (Azure AD via `DefaultAzureCredential` / managed identity / `az login`).
+- Management: `manage list` (admin pager APIs for queues/topics), `manage stats` (`GetQueueRuntimeProperties` for active/total message counts), `manage purge` (drains via `ReceiveModeReceiveAndDelete` — no native purge API)
+- Default: env `AZMC_CONNECTION_STRING` or `AZMC_NAMESPACE`
+- Library: `github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus` + `azidentity`
+- **Limitations**: `manage purge` is implemented by draining (no native purge API); entities must be pre-created or XMC auto-creates them (needs Manage claim on the connection string)
+
+```mermaid
+flowchart LR
+    A[Producer] -->|SendMessage| B(Queue)
+    B -->|ReceiveMessages + CompleteMessage| C(Consumer1)
+    B -->|PeekMessages| D["Peek (non-destructive)"]
+
+    E[Producer] -->|SendMessage| F{Topic}
+    F -->|Subscription 1| G(Consumer1)
+    F -->|Subscription 2| H(Consumer2)
+    F -->|"Shared Sub (--group)"| I(Competing Consumer1)
+    F -->|"Shared Sub (--group)"| J(Competing Consumer2)
 ```
