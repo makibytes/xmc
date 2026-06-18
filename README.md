@@ -12,12 +12,16 @@ This project provides a unified command-line interface (CLI) for sending and rec
 | Build Command | Binary | Broker | Protocol | Env Prefix |
 | --- | --- | --- | --- | --- |
 | `go build -tags artemis -o amc .` | `amc` | Apache Artemis | AMQP 1.0 | `AMC_` |
+| `go build -tags aws -o awsmc .` | `awsmc` | AWS SQS + SNS | AWS SDK (HTTPS) | `AWSMC_` |
+| `go build -tags azure -o azmc .` | `azmc` | Azure Service Bus | AMQP 1.0 (Azure SDK) | `AZMC_` |
+| `go build -tags google -o gmc .` | `gmc` | Google Cloud Pub/Sub | gRPC | `GMC_` |
 | `./scripts/build-imc-in-container.sh` | `imc` | IBM MQ | IBM MQ | `IMC_` |
 | `go build -tags kafka -o kmc .` | `kmc` | Apache Kafka | Kafka | `KMC_` |
-| `go build -tags mqtt -o mmc .` | `mmc` | MQTT Brokers | MQTT 3.1.1/5.0 | `MMC_` |
+| `go build -tags mqtt -o mmc .` | `mmc` | MQTT Brokers | MQTT 3.1.1 | `MMC_` |
 | `go build -tags nats -o nmc .` | `nmc` | NATS | NATS / JetStream | `NMC_` |
 | `go build -tags pulsar -o pmc .` | `pmc` | Apache Pulsar | Pulsar native | `PMC_` |
 | `go build -tags rabbitmq -o rmc .` | `rmc` | RabbitMQ v4+ | AMQP 1.0 | `RMC_` |
+| `go build -tags redis -o redmc .` | `redmc` | Redis | Redis Streams | `REDMC_` |
 
 Build all flavors for the platform matrix (`linux/amd64`, `linux/arm64`, `darwin/arm64`, `windows/amd64`):
 
@@ -32,11 +36,11 @@ protocols and brokers, comparable to the JMS API. See broker/BROKERS.md for more
 
 ## Usage
 
-After building for your chosen broker, the binary provides the same interface regardless of backend. In the examples below, `xmc` is used as a placeholder — substitute it with the actual binary name (`amc`, `imc`, `kmc`, `mmc`, `nmc`, `pmc`, or `rmc`).
+After building for your chosen broker, the binary provides the same interface regardless of backend. In the examples below, `xmc` is used as a placeholder — substitute it with the actual binary name (`amc`, `awsmc`, `azmc`, `gmc`, `imc`, `kmc`, `mmc`, `nmc`, `pmc`, `rmc`, or `redmc`).
 
 ### Connection Parameters
 
-The following parameters and environment variables can be used for all commands:
+Most brokers use a server URL with optional credentials:
 
 ```sh
   -s, --server string      server URL of the broker    [$<PREFIX>_SERVER]
@@ -45,11 +49,19 @@ The following parameters and environment variables can be used for all commands:
   -v, --verbose            print verbose output
 ```
 
-Environment variables are prefixed per flavor: `AMC_` for Artemis, `IMC_` for IBM MQ, `KMC_` for Kafka, `MMC_` for MQTT, `NMC_` for NATS, `PMC_` for Pulsar, `RMC_` for RabbitMQ.
+Environment variables are prefixed per flavor: `AMC_` for Artemis, `IMC_` for IBM MQ, `KMC_` for Kafka, `MMC_` for MQTT, `NMC_` for NATS, `PMC_` for Pulsar, `RMC_` for RabbitMQ, `REDMC_` for Redis.
+
+Cloud brokers use different connection parameters:
+
+| Broker | Primary flag | Authentication |
+| --- | --- | --- |
+| Google Pub/Sub (`gmc`) | `-s` / `--project` | Application Default Credentials or `--credentials` (service account JSON) |
+| AWS SQS+SNS (`awsmc`) | `-s` / `--region` | AWS credential chain (env / shared config / IAM); `--profile`, `--endpoint` (for LocalStack) |
+| Azure Service Bus (`azmc`) | `-s` / `--connection-string` | SAS connection string or `--namespace` (Azure AD via `DefaultAzureCredential`) |
 
 ### TLS / SSL
 
-All brokers support TLS connections:
+Non-cloud brokers support TLS connections:
 
 ```sh
   --tls                    enable TLS connection
@@ -59,7 +71,7 @@ All brokers support TLS connections:
   --insecure               skip TLS certificate verification
 ```
 
-TLS is auto-detected when using `amqps://` or `kafka+ssl://` URL schemes.
+TLS is auto-detected when using `amqps://`, `kafka+ssl://`, `ssl://`, `pulsar+ssl://`, or `rediss://` URL schemes. Cloud brokers (Google, AWS, Azure) and IBM MQ handle TLS internally.
 
 ### Queue Commands
 
@@ -281,13 +293,27 @@ Same flags as `receive`, plus:
 
 ### Management Commands
 
-Broker management operations (available for Artemis, RabbitMQ, Kafka):
+Broker management operations (available for most brokers — capabilities vary):
 
 ```sh
 xmc manage list                    # list queues/topics
 xmc manage purge <queue>           # remove all messages from a queue
 xmc manage stats <queue>           # show queue statistics
 ```
+
+| Broker | list | purge | stats |
+| --- | --- | --- | --- |
+| Artemis | queues | yes | yes |
+| AWS SQS+SNS | queues + topics | yes (native) | yes |
+| Azure Service Bus | queues + topics | yes (drains) | yes |
+| Google Pub/Sub | topics + subscriptions | — | — |
+| Kafka | topics | — | — |
+| NATS | streams (queues) | — | — |
+| Pulsar | topics | — | — |
+| RabbitMQ | queues | yes | yes |
+| Redis | queues + topics | yes | yes |
+| IBM MQ | — | — | — |
+| MQTT | — | — | — |
 
 ### Application Properties
 
@@ -298,6 +324,8 @@ xmc send <queue> -P key1=value1 -P key2=value2 <message>
 ```
 
 If a message has properties, `receive` shows them automatically. Use `-q` to suppress.
+
+**Note:** MQTT 3.1.1 has no user properties at the protocol level, so application properties and metadata (correlation-id, reply-to, content-type, message-id) cannot be carried through an MQTT broker.
 
 ### Working with Files and Redirection
 
@@ -455,7 +483,7 @@ xmc version
 Unit tests (no broker required):
 
 ```sh
-go test ./cmd/ ./log/ ./broker/amqpcommon/
+go test ./cmd/ ./log/ ./broker/backends/ ./broker/amqpcommon/ ./broker/tlsutil/
 ```
 
 Integration tests are based on the [bats testing framework](https://github.com/bats-core/bats-core)
