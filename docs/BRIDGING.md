@@ -7,9 +7,9 @@ xmc can pipe messages — payload **and** metadata — from one broker to anothe
 Every read command (`receive`, `peek`, `subscribe`) supports `--ndjson`, which writes **one JSON object per line to STDOUT** containing the full message: payload, application properties, and protocol metadata. Every write command (`send`, `publish`) also supports `--ndjson`, reading those same records from STDIN and reconstructing the message on the target broker.
 
 ```
-┌─────────┐  --ndjson   ┌──────┐  --ndjson   ┌─────────┐
+┌──────────┐  --ndjson   ┌──────┐  --ndjson   ┌──────────┐
 │ Broker A │ ──STDOUT──► │ pipe │ ──STDIN───► │ Broker B │
-└─────────┘              └──────┘              └─────────┘
+└──────────┘             └──────┘             └──────────┘
 ```
 
 STDERR carries only verbose/stats output, never message data — the pipe is clean.

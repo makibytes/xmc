@@ -5,38 +5,27 @@
 [![GoDoc](https://godoc.org/github.com/makibytes/xmc?status.svg)](https://godoc.org/github.com/makibytes/xmc)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makibytes/xmc/blob/main/LICENSE)
 
-This project provides a unified command-line interface (CLI) for sending and receiving messages to/from different Message and Streaming Brokers. The broker backend is selected at **build time** using Go build tags. Each flavor produces its own binary with its own name and environment variable prefix.
+Tired of the nitty-gritty differences between message brokers? This project provides a unified command-line interface (CLI) for 11 popular message and streaming brokers. There's a specific binary for each broker, but they all share the same command-line interface. Learn it once, use it with any broker!
 
-## Building for Different Brokers
+## Supported Brokers and Protocols
 
-| Build Command | Binary | Broker | Protocol | Env Prefix |
-| --- | --- | --- | --- | --- |
-| `go build -tags artemis -o amc .` | `amc` | Apache Artemis | AMQP 1.0 | `AMC_` |
-| `go build -tags aws -o awsmc .` | `awsmc` | AWS SQS + SNS | AWS SDK (HTTPS) | `AWSMC_` |
-| `go build -tags azure -o azmc .` | `azmc` | Azure Service Bus | AMQP 1.0 (Azure SDK) | `AZMC_` |
-| `go build -tags google -o gmc .` | `gmc` | Google Cloud Pub/Sub | gRPC | `GMC_` |
-| `./scripts/build-imc-in-container.sh` | `imc` | IBM MQ | IBM MQ | `IMC_` |
-| `go build -tags kafka -o kmc .` | `kmc` | Apache Kafka | Kafka | `KMC_` |
-| `go build -tags mqtt -o mmc .` | `mmc` | MQTT Brokers | MQTT 3.1.1 | `MMC_` |
-| `go build -tags nats -o nmc .` | `nmc` | NATS | NATS / JetStream | `NMC_` |
-| `go build -tags pulsar -o pmc .` | `pmc` | Apache Pulsar | Pulsar native | `PMC_` |
-| `go build -tags rabbitmq -o rmc .` | `rmc` | RabbitMQ v4+ | AMQP 1.0 | `RMC_` |
-| `go build -tags redis -o redmc .` | `redmc` | Redis | Redis Streams | `REDMC_` |
-
-Build all flavors for the platform matrix (`linux/amd64`, `linux/arm64`, `darwin/arm64`, `windows/amd64`):
-
-```sh
-./scripts/build-platform-matrix.sh
-```
-
-Artifacts are written under `dist/<goos>-<goarch>/`.
-
-The goal of this project is to support a common set of features across the different
-protocols and brokers, comparable to the JMS API. Take a look at the [feature matrix of all brokers](docs/BROKERS.md) for more details.
+| Guide | Binary | Broker | Protocol |
+| --- | --- | --- | --- |
+| [artemis.md](artemis.md) | `amc` | Apache Artemis | AMQP 1.0 |
+| [aws.md](aws.md) | `awsmc` | AWS SQS + SNS | AWS SDK (HTTPS) |
+| [azure.md](azure.md) | `azmc` | Azure Service Bus | AMQP 1.0 (Azure SDK) |
+| [google.md](google.md) | `gmc` | Google Cloud Pub/Sub | gRPC |
+| [ibmmq.md](ibmmq.md) | `imc` | IBM MQ | IBM MQ |
+| [kafka.md](kafka.md) | `kmc` | Apache Kafka | Kafka |
+| [mqtt.md](mqtt.md) | `mmc` | MQTT Brokers | MQTT 3.1.1 |
+| [nats.md](nats.md) | `nmc` | NATS / JetStream | NATS |
+| [pulsar.md](pulsar.md) | `pmc` | Apache Pulsar | Pulsar native |
+| [rabbitmq.md](rabbitmq.md) | `rmc` | RabbitMQ v4+ | AMQP 1.0 |
+| [redis.md](redis.md) | `redmc` | Redis | Redis Streams |
 
 ## Usage
 
-After building for your chosen broker, the binary provides the same interface regardless of backend. In the examples below, `xmc` is used as a placeholder — substitute it with the actual binary name (`amc`, `awsmc`, `azmc`, `gmc`, `imc`, `kmc`, `mmc`, `nmc`, `pmc`, `rmc`, or `redmc`).
+ Download the binary for your broker and platform. In the examples below, `xmc` is used as a placeholder — substitute it with the actual binary name (`amc`, `awsmc`, `azmc`, `gmc`, `imc`, `kmc`, `mmc`, `nmc`, `pmc`, `rmc`, or `redmc`).
 
 ### Connection Parameters
 
@@ -509,77 +498,17 @@ Print the version of the binary:
 xmc version
 ```
 
-## Testing
+## More Documentation
 
-Unit tests (no broker required):
+The table at the top has links to the Getting Started Guides for each supported broker. Each guide covers authentication, basic send/receive, admin commands, broker specific features, advanced xmc features, and cross-broker bridging. There's also a [Bridging Brokers Guide](docs/BRIDGING.md), which covers details of how to pipe messages between brokers without data loss using `--ndjson`. We also have an [MCP guide](docs/MCP.md), which covers details of how to use xmc's MCP mode. You might want to use MCP mode as a standalone service in your k8s cluster.
 
-```sh
-go test ./cmd/ ./log/ ./broker/backends/ ./broker/amqpcommon/ ./broker/tlsutil/
-```
-
-Integration tests are based on the [bats testing framework](https://github.com/bats-core/bats-core)
-(included) and depend on a local Artemis broker with its default settings.
-
-If you have Docker you can spin up an Artemis container like so:
-
-```sh
-docker run --name artemis -d \
-    -p 8161:8161 -p 5672:5672 \
-    apache/activemq-artemis:latest-alpine
-```
-
-Port 5672 is the default port of the AMQP 1.0 protocol. Port 8161 provides access to the Artemis web console,
-where you can check the queues and messages manually. Default credentials are artemis/artemis.
-
-Then you can start the tests:
-
-```sh
-./run-tests.sh
-```
-
-### Integration Tests (testcontainers)
-
-Integration tests start real broker containers automatically via [testcontainers-go](https://golang.testcontainers.org/).
-Requires Docker.
-
-Run all broker integration tests:
-
-```sh
-./run-integration-tests.sh
-```
-
-Run a single broker:
-
-```sh
-go test -tags "artemis integration" -timeout 120s -v ./broker/artemis/
-```
-
-Integration tests are tagged with both the broker build tag and `integration`:
-
-```go
-//go:build artemis && integration
-```
-
-IBM MQ is built in a Docker container that downloads the IBM MQ Redistributable SDK and compiles `imc` without requiring local MQ headers.
-This requires a working Docker installation.
-
-If you prefer building IBM MQ locally (with IBM MQ SDK already installed), you can still use:
-
-```sh
-go build -tags ibmmq -o imc .
-```
-
-For platform matrix builds, IBM MQ has these constraints:
-
-- `linux/amd64`: built in Docker via `scripts/build-imc-in-container.sh`.
-- `linux/arm64`: requires native Linux ARM64 runner with IBM MQ SDK/client installed (public redistributable feed currently provides Linux X64 package).
-- `darwin/arm64`: requires native macOS arm64 build host with IBM MQ Dev Toolkit installed.
-- `windows/amd64`: requires native Windows x64 build host with IBM MQ SDK installed.
+Not all brokers support all features. Take a look at the [feature matrix](docs/BROKERS.md) for more details.
 
 ## Contributing
 
-Contributions are welcome. Please open an issue or submit a pull request.
-Use the latest version of Go and make sure that the tests run successfully.
+Contributions are welcome. You might want to start by looking into the [build and test guide](docs/BUILD_TEST.md).
+
+Please open an issue or submit a pull request. Use the latest version of Go and make sure that the tests run successfully.
 
 ## License
 
