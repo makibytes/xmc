@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
+	redis "github.com/redis/go-redis/v9"
 )
 
 func ListQueues(connArgs ConnArguments) ([]backends.QueueInfo, error) {
@@ -42,6 +43,71 @@ func ListTopics(connArgs ConnArguments) ([]backends.TopicInfo, error) {
 	}
 
 	return topics, nil
+}
+
+// CreateQueue creates a Redis stream for a queue and its consumer group.
+func CreateQueue(connArgs ConnArguments, queue string) error {
+	client, err := Connect(connArgs)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	key := queueKey(queue)
+
+	// XGROUP CREATE with MKSTREAM creates both the stream and the consumer group.
+	return client.XGroupCreateMkStream(ctx, key, xmcQueueGroup, "0").Err()
+}
+
+// DeleteQueue deletes the Redis stream for a queue.
+func DeleteQueue(connArgs ConnArguments, queue string) error {
+	client, err := Connect(connArgs)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	return client.Del(ctx, queueKey(queue)).Err()
+}
+
+// CreateTopic creates a Redis stream for a topic.
+func CreateTopic(connArgs ConnArguments, topic string) error {
+	client, err := Connect(connArgs)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	key := topicKey(topic)
+
+	// Add and immediately trim to create an empty stream with MAXLEN ~ 10000
+	// (matching the topic adapter's trimming policy).
+	_, err = client.XAdd(ctx, &redis.XAddArgs{
+		Stream: key,
+		MaxLen: 10000,
+		Approx: true,
+		Values: map[string]any{"_init": "1"},
+	}).Result()
+	if err != nil {
+		return fmt.Errorf("creating topic stream: %w", err)
+	}
+	// Trim the init message — XTRIM MAXLEN 0 removes everything.
+	return client.XTrimMaxLen(ctx, key, 0).Err()
+}
+
+// DeleteTopic deletes the Redis stream for a topic.
+func DeleteTopic(connArgs ConnArguments, topic string) error {
+	client, err := Connect(connArgs)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	return client.Del(ctx, topicKey(topic)).Err()
 }
 
 func PurgeQueue(connArgs ConnArguments, queue string) (int64, error) {

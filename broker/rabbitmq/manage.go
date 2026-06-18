@@ -3,6 +3,7 @@
 package rabbitmq
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -150,6 +151,141 @@ func PurgeQueue(args ManagementArgs, queue string) error {
 	}
 
 	_, err = managementDelete(base, fmt.Sprintf("/queues/%%2F/%s/contents", url.PathEscape(queue)), args.User, args.Password)
+	return err
+}
+
+func managementPut(baseURL, path, user, password string, body []byte) error {
+	fullURL := baseURL + path
+	log.Verbose("requesting PUT %s", fullURL)
+
+	req, err := http.NewRequest("PUT", fullURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	if user != "" {
+		req.SetBasicAuth(user, password)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("management API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("management API returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+func managementPost(baseURL, path, user, password string, body []byte) ([]byte, error) {
+	fullURL := baseURL + path
+	log.Verbose("requesting POST %s", fullURL)
+
+	req, err := http.NewRequest("POST", fullURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	if user != "" {
+		req.SetBasicAuth(user, password)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("management API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("management API returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return respBody, nil
+}
+
+// CreateQueue creates a queue via the RabbitMQ Management API.
+func CreateQueue(args ManagementArgs, queue string) error {
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	body, _ := json.Marshal(map[string]any{"durable": true})
+	return managementPut(base, fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), args.User, args.Password, body)
+}
+
+// DeleteQueue deletes a queue via the RabbitMQ Management API.
+func DeleteQueue(args ManagementArgs, queue string) error {
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	_, err = managementDelete(base, fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), args.User, args.Password)
+	return err
+}
+
+// CreateExchange creates an exchange via the RabbitMQ Management API.
+func CreateExchange(args ManagementArgs, exchange, exchangeType string) error {
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"type":    exchangeType,
+		"durable": true,
+	})
+	return managementPut(base, fmt.Sprintf("/exchanges/%%2F/%s", url.PathEscape(exchange)), args.User, args.Password, body)
+}
+
+// DeleteExchange deletes an exchange via the RabbitMQ Management API.
+func DeleteExchange(args ManagementArgs, exchange string) error {
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	_, err = managementDelete(base, fmt.Sprintf("/exchanges/%%2F/%s", url.PathEscape(exchange)), args.User, args.Password)
+	return err
+}
+
+// BindQueue binds a queue to an exchange via the RabbitMQ Management API.
+func BindQueue(args ManagementArgs, queue, exchange, routingKey string) error {
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"routing_key": routingKey,
+	})
+	_, err = managementPost(base, fmt.Sprintf("/bindings/%%2F/e/%s/q/%s", url.PathEscape(exchange), url.PathEscape(queue)), args.User, args.Password, body)
+	return err
+}
+
+// UnbindQueue removes a binding between a queue and an exchange via the
+// RabbitMQ Management API.
+func UnbindQueue(args ManagementArgs, queue, exchange, routingKey string) error {
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	propKey := routingKey
+	if propKey == "" {
+		propKey = "~"
+	}
+	_, err = managementDelete(base, fmt.Sprintf("/bindings/%%2F/e/%s/q/%s/%s", url.PathEscape(exchange), url.PathEscape(queue), url.PathEscape(propKey)), args.User, args.Password)
 	return err
 }
 

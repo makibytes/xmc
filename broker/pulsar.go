@@ -14,6 +14,7 @@ import (
 func GetRootCommand() *cobra.Command {
 	var connArgs pulsarpkg.ConnArguments
 	var adminPort int
+	var pulsarPartitions int
 
 	defaultServer := os.Getenv("PMC_SERVER")
 	if defaultServer == "" {
@@ -52,6 +53,13 @@ func GetRootCommand() *cobra.Command {
 				}
 				return out, nil
 			},
+			CreateTopic: &cmd.ManageAction{
+				SetupFlags: func(c *cobra.Command) {
+					c.Flags().IntVar(&pulsarPartitions, "partitions", 0, "Number of partitions (0 = non-partitioned)")
+				},
+				Run: func(topic string) error { return pulsarpkg.CreateTopic(connArgs, adminPort, topic, pulsarPartitions) },
+			},
+			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return pulsarpkg.DeleteTopic(connArgs, adminPort, topic) }},
 		}),
 	})
 }

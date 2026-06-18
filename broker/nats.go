@@ -13,6 +13,9 @@ import (
 
 func GetRootCommand() *cobra.Command {
 	var connArgs natspkg.ConnArguments
+	var retention string
+	var maxMsgs int64
+	var subjects []string
 
 	defaultServer := os.Getenv("NMC_SERVER")
 	if defaultServer == "" {
@@ -48,6 +51,15 @@ func GetRootCommand() *cobra.Command {
 				}
 				return out, nil
 			},
+			CreateQueue: &cmd.ManageAction{
+				SetupFlags: func(c *cobra.Command) {
+					c.Flags().StringVar(&retention, "retention", "workqueue", "Stream retention policy (workqueue, limits, interest)")
+					c.Flags().Int64Var(&maxMsgs, "max-msgs", 0, "Maximum number of messages (0 = unlimited)")
+					c.Flags().StringSliceVar(&subjects, "subject", nil, "NATS subjects to bind (default: xmc.queue.<name>)")
+				},
+				Run: func(queue string) error { return natspkg.CreateStream(connArgs, queue, retention, maxMsgs, subjects) },
+			},
+			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return natspkg.DeleteStream(connArgs, queue) }},
 		}),
 	})
 }

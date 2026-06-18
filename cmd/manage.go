@@ -7,6 +7,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// ManageAction is one create/delete subcommand: optional flags + a run closure
+// that closes over those flag-bound vars (same lazy-capture idiom as the rest
+// of the spec).
+type ManageAction struct {
+	SetupFlags func(c *cobra.Command) // optional
+	Run        func(name string) error
+}
+
+// BindAction is a binding subcommand taking <queue> <exchange> (+ optional
+// flags like --routing-key bound in SetupFlags).
+type BindAction struct {
+	SetupFlags func(c *cobra.Command) // optional
+	Run        func(queue, exchange string) error
+}
+
 // ManageSpec describes the management capabilities a broker exposes. Each
 // closure is optional — nil means the broker does not support that operation,
 // and the corresponding subcommand is omitted.
@@ -23,6 +38,16 @@ type ManageSpec struct {
 	// SetupFlags registers additional persistent flags on the manage command
 	// (e.g. Pulsar's --admin-port).
 	SetupFlags func(cmd *cobra.Command)
+
+	// Resource lifecycle operations — all optional.
+	CreateQueue   *ManageAction
+	DeleteQueue   *ManageAction
+	CreateTopic   *ManageAction
+	DeleteTopic   *ManageAction
+	CreateExchange *ManageAction
+	DeleteExchange *ManageAction
+	BindQueue      *BindAction
+	UnbindQueue    *BindAction
 }
 
 // NewManageCommand builds a standardised "manage" command tree from spec,
@@ -119,5 +144,62 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 		})
 	}
 
+	addManageAction(mgmtCmd, "create-queue", "Create a queue", "<queue>", "Created queue %s\n", spec.CreateQueue)
+	addManageAction(mgmtCmd, "delete-queue", "Delete a queue", "<queue>", "Deleted queue %s\n", spec.DeleteQueue)
+	addManageAction(mgmtCmd, "create-topic", "Create a topic", "<topic>", "Created topic %s\n", spec.CreateTopic)
+	addManageAction(mgmtCmd, "delete-topic", "Delete a topic", "<topic>", "Deleted topic %s\n", spec.DeleteTopic)
+	addManageAction(mgmtCmd, "create-exchange", "Create an exchange", "<exchange>", "Created exchange %s\n", spec.CreateExchange)
+	addManageAction(mgmtCmd, "delete-exchange", "Delete an exchange", "<exchange>", "Deleted exchange %s\n", spec.DeleteExchange)
+	addBindAction(mgmtCmd, "bind-queue", "Bind a queue to an exchange", "Bound queue %s to exchange %s\n", spec.BindQueue)
+	addBindAction(mgmtCmd, "unbind-queue", "Unbind a queue from an exchange", "Unbound queue %s from exchange %s\n", spec.UnbindQueue)
+
 	return mgmtCmd
+}
+
+// addManageAction adds a single-arg management subcommand (create/delete) if
+// the action is non-nil.
+func addManageAction(parent *cobra.Command, use, short, argName, successFmt string, action *ManageAction) {
+	if action == nil {
+		return
+	}
+	c := &cobra.Command{
+		Use:   use + " " + argName,
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if err := action.Run(args[0]); err != nil {
+				return err
+			}
+			fmt.Printf(successFmt, args[0])
+			return nil
+		},
+	}
+	if action.SetupFlags != nil {
+		action.SetupFlags(c)
+	}
+	parent.AddCommand(c)
+}
+
+// addBindAction adds a two-arg management subcommand (bind/unbind) if the
+// action is non-nil.
+func addBindAction(parent *cobra.Command, use, short, successFmt string, action *BindAction) {
+	if action == nil {
+		return
+	}
+	c := &cobra.Command{
+		Use:   use + " <queue> <exchange>",
+		Short: short,
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, args []string) error {
+			if err := action.Run(args[0], args[1]); err != nil {
+				return err
+			}
+			fmt.Printf(successFmt, args[0], args[1])
+			return nil
+		},
+	}
+	if action.SetupFlags != nil {
+		action.SetupFlags(c)
+	}
+	parent.AddCommand(c)
 }
