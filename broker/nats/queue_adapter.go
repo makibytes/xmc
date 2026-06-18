@@ -50,6 +50,16 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 
 	if opts.MessageID != "" {
 		msg.Header.Set(natsclient.MsgIdHdr, opts.MessageID)
+		msg.Header.Set(backends.PropMessageID, opts.MessageID)
+	}
+	if opts.CorrelationID != "" {
+		msg.Header.Set(backends.PropCorrelationID, opts.CorrelationID)
+	}
+	if opts.ReplyTo != "" {
+		msg.Header.Set(backends.PropReplyTo, opts.ReplyTo)
+	}
+	if opts.ContentType != "" {
+		msg.Header.Set(backends.PropContentType, opts.ContentType)
 	}
 	for k, v := range backends.StringifyProps(opts.Properties) {
 		msg.Header.Set(k, v)
@@ -196,6 +206,8 @@ func natsToBackendMessage(msg *natsclient.Msg) *backends.Message {
 			result.ReplyTo = v
 		case backends.PropContentType:
 			result.ContentType = v
+		case natsclient.MsgIdHdr:
+			// NATS-internal dedup header; don't leak into user properties.
 		default:
 			result.Properties[k] = v
 		}

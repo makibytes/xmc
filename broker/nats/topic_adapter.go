@@ -36,6 +36,16 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 
 	if opts.MessageID != "" {
 		msg.Header.Set(natsclient.MsgIdHdr, opts.MessageID)
+		msg.Header.Set(backends.PropMessageID, opts.MessageID)
+	}
+	if opts.CorrelationID != "" {
+		msg.Header.Set(backends.PropCorrelationID, opts.CorrelationID)
+	}
+	if opts.ReplyTo != "" {
+		msg.Header.Set(backends.PropReplyTo, opts.ReplyTo)
+	}
+	if opts.ContentType != "" {
+		msg.Header.Set(backends.PropContentType, opts.ContentType)
 	}
 	for k, v := range backends.StringifyProps(opts.Properties) {
 		msg.Header.Set(k, v)
