@@ -37,6 +37,7 @@ type messageRecord struct {
 // newMessageRecord captures a received message as a lossless record.
 func newMessageRecord(m *backends.Message) messageRecord {
 	rec := messageRecord{
+		Key:           m.Key,
 		MessageID:     m.MessageID,
 		CorrelationID: m.CorrelationID,
 		ReplyTo:       m.ReplyTo,

@@ -30,5 +30,6 @@ See the main [README](../README.md) for the full build table and platform matrix
 
 ## Other Documentation
 
+- [Bridging Brokers](bridging.md) — Pipe messages between brokers without data loss using `--ndjson`
 - [MCP Server](MCP.md) — Model Context Protocol server for AI-assisted messaging
 - [Broker Differences](../broker/BROKERS.md) — Feature matrix and protocol-specific details

@@ -102,6 +102,7 @@ func (a *TopicAdapter) Close() error {
 func convertKafkaToBackendMessage(msg *kafka.Message, withMetadata bool) *backends.Message {
 	result := &backends.Message{
 		Data:             msg.Value,
+		Key:              string(msg.Key),
 		Properties:       make(map[string]any),
 		InternalMetadata: make(map[string]any),
 	}

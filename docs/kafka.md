@@ -168,12 +168,18 @@ seq 1000 | kmc publish loadtest -l --rate 100    # 100 msg/s, one per line
 kmc subscribe mytopic -n 0 --for 30s --stats
 ```
 
-### TTL / Message Expiry
+### TTL / Message Headers
 
-Set a per-message TTL:
+Use `-E` to stamp a `ttl` header on a message. Consumers can read this header and honor it, but Kafka itself does **not** enforce per-message expiry — actual deletion is governed by the topic's `retention.ms` setting:
 
 ```bash
 kmc publish events "temporary" -E 10s
+```
+
+To set topic-level retention at creation time:
+
+```bash
+kmc manage create-topic ephemeral --partitions 1 --config retention.ms=60000
 ```
 
 ### Durable Consumption

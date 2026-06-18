@@ -5,6 +5,7 @@ package pulsar
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	pulsar "github.com/apache/pulsar-client-go/pulsar"
 	"github.com/makibytes/xmc/broker/backends"
@@ -49,6 +50,9 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	}
 	if opts.ContentType != "" {
 		msg.Properties[backends.PropContentType] = opts.ContentType
+	}
+	if opts.TTL > 0 {
+		msg.Properties[propTTLMs] = strconv.FormatInt(opts.TTL, 10)
 	}
 
 	_, err = producer.Send(ctx, msg)
