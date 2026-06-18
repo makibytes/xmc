@@ -22,7 +22,17 @@ jobs:
         submodules: recursive
     - name: Get dependencies
       run: go mod download
-    - name: Build
-      run: go build -v -tags artemis -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o amc.exe .
+    - name: Build all broker binaries
+      run: |
+        go build -v -tags artemis  -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o amc.exe .
+        go build -v -tags aws      -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o awsmc.exe .
+        go build -v -tags azure    -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o azmc.exe .
+        go build -v -tags google   -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o gmc.exe .
+        go build -v -tags kafka    -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o kmc.exe .
+        go build -v -tags mqtt     -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o mmc.exe .
+        go build -v -tags nats     -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o nmc.exe .
+        go build -v -tags pulsar   -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o pmc.exe .
+        go build -v -tags rabbitmq -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o rmc.exe .
+        go build -v -tags redis    -ldflags="-X 'github.com/makibytes/xmc/cmd.version=${{ github.ref_name }}'" -o redmc.exe .
     - name: Run unit tests
       run: go test -short ./...
