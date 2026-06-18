@@ -14,6 +14,8 @@ import (
 func GetRootCommand() *cobra.Command {
 	var connArgs rabbitmq.ConnArguments
 	var exchange string
+	var exchangeType string
+	var routingKey string
 
 	defaultServer := os.Getenv("RMC_SERVER")
 	if defaultServer == "" {
@@ -71,6 +73,27 @@ func GetRootCommand() *cobra.Command {
 					ConsumerCount: stats.ConsumerCount, EnqueueCount: stats.EnqueueCount,
 					DequeueCount: stats.DequeueCount,
 				}, nil
+			},
+			CreateQueue: &cmd.ManageAction{Run: func(queue string) error { return rabbitmq.CreateQueue(mgmtArgs(), queue) }},
+			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return rabbitmq.DeleteQueue(mgmtArgs(), queue) }},
+			CreateExchange: &cmd.ManageAction{
+				SetupFlags: func(c *cobra.Command) {
+					c.Flags().StringVar(&exchangeType, "type", "topic", "Exchange type (direct, fanout, topic, headers)")
+				},
+				Run: func(name string) error { return rabbitmq.CreateExchange(mgmtArgs(), name, exchangeType) },
+			},
+			DeleteExchange: &cmd.ManageAction{Run: func(name string) error { return rabbitmq.DeleteExchange(mgmtArgs(), name) }},
+			BindQueue: &cmd.BindAction{
+				SetupFlags: func(c *cobra.Command) {
+					c.Flags().StringVar(&routingKey, "routing-key", "#", "Routing key for the binding")
+				},
+				Run: func(queue, exchange string) error { return rabbitmq.BindQueue(mgmtArgs(), queue, exchange, routingKey) },
+			},
+			UnbindQueue: &cmd.BindAction{
+				SetupFlags: func(c *cobra.Command) {
+					c.Flags().StringVar(&routingKey, "routing-key", "#", "Routing key for the binding to remove")
+				},
+				Run: func(queue, exchange string) error { return rabbitmq.UnbindQueue(mgmtArgs(), queue, exchange, routingKey) },
 			},
 		}),
 	})

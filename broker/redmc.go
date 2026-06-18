@@ -37,10 +37,14 @@ func GetRootCommand() *cobra.Command {
 		Topic: func() (backends.TopicBackend, error) { return redispkg.NewTopicAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return redispkg.NewQueueAdapter(connArgs) },
 		Manage: cmd.NewManageCommand(cmd.ManageSpec{
-			ListQueues: func() ([]backends.QueueInfo, error) { return redispkg.ListQueues(connArgs) },
-			ListTopics: func() ([]backends.TopicInfo, error) { return redispkg.ListTopics(connArgs) },
-			Purge: func(queue string) (int64, error) { return redispkg.PurgeQueue(connArgs, queue) },
-			Stats: func(queue string) (*backends.QueueStats, error) { return redispkg.GetQueueStats(connArgs, queue) },
+			ListQueues:  func() ([]backends.QueueInfo, error) { return redispkg.ListQueues(connArgs) },
+			ListTopics:  func() ([]backends.TopicInfo, error) { return redispkg.ListTopics(connArgs) },
+			Purge:       func(queue string) (int64, error) { return redispkg.PurgeQueue(connArgs, queue) },
+			Stats:       func(queue string) (*backends.QueueStats, error) { return redispkg.GetQueueStats(connArgs, queue) },
+			CreateQueue: &cmd.ManageAction{Run: func(queue string) error { return redispkg.CreateQueue(connArgs, queue) }},
+			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return redispkg.DeleteQueue(connArgs, queue) }},
+			CreateTopic: &cmd.ManageAction{Run: func(topic string) error { return redispkg.CreateTopic(connArgs, topic) }},
+			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return redispkg.DeleteTopic(connArgs, topic) }},
 		}),
 	})
 }

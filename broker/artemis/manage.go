@@ -182,6 +182,97 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 	return stats, nil
 }
 
+// CreateQueue creates an ANYCAST address and queue via Jolokia.
+func CreateQueue(args ManagementArgs, queue string) error {
+	base, err := jolokiaURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	// createQueue(name, address, routingType) — routingType ANYCAST
+	path := fmt.Sprintf(
+		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/createQueue(java.lang.String,java.lang.String,java.lang.String)/%s/%s/ANYCAST",
+		url.PathEscape(queue), url.PathEscape(queue))
+	body, err := jolokiaGet(base, path, args.User, args.Password)
+	if err != nil {
+		return err
+	}
+
+	return checkJolokiaError(body)
+}
+
+// DeleteQueue destroys an ANYCAST queue and its address via Jolokia.
+func DeleteQueue(args ManagementArgs, queue string) error {
+	base, err := jolokiaURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	// destroyQueue(name, removeConsumers, autoDeleteAddress) — true, true
+	path := fmt.Sprintf(
+		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/destroyQueue(java.lang.String,boolean,boolean)/%s/true/true",
+		url.PathEscape(queue))
+	body, err := jolokiaGet(base, path, args.User, args.Password)
+	if err != nil {
+		return err
+	}
+
+	return checkJolokiaError(body)
+}
+
+// CreateTopic creates a MULTICAST address via Jolokia.
+func CreateTopic(args ManagementArgs, topic string) error {
+	base, err := jolokiaURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	// createAddress(name, routingTypes) — MULTICAST
+	path := fmt.Sprintf(
+		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/createAddress(java.lang.String,java.lang.String)/%s/MULTICAST",
+		url.PathEscape(topic))
+	body, err := jolokiaGet(base, path, args.User, args.Password)
+	if err != nil {
+		return err
+	}
+
+	return checkJolokiaError(body)
+}
+
+// DeleteTopic deletes a MULTICAST address via Jolokia.
+func DeleteTopic(args ManagementArgs, topic string) error {
+	base, err := jolokiaURL(args.Server)
+	if err != nil {
+		return err
+	}
+
+	// deleteAddress(name, force)
+	path := fmt.Sprintf(
+		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/deleteAddress(java.lang.String,boolean)/%s/true",
+		url.PathEscape(topic))
+	body, err := jolokiaGet(base, path, args.User, args.Password)
+	if err != nil {
+		return err
+	}
+
+	return checkJolokiaError(body)
+}
+
+// checkJolokiaError inspects a Jolokia response for an error status.
+func checkJolokiaError(body []byte) error {
+	var result struct {
+		Status int    `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil // can't parse — assume success (status was 200)
+	}
+	if result.Status != 200 {
+		return fmt.Errorf("Jolokia error: %s", result.Error)
+	}
+	return nil
+}
+
 type QueueInfo struct {
 	Name          string
 	RoutingType   string

@@ -2,7 +2,7 @@
 
 ## Feature Matrix
 
-| Feature | Artemis | RabbitMQ | Kafka | IBM MQ | MQTT | NATS | Pulsar | Redis | GCP Pub/Sub | AWS SQS+SNS | Azure SB |
+| Feature | [Artemis](artemis.md) | [RabbitMQ](rabbitmq.md) | [Kafka](kafka.md) | [IBM MQ](ibmmq.md) | [MQTT](mqtt.md) | [NATS](nats.md) | [Pulsar](pulsar.md) | [Redis](redis.md) | [GCP Pub/Sub](google.md) | [AWS SQS+SNS](aws.md) | [Azure SB](azure.md) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -27,6 +27,9 @@
 | Management: list | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes | Yes |
 | Management: purge | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes (drain) |
 | Management: stats | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes |
+| Management: create | queue, topic | queue, exchange | topic | - | - | queue | topic | queue, topic | - | - | - |
+| Management: delete | queue, topic | queue, exchange | topic | - | - | queue | topic | queue, topic | - | - | - |
+| Management: bind | - | queue↔exchange | - | - | - | - | - | - | - | - | - |
 
 The `reply`, `move` and `-F`/`--format` features live in the generic command layer
 (`cmd/`) on top of the queue/topic interfaces, so they are available for every broker
@@ -55,7 +58,7 @@ any broker can be sampled for a fixed window or monitored for throughput while s
 - ANYCAST means traditional queues (default), only one consumer
 - MULTICAST means topics & subscriptions, multiple consumers
 - Selectors: Full JMS selector support via AMQP source filters
-- Management: Jolokia REST API on HTTP port 8161
+- Management: Jolokia REST API on HTTP port 8161 (list, purge, stats, create/delete queue, create/delete topic)
 
 => Use message metadata for topology selection.
 
@@ -78,7 +81,7 @@ flowchart LR
 - Choose between `fanout`, `direct`, `topic` and `headers` exchange types
 - Topics use exchange-based routing (default exchange: `amq.topic`, configurable via `--exchange/-e`)
 - Selectors: Supported via AMQP source filters
-- Management: RabbitMQ Management API on HTTP port 15672 (list, purge, stats)
+- Management: RabbitMQ Management API on HTTP port 15672 (list, purge, stats, create/delete queue, create/delete exchange, bind/unbind queue)
 
 => Define topology statically by declaring exchanges, queues, and bindings.
 
@@ -114,7 +117,7 @@ flowchart LR
 - TTL: Set as a message header (broker-side retention handles expiry)
 - Consumer groups for parallel processing (`--group/-g`)
 - Message keys for partitioning (`--key/-K`)
-- Management: Topic listing via admin client (no purge/stats)
+- Management: Topic listing, create/delete topic via admin client (`--partitions`, `--replication-factor`, `--config`)
 
 ```mermaid
 flowchart LR
@@ -153,7 +156,7 @@ flowchart LR
 - **Topic topology**: Core NATS pub/sub subjects. Consumer groups via `--group` flag map to NATS queue subscribers (`QueueSubscribeSync`).
 - Request-reply: supported using NATS reply subjects
 - TLS: standard flags (`--tls`, `--ca-cert`, `--cert`, `--key-file`, `--insecure`)
-- Management: `manage list` enumerates JetStream streams (= queues)
+- Management: `manage list` enumerates JetStream streams (= queues), `manage create-queue` / `manage delete-queue` (with `--retention`, `--max-msgs`, `--subject`)
 - Default server: `nats://localhost:4222` (env: `NMC_SERVER`)
 - Requires JetStream enabled on the server (`--jetstream` flag or `jetstream {}` in server config) for queue operations
 - Library: `github.com/nats-io/nats.go`
@@ -181,7 +184,7 @@ flowchart LR
 - Request-reply: via ReplyTo topic property
 - TLS: auto-detected via `pulsar+ssl://` URL scheme; also `--tls` flag
 - Authentication: token-based via `--password` (JWT); TLS client certificate via `--cert`/`--key-file`
-- Management: `pmc manage list` uses Pulsar Admin REST API (HTTP port 8080, `--admin-port` to override)
+- Management: Pulsar Admin REST API (HTTP port 8080, `--admin-port` to override) — list, create/delete topic (with `--partitions`)
 - Default server: `pulsar://localhost:6650` (env: `PMC_SERVER`)
 - Tenant/namespace: defaults to `persistent://public/default/`
 
@@ -207,7 +210,7 @@ flowchart LR
 - **Topic topology**: Also Redis Streams (`xmc:topic:{name}`) with `MAXLEN ~ 10000` approximate trimming. Independent subscribers use `XREAD` starting from `$` (new-messages-only fan-out, each subscriber tracks its own offset). `--group` maps to consumer groups (`XREADGROUP` + `XACK`, competing consumers within the group). `--durable` groups persist their read offset across reconnections.
 - TLS: auto-detected via `rediss://` URL scheme or `--tls` flag
 - Application properties: stored with a `p:` prefix in stream entry fields to avoid colliding with reserved metadata fields (`data`, `message-id`, `correlation-id`, `reply-to`, `content-type`)
-- Management: `manage list` scans `xmc:queue:*` and `xmc:topic:*` keys; `manage purge` deletes the stream key; `manage stats` uses `XLEN` + `XINFO GROUPS`
+- Management: `manage list` scans `xmc:queue:*` and `xmc:topic:*` keys; `manage purge` deletes the stream key; `manage stats` uses `XLEN` + `XINFO GROUPS`; `manage create-queue`/`create-topic` creates stream (+ consumer group for queues); `manage delete-queue`/`delete-topic` deletes the stream key
 - Default server: `redis://localhost:6379` (env: `REDMC_SERVER`)
 - Library: `github.com/redis/go-redis/v9`
 - **Limitations**: no per-message TTL on streams (Streams have no built-in per-entry expiry); topic Pub/Sub channels are not used (Streams provide persistence and metadata that Pub/Sub lacks)

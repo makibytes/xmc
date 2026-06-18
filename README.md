@@ -32,7 +32,7 @@ Build all flavors for the platform matrix (`linux/amd64`, `linux/arm64`, `darwin
 Artifacts are written under `dist/<goos>-<goarch>/`.
 
 The goal of this project is to support a common set of features across the different
-protocols and brokers, comparable to the JMS API. See broker/BROKERS.md for more details.
+protocols and brokers, comparable to the JMS API. Take a look at the [feature matrix of all brokers](docs/BROKERS.md) for more details.
 
 ## Usage
 
@@ -299,21 +299,52 @@ Broker management operations (available for most brokers — capabilities vary):
 xmc manage list                    # list queues/topics
 xmc manage purge <queue>           # remove all messages from a queue
 xmc manage stats <queue>           # show queue statistics
+xmc manage create-queue <queue>    # create a queue
+xmc manage delete-queue <queue>    # delete a queue
+xmc manage create-topic <topic>    # create a topic
+xmc manage delete-topic <topic>    # delete a topic
 ```
 
-| Broker | list | purge | stats |
-| --- | --- | --- | --- |
-| Artemis | queues | yes | yes |
-| AWS SQS+SNS | queues + topics | yes (native) | yes |
-| Azure Service Bus | queues + topics | yes (drains) | yes |
-| Google Pub/Sub | topics + subscriptions | — | — |
-| Kafka | topics | — | — |
-| NATS | streams (queues) | — | — |
-| Pulsar | topics | — | — |
-| RabbitMQ | queues | yes | yes |
-| Redis | queues + topics | yes | yes |
-| IBM MQ | — | — | — |
-| MQTT | — | — | — |
+RabbitMQ also supports exchange and binding management:
+
+```sh
+rmc manage create-exchange <exchange> --type topic   # create an exchange (direct, fanout, topic, headers)
+rmc manage delete-exchange <exchange>                 # delete an exchange
+rmc manage bind-queue <queue> <exchange>              # bind a queue to an exchange
+rmc manage unbind-queue <queue> <exchange>            # unbind a queue from an exchange
+```
+
+Kafka topics support additional options:
+
+```sh
+kmc manage create-topic <topic> --partitions 3 --replication-factor 2 --config retention.ms=86400000
+```
+
+NATS queues (JetStream streams) support additional options:
+
+```sh
+nmc manage create-queue <queue> --retention workqueue --max-msgs 10000 --subject custom.subject
+```
+
+Pulsar topics support partitioned topics:
+
+```sh
+pmc manage create-topic <topic> --partitions 3
+```
+
+| Broker | list | purge | stats | create | delete |
+| --- | --- | --- | --- | --- | --- |
+| Artemis | queues | yes | yes | queue, topic | queue, topic |
+| AWS SQS+SNS | queues + topics | yes (native) | yes | — | — |
+| Azure Service Bus | queues + topics | yes (drains) | yes | — | — |
+| Google Pub/Sub | topics + subscriptions | — | — | — | — |
+| Kafka | topics | — | — | topic | topic |
+| NATS | streams (queues) | — | — | queue | queue |
+| Pulsar | topics | — | — | topic | topic |
+| RabbitMQ | queues | yes | yes | queue, exchange (+bind) | queue, exchange (+unbind) |
+| Redis | queues + topics | yes | yes | queue, topic | queue, topic |
+| IBM MQ | — | — | — | — | — |
+| MQTT | — | — | — | — | — |
 
 ### Application Properties
 
@@ -548,7 +579,7 @@ For platform matrix builds, IBM MQ has these constraints:
 ## Contributing
 
 Contributions are welcome. Please open an issue or submit a pull request.
-Use the latest version of Go and run tests with Artemis.
+Use the latest version of Go and make sure that the tests run successfully.
 
 ## License
 

@@ -66,6 +66,10 @@ func GetRootCommand() *cobra.Command {
 					DequeueCount: stats.DequeueCount,
 				}, nil
 			},
+			CreateQueue: &cmd.ManageAction{Run: func(queue string) error { return artemis.CreateQueue(mgmtArgs(), queue) }},
+			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return artemis.DeleteQueue(mgmtArgs(), queue) }},
+			CreateTopic: &cmd.ManageAction{Run: func(topic string) error { return artemis.CreateTopic(mgmtArgs(), topic) }},
+			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return artemis.DeleteTopic(mgmtArgs(), topic) }},
 		}),
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{

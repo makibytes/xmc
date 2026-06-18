@@ -11,8 +11,8 @@ XMC (Xenomorphic Message Client) is a unified command-line interface for sending
 Build for a specific broker using build tags:
 
 ```bash
-go build -tags artemis -o amc .     # Apache Artemis (AMQP 1.0)
-go build -tags ibmmq -o imc .      # IBM MQ
+go build -tags artemis -o amc .    # Apache Artemis (AMQP 1.0)
+go build -tags ibmmq -o imc .      # IBM MQ, but needs a container with the proprietary C files
 go build -tags kafka -o kmc .      # Apache Kafka
 go build -tags mqtt -o mmc .       # MQTT Brokers
 go build -tags nats -o nmc .       # NATS / JetStream
@@ -25,6 +25,7 @@ go build -tags azure -o azmc .     # Azure Service Bus
 ```
 
 Default build (without tags) will fail with "No broker loaded" error at runtime.
+All builds shall be triggered automatically in github workflows.
 
 ## Testing
 
@@ -84,7 +85,7 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 - `broker/backends/timeout.go` - `TimeoutDuration(timeout, wait)` (shared timeout semantics)
 - `broker/backends/errors.go` - `ErrNoMessageAvailable` (shared no-message sentinel)
 - `cmd/root.go` - `BrokerSpec` + `NewRootCommand()` (shared CLI skeleton for all entry files)
-- `cmd/manage.go` - `ManageSpec` + `NewManageCommand()` (shared manage subcommand builder with standardised output format)
+- `cmd/manage.go` - `ManageSpec` + `ManageAction` + `BindAction` + `NewManageCommand()` (shared manage subcommand builder with standardised output format; supports list/purge/stats and create/delete for queues, topics, exchanges, and bindings)
 - `cmd/produce.go` - `registerProduceFlags`, `parseProduceFlags`, `runProduce` (shared producer logic for send/publish)
 - `cmd/command.go` - `WrapQueueCommand`/`WrapTopicCommand` adapter factories with lazy connection
 
@@ -96,7 +97,7 @@ Uses `spf13/cobra` for CLI:
 - Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`, `forward`
 - Topic commands: `publish`, `subscribe` (Kafka also has topic `forward`)
 - Connectivity: `ping` (all brokers; connects and reports reachability)
-- Management commands: `manage list`, `manage purge`, `manage stats`
+- Management commands: `manage list`, `manage purge`, `manage stats`, `manage create-queue`, `manage delete-queue`, `manage create-topic`, `manage delete-topic`, `manage create-exchange`, `manage delete-exchange`, `manage bind-queue`, `manage unbind-queue`
 - Output: `-J` JSON, `-F`/`--format` template, or `--ndjson` lossless records, shared across read commands
 - Bulk/load: `-l`/`--lines`, `--ndjson` (input), `-n`/`--count` repeat, `--rate` throttle on send/publish; `-n 0` drains on read commands
 - Streaming: `forward` (continuous relay, optional `-x`/`--command` shell command), `--for <duration>` (time-bounded), `--stats` (live throughput) on read commands and `forward`
@@ -126,13 +127,13 @@ All brokers support TLS via persistent flags (`--tls`, `--ca-cert`, `--cert`, `-
 ### Management APIs
 
 Each broker uses its native management API:
-- **Artemis**: Jolokia REST API (HTTP port 8161)
-- **RabbitMQ**: RabbitMQ Management API (HTTP port 15672)
-- **Kafka**: Admin client via `segmentio/kafka-go` (topic listing only)
+- **Artemis**: Jolokia REST API (HTTP port 8161) — list, purge, stats, create/delete queue, create/delete topic
+- **RabbitMQ**: RabbitMQ Management API (HTTP port 15672) — list, purge, stats, create/delete queue, create/delete exchange, bind/unbind queue
+- **Kafka**: Admin client via `segmentio/kafka-go` — list, create/delete topic (with `--partitions`, `--replication-factor`, `--config`)
 - **IBM MQ**: No management commands (queue management via IBM tooling)
-- **NATS**: JetStream API (stream listing = queue listing)
-- **Pulsar**: Admin REST API (HTTP port 8080, `--admin-port` to override; topic listing only)
-- **Redis**: `SCAN` + `XLEN` + `XINFO GROUPS` (list, purge, stats)
+- **NATS**: JetStream API — list streams, create/delete queue (with `--retention`, `--max-msgs`, `--subject`)
+- **Pulsar**: Admin REST API (HTTP port 8080, `--admin-port` to override) — list, create/delete topic (with `--partitions`)
+- **Redis**: `go-redis` commands — list, purge, stats, create/delete queue, create/delete topic
 - **Google Pub/Sub**: Pub/Sub Admin API (list topics/subscriptions only)
 - **AWS SQS+SNS**: Native SQS/SNS APIs (list, native purge, queue stats)
 - **Azure Service Bus**: Admin API (list queues/topics, queue stats, purge by draining)
@@ -187,4 +188,4 @@ Each broker uses its native management API:
 - `rc/` - Return code constants
 - `test/` - bats integration test files
 
-See `broker/BROKERS.md` for protocol-specific differences and topology patterns.
+See `docs/BROKERS.md` for protocol-specific differences and topology patterns.

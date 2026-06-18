@@ -3,7 +3,9 @@
 package broker
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/kafka"
@@ -13,6 +15,9 @@ import (
 
 func GetRootCommand() *cobra.Command {
 	var connArgs kafka.ConnArguments
+	var partitions int
+	var replicationFactor int
+	var configEntries []string
 
 	defaultServer := os.Getenv("KMC_SERVER")
 	if defaultServer == "" {
@@ -51,6 +56,25 @@ func GetRootCommand() *cobra.Command {
 				}
 				return out, nil
 			},
+			CreateTopic: &cmd.ManageAction{
+				SetupFlags: func(c *cobra.Command) {
+					c.Flags().IntVar(&partitions, "partitions", 1, "Number of partitions")
+					c.Flags().IntVar(&replicationFactor, "replication-factor", 1, "Replication factor")
+					c.Flags().StringArrayVar(&configEntries, "config", nil, "Topic config entries (key=value, repeatable)")
+				},
+				Run: func(topic string) error {
+					configs := make(map[string]string)
+					for _, entry := range configEntries {
+						k, v, ok := strings.Cut(entry, "=")
+						if !ok {
+							return fmt.Errorf("invalid config entry %q (expected key=value)", entry)
+						}
+						configs[k] = v
+					}
+					return kafka.CreateTopic(connArgs, topic, partitions, replicationFactor, configs)
+				},
+			},
+			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return kafka.DeleteTopic(connArgs, topic) }},
 		}),
 		Extra: []*cobra.Command{
 			cmd.WrapTopicCommand(cmd.NewForwardTopicCommand, topicFactory),

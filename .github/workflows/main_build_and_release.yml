@@ -18,11 +18,15 @@ jobs:
         goarch: [amd64, arm64]
         flavor:
           - {tag: artemis, binary: amc}
+          - {tag: aws, binary: awsmc}
+          - {tag: azure, binary: azmc}
+          - {tag: google, binary: gmc}
           - {tag: kafka, binary: kmc}
           - {tag: mqtt, binary: mmc}
           - {tag: nats, binary: nmc}
           - {tag: pulsar, binary: pmc}
           - {tag: rabbitmq, binary: rmc}
+          - {tag: redis, binary: redmc}
         exclude:
         - goarch: arm64
           goos: windows

@@ -5,6 +5,7 @@ package azuresb
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
@@ -61,6 +62,9 @@ func AdminClient(args ConnArguments) (*admin.Client, error) {
 }
 
 func ensureQueue(ctx context.Context, adm *admin.Client, name string) error {
+	if isSubQueue(name) {
+		return nil // sub-queues (e.g. /$deadletterqueue) are not top-level entities
+	}
 	_, err := adm.GetQueue(ctx, name, nil)
 	if err == nil {
 		return nil
@@ -70,6 +74,14 @@ func ensureQueue(ctx context.Context, adm *admin.Client, name string) error {
 		return fmt.Errorf("creating queue %s: %w", name, err)
 	}
 	return nil
+}
+
+// isSubQueue returns true for Azure Service Bus sub-queue paths such as
+// "myqueue/$deadletterqueue" or "myqueue/$DeadLetterQueue". These are
+// not standalone entities and must not be created or looked up via the
+// admin API.
+func isSubQueue(name string) bool {
+	return strings.Contains(name, "/$")
 }
 
 func ensureTopic(ctx context.Context, adm *admin.Client, topic string) error {
