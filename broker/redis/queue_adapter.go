@@ -1,4 +1,4 @@
-//go:build redmc
+//go:build redis
 
 package redis
 
@@ -137,5 +137,5 @@ func (a *QueueAdapter) ensureGroup(ctx context.Context, key string) error {
 }
 
 func isBusyGroupError(err error) bool {
-	return err != nil && errors.Is(err, redis.Nil) || (err != nil && err.Error() == "BUSYGROUP Consumer Group name already exists")
+	return err != nil && err.Error() == "BUSYGROUP Consumer Group name already exists"
 }

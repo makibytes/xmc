@@ -8,71 +8,34 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/mqtt"
 	"github.com/makibytes/xmc/cmd"
-	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
-// GetRootCommand returns the MQTT root command.
 func GetRootCommand() *cobra.Command {
-	rootCmd := &cobra.Command{
-		Use:   "mmc",
-		Short: "MQTT Messaging Client",
-		Long:  "Command-line interface for MQTT messaging",
-		PersistentPreRun: func(c *cobra.Command, args []string) {
-			if verbose, _ := c.Flags().GetBool("verbose"); verbose {
-				log.IsVerbose = true
-			}
-		},
-	}
+	var connArgs mqtt.ConnArguments
 
 	defaultServer := os.Getenv("MMC_SERVER")
 	if defaultServer == "" {
 		defaultServer = "tcp://localhost:1883"
 	}
 
-	var connArgs mqtt.ConnArguments
-	connArgs.Server = defaultServer
-	connArgs.User = os.Getenv("MMC_USER")
-	connArgs.Password = os.Getenv("MMC_PASSWORD")
-
-	rootCmd.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "MQTT broker URL")
-	rootCmd.PersistentFlags().StringVarP(&connArgs.User, "user", "u", connArgs.User, "Username")
-	rootCmd.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", connArgs.Password, "Password")
-	rootCmd.PersistentFlags().StringVar(&connArgs.ClientID, "client-id", "", "MQTT client ID (auto-generated if empty)")
-	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Print verbose output")
-
-	// TLS flags
-	rootCmd.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-	rootCmd.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
-
-	// Queue commands
-	queueFactory := cmd.QueueAdapterFactory(func() (backends.QueueBackend, error) {
-		return mqtt.NewQueueAdapter(connArgs)
+	return cmd.NewRootCommand(cmd.BrokerSpec{
+		Use:   "mmc",
+		Short: "MQTT Messaging Client",
+		Long:  "Command-line interface for MQTT messaging",
+		RegisterFlags: func(c *cobra.Command) {
+			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "MQTT broker URL")
+			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("MMC_USER"), "Username")
+			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("MMC_PASSWORD"), "Password")
+			c.PersistentFlags().StringVar(&connArgs.ClientID, "client-id", "", "MQTT client ID (auto-generated if empty)")
+			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
+			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
+			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
+			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
+			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+		},
+		Queue: func() (backends.QueueBackend, error) { return mqtt.NewQueueAdapter(connArgs) },
+		Topic: func() (backends.TopicBackend, error) { return mqtt.NewTopicAdapter(connArgs) },
+		Ping:  func() (cmd.Closeable, error) { return mqtt.NewQueueAdapter(connArgs) },
 	})
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewSendCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReceiveCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewPeekCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewRequestCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReplyCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewMoveCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewForwardCommand, queueFactory))
-
-	// Topic commands
-	topicFactory := cmd.TopicAdapterFactory(func() (backends.TopicBackend, error) {
-		return mqtt.NewTopicAdapter(connArgs)
-	})
-	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewPublishCommand, topicFactory))
-	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewSubscribeCommand, topicFactory))
-
-	// Connectivity check
-	rootCmd.AddCommand(cmd.NewPingCommand(func() (cmd.Closeable, error) {
-		return mqtt.NewQueueAdapter(connArgs)
-	}))
-
-	rootCmd.AddCommand(cmd.NewVersionCommand())
-
-	return rootCmd
 }

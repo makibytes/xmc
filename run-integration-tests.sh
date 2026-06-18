@@ -26,8 +26,8 @@ run_broker "kafka"    "kafka integration"    "./broker/kafka/"
 run_broker "nats"     "nats integration"     "./broker/nats/"
 run_broker "mqtt"     "mqtt integration"     "./broker/mqtt/"
 run_broker "pulsar"   "pulsar integration"   "./broker/pulsar/"
-run_broker "redis"    "redmc integration"    "./broker/redis/"
-run_broker "gcppubsub" "gmc integration"     "./broker/gcppubsub/"
+run_broker "redis"    "redis integration"    "./broker/redis/"
+run_broker "gcppubsub" "google integration"  "./broker/gcppubsub/"
 
 # IBM MQ requires CGO_ENABLED=1 and IBM MQ client SDK installed
 if [ "${RUN_IBMMQ:-0}" = "1" ]; then

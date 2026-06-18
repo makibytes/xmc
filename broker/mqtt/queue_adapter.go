@@ -91,27 +91,26 @@ func (a *QueueAdapter) Close() error {
 	return nil
 }
 
-// waitForMessage waits on msgCh respecting timeout/wait semantics.
+// waitForMessage waits on msgCh respecting timeout/wait semantics, using the
+// shared TimeoutDuration helper so MQTT follows the same contract as all other
+// brokers.
 func waitForMessage(msgCh <-chan pahomqtt.Message, timeout float32, wait bool) (*backends.Message, error) {
-	if wait {
-		msg := <-msgCh
-		return convertMessage(msg), nil
-	}
-
-	dur := time.Duration(timeout * float32(time.Second))
-	if dur <= 0 {
-		dur = 5 * time.Second
-	}
+	dur := backends.TimeoutDuration(timeout, wait)
 
 	select {
 	case msg := <-msgCh:
 		return convertMessage(msg), nil
 	case <-time.After(dur):
-		return nil, fmt.Errorf("receive timed out after %.1fs", float64(timeout))
+		return nil, backends.ErrNoMessageAvailable
 	}
 }
 
 // convertMessage converts a paho MQTT message to a backends.Message.
+//
+// MQTT 3.1.1 has no user properties at the protocol level, so application
+// properties, correlation ID, reply-to, content-type, and message ID cannot be
+// carried through an MQTT broker. To gain metadata parity, migrate to the
+// MQTT 5 client (eclipse/paho.golang) which supports User Properties.
 func convertMessage(msg pahomqtt.Message) *backends.Message {
 	payload := msg.Payload()
 	data := make([]byte, len(payload))

@@ -1,4 +1,4 @@
-//go:build redmc
+//go:build redis
 
 package redis
 

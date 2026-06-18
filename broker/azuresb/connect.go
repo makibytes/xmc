@@ -1,4 +1,4 @@
-//go:build azmc
+//go:build azure
 
 package azuresb
 
@@ -72,15 +72,24 @@ func ensureQueue(ctx context.Context, adm *admin.Client, name string) error {
 	return nil
 }
 
-func ensureTopicAndSub(ctx context.Context, adm *admin.Client, topic, sub string) error {
+func ensureTopic(ctx context.Context, adm *admin.Client, topic string) error {
 	_, err := adm.GetTopic(ctx, topic, nil)
+	if err == nil {
+		return nil
+	}
+	_, err = adm.CreateTopic(ctx, topic, nil)
 	if err != nil {
-		if _, createErr := adm.CreateTopic(ctx, topic, nil); createErr != nil {
-			return fmt.Errorf("creating topic %s: %w", topic, createErr)
-		}
+		return fmt.Errorf("creating topic %s: %w", topic, err)
+	}
+	return nil
+}
+
+func ensureTopicAndSub(ctx context.Context, adm *admin.Client, topic, sub string) error {
+	if err := ensureTopic(ctx, adm, topic); err != nil {
+		return err
 	}
 
-	_, err = adm.GetSubscription(ctx, topic, sub, nil)
+	_, err := adm.GetSubscription(ctx, topic, sub, nil)
 	if err != nil {
 		if _, createErr := adm.CreateSubscription(ctx, topic, sub, nil); createErr != nil {
 			return fmt.Errorf("creating subscription %s/%s: %w", topic, sub, createErr)

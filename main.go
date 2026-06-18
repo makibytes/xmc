@@ -10,7 +10,7 @@ import (
 func main() {
 	rootCmd := broker.GetRootCommand()
 	if rootCmd == nil {
-		log.Error("No broker loaded - make sure to build with a broker tag (artemis, ibmmq, kafka, mqtt, rabbitmq)")
+		log.Error("No broker loaded - build with a broker tag: artemis, aws, azure, google, ibmmq, kafka, mqtt, nats, pulsar, rabbitmq, redis")
 		os.Exit(1)
 	}
 

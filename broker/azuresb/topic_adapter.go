@@ -1,14 +1,11 @@
-//go:build azmc
+//go:build azure
 
 package azuresb
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -20,9 +17,8 @@ type ephemeralSub struct {
 }
 
 type TopicAdapter struct {
-	client       *azservicebus.Client
-	adm          *admin.Client
-	senders      map[string]*azservicebus.Sender
+	senderCache
+	adm           *admin.Client
 	ephemeralSubs []ephemeralSub
 }
 
@@ -37,14 +33,13 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 		return nil, err
 	}
 	return &TopicAdapter{
-		client:  client,
-		adm:     adm,
-		senders: make(map[string]*azservicebus.Sender),
+		senderCache: newSenderCache(client),
+		adm:         adm,
 	}, nil
 }
 
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	if err := a.ensureTopic(ctx, opts.Topic); err != nil {
+	if err := ensureTopic(ctx, a.adm, opts.Topic); err != nil {
 		return err
 	}
 
@@ -60,16 +55,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 }
 
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	var subName string
-	ephemeral := false
-	if opts.GroupID != "" {
-		subName = opts.GroupID
-	} else if opts.Durable {
-		subName = fmt.Sprintf("xmc-durable-%s", opts.Topic)
-	} else {
-		subName = fmt.Sprintf("xmc-sub-%s", randomSuffix())
-		ephemeral = true
-	}
+	subName, ephemeral := backends.SubscriptionName(opts)
 
 	if err := ensureTopicAndSub(ctx, a.adm, opts.Topic, subName); err != nil {
 		return nil, err
@@ -78,7 +64,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		a.ephemeralSubs = append(a.ephemeralSubs, ephemeralSub{topic: opts.Topic, sub: subName})
 	}
 
-	recv, err := a.client.NewReceiverForSubscription(opts.Topic, subName, nil)
+	recv, err := a.senderCache.client.NewReceiverForSubscription(opts.Topic, subName, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating subscription receiver %s/%s: %w", opts.Topic, subName, err)
 	}
@@ -113,39 +99,7 @@ func (a *TopicAdapter) Close() error {
 		a.adm.DeleteSubscription(ctx, es.topic, es.sub, nil) //nolint:errcheck
 	}
 
-	for _, s := range a.senders {
-		s.Close(ctx) //nolint:errcheck
-	}
-
-	return a.client.Close(ctx)
+	a.closeSenders(ctx)
+	return a.senderCache.client.Close(ctx)
 }
 
-func (a *TopicAdapter) ensureTopic(ctx context.Context, topic string) error {
-	_, err := a.adm.GetTopic(ctx, topic, nil)
-	if err == nil {
-		return nil
-	}
-	_, err = a.adm.CreateTopic(ctx, topic, nil)
-	if err != nil {
-		return fmt.Errorf("creating topic %s: %w", topic, err)
-	}
-	return nil
-}
-
-func (a *TopicAdapter) getSender(topic string) (*azservicebus.Sender, error) {
-	if s, ok := a.senders[topic]; ok {
-		return s, nil
-	}
-	s, err := a.client.NewSender(topic, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating sender for topic %s: %w", topic, err)
-	}
-	a.senders[topic] = s
-	return s, nil
-}
-
-func randomSuffix() string {
-	var b [6]byte
-	rand.Read(b[:]) //nolint:errcheck
-	return hex.EncodeToString(b[:])
-}

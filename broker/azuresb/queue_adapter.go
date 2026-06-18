@@ -1,4 +1,4 @@
-//go:build azmc
+//go:build azure
 
 package azuresb
 
@@ -6,16 +6,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
 
 	"github.com/makibytes/xmc/broker/backends"
 )
 
 type QueueAdapter struct {
-	client  *azservicebus.Client
-	adm     *admin.Client
-	senders map[string]*azservicebus.Sender
+	senderCache
+	adm *admin.Client
 }
 
 func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
@@ -29,9 +27,8 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 		return nil, err
 	}
 	return &QueueAdapter{
-		client:  client,
-		adm:     adm,
-		senders: make(map[string]*azservicebus.Sender),
+		senderCache: newSenderCache(client),
+		adm:         adm,
 	}, nil
 }
 
@@ -60,7 +57,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return a.peek(ctx, opts)
 	}
 
-	recv, err := a.client.NewReceiverForQueue(opts.Queue, nil)
+	recv, err := a.senderCache.client.NewReceiverForQueue(opts.Queue, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating receiver for queue %s: %w", opts.Queue, err)
 	}
@@ -89,7 +86,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 }
 
 func (a *QueueAdapter) peek(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	recv, err := a.client.NewReceiverForQueue(opts.Queue, nil)
+	recv, err := a.senderCache.client.NewReceiverForQueue(opts.Queue, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating receiver for queue %s: %w", opts.Queue, err)
 	}
@@ -115,20 +112,6 @@ func (a *QueueAdapter) peek(ctx context.Context, opts backends.ReceiveOptions) (
 
 func (a *QueueAdapter) Close() error {
 	ctx := context.Background()
-	for _, s := range a.senders {
-		s.Close(ctx) //nolint:errcheck
-	}
-	return a.client.Close(ctx)
-}
-
-func (a *QueueAdapter) getSender(queue string) (*azservicebus.Sender, error) {
-	if s, ok := a.senders[queue]; ok {
-		return s, nil
-	}
-	s, err := a.client.NewSender(queue, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating sender for queue %s: %w", queue, err)
-	}
-	a.senders[queue] = s
-	return s, nil
+	a.closeSenders(ctx)
+	return a.senderCache.client.Close(ctx)
 }

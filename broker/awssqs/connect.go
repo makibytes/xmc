@@ -1,4 +1,4 @@
-//go:build awsmc
+//go:build aws
 
 package awssqs
 

@@ -1,4 +1,4 @@
-//go:build azmc
+//go:build azure
 
 package azuresb
 

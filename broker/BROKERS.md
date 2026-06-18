@@ -202,7 +202,7 @@ flowchart LR
 ### Redis
 
 - Protocol: Redis Streams + consumer groups
-- Binary: `redmc`, build tag: `redmc`
+- Binary: `redmc`, build tag: `redis`
 - **Queue topology**: Redis Streams (`xmc:queue:{name}`) with a single consumer group (`xmc-queue`). `XADD` to send, `XREADGROUP` + `XACK` + `XDEL` to receive (true work-queue semantics). Peek uses `XRANGE` (non-destructive, no ack needed).
 - **Topic topology**: Also Redis Streams (`xmc:topic:{name}`) with `MAXLEN ~ 10000` approximate trimming. Independent subscribers use `XREAD` starting from `$` (new-messages-only fan-out, each subscriber tracks its own offset). `--group` maps to consumer groups (`XREADGROUP` + `XACK`, competing consumers within the group). `--durable` groups persist their read offset across reconnections.
 - TLS: auto-detected via `rediss://` URL scheme or `--tls` flag
@@ -227,7 +227,7 @@ flowchart LR
 ### Google Cloud Pub/Sub
 
 - Protocol: gRPC (Google Cloud Pub/Sub API)
-- Binary: `gmc`, build tag: `gmc`
+- Binary: `gmc`, build tag: `google`
 - **Queue topology**: A topic + a single shared subscription (`xmc-queue-{name}`) — messages are distributed among competing consumers, each delivered to exactly one. The subscription is auto-created on first `send` so messages are retained before the first `receive`.
 - **Topic topology**: Ephemeral per-subscriber subscriptions for true fan-out (auto-deleted on close). `--group` maps to a stable named subscription (competing consumers within the group). `--durable` uses a persistent subscription that retains its read position.
 - Peek: uses `Nack` so messages are redelivered
@@ -255,7 +255,7 @@ flowchart LR
 ### AWS SQS + SNS
 
 - Protocol: AWS SDK v2 (HTTPS REST APIs)
-- Binary: `awsmc`, build tag: `awsmc`
+- Binary: `awsmc`, build tag: `aws`
 - **Queue topology**: SQS queues (native point-to-point). `CreateQueue` is idempotent. `ReceiveMessage` + `DeleteMessage` = ack. Peek uses `VisibilityTimeout: 0` + `ChangeMessageVisibility` so the message is not consumed.
 - **Topic topology**: SNS topics with SNS→SQS fan-out. Each subscriber gets an auto-created SQS queue subscribed to the SNS topic with `RawMessageDelivery: true` (preserves payload + message attributes). `--group` maps to a shared SQS queue name (competing consumers). Ephemeral subscriber queues are cleaned up on close.
 - Application properties: carried as SQS/SNS `MessageAttributes` (`DataType: "String"`). The four metadata keys (`message-id`, `correlation-id`, `reply-to`, `content-type`) are reserved attributes.
@@ -281,7 +281,7 @@ flowchart LR
 ### Azure Service Bus
 
 - Protocol: AMQP 1.0 (via Azure SDK)
-- Binary: `azmc`, build tag: `azmc`
+- Binary: `azmc`, build tag: `azure`
 - **Queue topology**: Native Service Bus queues. `NewSender` + `SendMessage` to send; `NewReceiverForQueue` + `ReceiveMessages` + `CompleteMessage` to receive (ack). **Native `PeekMessages`** — the only broker alongside Service Bus with true non-destructive peek at the API level.
 - **Topic topology**: Native Service Bus topics + subscriptions. Each subscriber gets a subscription; `--group` maps to a shared subscription name (competing consumers). `--durable` creates a persistent subscription. Ephemeral subscriptions are deleted on close.
 - **Native per-message TTL**: `TimeToLive` field on the message (maps to `--ttl`). This is the only cloud broker with first-class per-message expiry.

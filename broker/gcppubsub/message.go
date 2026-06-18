@@ -1,4 +1,4 @@
-//go:build gmc
+//go:build google
 
 package gcppubsub
 

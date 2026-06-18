@@ -174,17 +174,31 @@ func queueSubject(queue string) string {
 	return fmt.Sprintf("xmc.queue.%s", queue)
 }
 
-// natsToBackendMessage converts a NATS message to a backends.Message.
+// natsToBackendMessage converts a NATS message to a backends.Message,
+// extracting the four reserved metadata keys into the typed fields so that
+// request/reply and -F templating work consistently with other brokers.
 func natsToBackendMessage(msg *natsclient.Msg) *backends.Message {
-	props := make(map[string]any)
+	result := &backends.Message{
+		Data:       msg.Data,
+		Properties: make(map[string]any),
+	}
 	for k, vals := range msg.Header {
-		if len(vals) > 0 {
-			props[k] = vals[0]
+		if len(vals) == 0 {
+			continue
+		}
+		v := vals[0]
+		switch k {
+		case backends.PropMessageID:
+			result.MessageID = v
+		case backends.PropCorrelationID:
+			result.CorrelationID = v
+		case backends.PropReplyTo:
+			result.ReplyTo = v
+		case backends.PropContentType:
+			result.ContentType = v
+		default:
+			result.Properties[k] = v
 		}
 	}
-
-	return &backends.Message{
-		Data:       msg.Data,
-		Properties: props,
-	}
+	return result
 }

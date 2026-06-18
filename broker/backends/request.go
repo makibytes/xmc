@@ -2,11 +2,8 @@ package backends
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // Request/reply defaults.
@@ -76,13 +73,7 @@ func EnsureCorrelationID(opts *RequestOptions) string {
 }
 
 func newCorrelationID() string {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failure is virtually impossible; fall back to a
-		// timestamp so a request can still proceed.
-		return fmt.Sprintf("xmc-%d", time.Now().UnixNano())
-	}
-	return "xmc-" + hex.EncodeToString(b[:])
+	return "xmc-" + RandomSuffix() + RandomSuffix()
 }
 
 // Request performs a request/reply exchange against qb. If qb implements

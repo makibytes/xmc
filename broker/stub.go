@@ -1,4 +1,5 @@
-//go:build !artemis && !kafka && !ibmmq && !mqtt && !rabbitmq && !nats && !pulsar && !redmc && !gmc && !awsmc && !azmc
+// NOTE: this constraint must be extended whenever a new broker tag is added.
+//go:build !artemis && !kafka && !ibmmq && !mqtt && !rabbitmq && !nats && !pulsar && !redis && !google && !aws && !azure
 
 package broker
 

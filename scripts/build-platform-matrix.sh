@@ -96,10 +96,10 @@ for target in "${TARGETS[@]}"; do
   build_pure_go_flavor "rabbitmq" "rmc" "${goos}" "${goarch}"
   build_pure_go_flavor "nats" "nmc" "${goos}" "${goarch}"
   build_pure_go_flavor "pulsar" "pmc" "${goos}" "${goarch}"
-  build_pure_go_flavor "redmc" "redmc" "${goos}" "${goarch}"
-  build_pure_go_flavor "gmc" "gmc" "${goos}" "${goarch}"
-  build_pure_go_flavor "awsmc" "awsmc" "${goos}" "${goarch}"
-  build_pure_go_flavor "azmc" "azmc" "${goos}" "${goarch}"
+  build_pure_go_flavor "redis" "redmc" "${goos}" "${goarch}"
+  build_pure_go_flavor "google" "gmc" "${goos}" "${goarch}"
+  build_pure_go_flavor "aws" "awsmc" "${goos}" "${goarch}"
+  build_pure_go_flavor "azure" "azmc" "${goos}" "${goarch}"
 
   build_ibm_flavor "${goos}" "${goarch}"
 

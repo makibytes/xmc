@@ -61,7 +61,7 @@ func doPing(c *cobra.Command, connect Connector) error {
 	defer stop()
 
 	var ok, failed int
-	var min, max, sum time.Duration
+	var minRTT, maxRTT, sumRTT time.Duration
 
 	for seq := 1; count <= 0 || seq <= count; seq++ {
 		start := time.Now()
@@ -74,13 +74,13 @@ func doPing(c *cobra.Command, connect Connector) error {
 		} else {
 			_ = conn.Close()
 			ok++
-			if ok == 1 || elapsed < min {
-				min = elapsed
+			if ok == 1 || elapsed < minRTT {
+				minRTT = elapsed
 			}
-			if elapsed > max {
-				max = elapsed
+			if elapsed > maxRTT {
+				maxRTT = elapsed
 			}
-			sum += elapsed
+			sumRTT += elapsed
 			fmt.Printf("connected: seq=%d time=%s\n", seq, elapsed.Round(time.Microsecond))
 		}
 
@@ -100,10 +100,10 @@ func doPing(c *cobra.Command, connect Connector) error {
 	total := ok + failed
 	fmt.Printf("--- %s ping statistics ---\n", label)
 	if ok > 0 {
-		avg := sum / time.Duration(ok)
+		avg := sumRTT / time.Duration(ok)
 		fmt.Printf("%d attempt(s), %d ok, %d failed, rtt min/avg/max = %s/%s/%s\n",
 			total, ok, failed,
-			min.Round(time.Microsecond), avg.Round(time.Microsecond), max.Round(time.Microsecond))
+			minRTT.Round(time.Microsecond), avg.Round(time.Microsecond), maxRTT.Round(time.Microsecond))
 	} else {
 		fmt.Printf("%d attempt(s), %d ok, %d failed\n", total, ok, failed)
 	}

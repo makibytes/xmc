@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -15,7 +14,7 @@ func NewPeekCommand(backend backends.QueueBackend) *cobra.Command {
 		Short: "Peek at a message in the queue without removing it (non-destructive read)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return doPeek(cmd, args, backend)
+			return doReceive(cmd, args, backend, false)
 		},
 	}
 
@@ -31,43 +30,4 @@ func NewPeekCommand(backend backends.QueueBackend) *cobra.Command {
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
 
 	return cmd
-}
-
-func doPeek(cmd *cobra.Command, args []string, backend backends.QueueBackend) error {
-	timeout := float32(getDuration(cmd, "timeout").Seconds())
-	wait, _ := cmd.Flags().GetBool("wait")
-	quiet, _ := cmd.Flags().GetBool("quiet")
-	count, _ := cmd.Flags().GetInt("count")
-	jsonOutput, _ := cmd.Flags().GetBool("json")
-	selector, _ := cmd.Flags().GetString("selector")
-	format, _ := cmd.Flags().GetString("format")
-	ndjson, _ := cmd.Flags().GetBool("ndjson")
-	forStr, _ := cmd.Flags().GetString("for")
-	stats, _ := cmd.Flags().GetBool("stats")
-
-	duration, err := parseDurationFlag(forStr)
-	if err != nil {
-		return err
-	}
-	follow := duration > 0 || stats
-
-	opts := backends.ReceiveOptions{
-		Queue:       args[0],
-		Timeout:     timeout,
-		Wait:        wait,
-		Acknowledge: false, // peek = non-destructive
-		Verbosity:   commandVerbosity(quiet),
-		Selector:    selector,
-	}
-
-	return runConsume(func(ctx context.Context) (*backends.Message, error) {
-		return backend.Receive(ctx, opts)
-	}, consumeConfig{
-		count:      count,
-		jsonOutput: jsonOutput,
-		verbosity:  opts.Verbosity,
-		format:     format,
-		ndjson:     ndjson,
-		follow:     follow,
-	}, duration, stats)
 }

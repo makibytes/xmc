@@ -1,9 +1,8 @@
-//go:build azmc
+//go:build azure
 
 package azuresb
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
@@ -34,9 +33,9 @@ func toSBMessage(data []byte, props map[string]any, messageID, correlationID, re
 	}
 
 	if len(props) > 0 {
-		appProps := make(map[string]any, len(props))
-		for k, v := range props {
-			appProps[k] = fmt.Sprintf("%v", v)
+		appProps := make(map[string]any, len(backends.StringifyProps(props)))
+		for k, v := range backends.StringifyProps(props) {
+			appProps[k] = v
 		}
 		msg.ApplicationProperties = appProps
 	}
@@ -65,7 +64,7 @@ func sbToBackendMessage(msg *azservicebus.ReceivedMessage) *backends.Message {
 	}
 
 	for k, v := range msg.ApplicationProperties {
-		result.Properties[k] = fmt.Sprintf("%v", v)
+		result.Properties[k] = v
 	}
 
 	if msg.SequenceNumber != nil {

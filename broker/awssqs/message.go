@@ -1,4 +1,4 @@
-//go:build awsmc
+//go:build aws
 
 package awssqs
 
@@ -9,49 +9,43 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// messageAttributes builds the unified string map of message metadata and
+// application properties. Both SQS and SNS callers convert from this.
+func messageAttributes(props map[string]any, messageID, correlationID, replyTo, contentType string) map[string]string {
+	attrs := backends.StringifyProps(props)
+	set := func(key, val string) {
+		if val != "" {
+			attrs[key] = val
+		}
+	}
+	set(backends.PropMessageID, messageID)
+	set(backends.PropCorrelationID, correlationID)
+	set(backends.PropReplyTo, replyTo)
+	set(backends.PropContentType, contentType)
+	return attrs
+}
+
 func sqsAttributes(props map[string]any, messageID, correlationID, replyTo, contentType string) map[string]sqstypes.MessageAttributeValue {
-	attrs := make(map[string]sqstypes.MessageAttributeValue)
-	for k, v := range backends.StringifyProps(props) {
+	raw := messageAttributes(props, messageID, correlationID, replyTo, contentType)
+	attrs := make(map[string]sqstypes.MessageAttributeValue, len(raw))
+	for k, v := range raw {
 		attrs[k] = sqstypes.MessageAttributeValue{
 			DataType:    strPtr("String"),
-			StringValue: &v,
+			StringValue: strPtr(v),
 		}
 	}
-	setAttr := func(key, val string) {
-		if val != "" {
-			attrs[key] = sqstypes.MessageAttributeValue{
-				DataType:    strPtr("String"),
-				StringValue: &val,
-			}
-		}
-	}
-	setAttr(backends.PropMessageID, messageID)
-	setAttr(backends.PropCorrelationID, correlationID)
-	setAttr(backends.PropReplyTo, replyTo)
-	setAttr(backends.PropContentType, contentType)
 	return attrs
 }
 
 func snsAttributes(props map[string]any, messageID, correlationID, replyTo, contentType string) map[string]snstypes.MessageAttributeValue {
-	attrs := make(map[string]snstypes.MessageAttributeValue)
-	for k, v := range backends.StringifyProps(props) {
+	raw := messageAttributes(props, messageID, correlationID, replyTo, contentType)
+	attrs := make(map[string]snstypes.MessageAttributeValue, len(raw))
+	for k, v := range raw {
 		attrs[k] = snstypes.MessageAttributeValue{
 			DataType:    strPtr("String"),
-			StringValue: &v,
+			StringValue: strPtr(v),
 		}
 	}
-	setAttr := func(key, val string) {
-		if val != "" {
-			attrs[key] = snstypes.MessageAttributeValue{
-				DataType:    strPtr("String"),
-				StringValue: &val,
-			}
-		}
-	}
-	setAttr(backends.PropMessageID, messageID)
-	setAttr(backends.PropCorrelationID, correlationID)
-	setAttr(backends.PropReplyTo, replyTo)
-	setAttr(backends.PropContentType, contentType)
 	return attrs
 }
 

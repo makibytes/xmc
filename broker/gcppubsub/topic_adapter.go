@@ -1,12 +1,9 @@
-//go:build gmc
+//go:build google
 
 package gcppubsub
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
 	"sync"
 
 	"cloud.google.com/go/pubsub"
@@ -50,13 +47,8 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		return nil, err
 	}
 
-	var subName string
-	if opts.GroupID != "" {
-		subName = opts.GroupID
-	} else if opts.Durable {
-		subName = fmt.Sprintf("xmc-durable-%s", opts.Topic)
-	} else {
-		subName = fmt.Sprintf("xmc-sub-%s", randomSuffix())
+	subName, ephemeral := backends.SubscriptionName(opts)
+	if ephemeral {
 		a.ephemeral = append(a.ephemeral, subName)
 	}
 
@@ -109,8 +101,3 @@ func (a *TopicAdapter) Close() error {
 	return nil
 }
 
-func randomSuffix() string {
-	var b [6]byte
-	rand.Read(b[:]) //nolint:errcheck
-	return hex.EncodeToString(b[:])
-}

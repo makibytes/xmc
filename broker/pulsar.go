@@ -3,106 +3,55 @@
 package broker
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
 	pulsarpkg "github.com/makibytes/xmc/broker/pulsar"
 	"github.com/makibytes/xmc/cmd"
-	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
-// GetRootCommand returns the Pulsar root command.
 func GetRootCommand() *cobra.Command {
-	rootCmd := &cobra.Command{
-		Use:   "pmc",
-		Short: "Pulsar Messaging Client",
-		Long:  "Command-line interface for Apache Pulsar messaging",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
-				log.IsVerbose = true
-			}
-		},
-	}
+	var connArgs pulsarpkg.ConnArguments
+	var adminPort int
 
 	defaultServer := os.Getenv("PMC_SERVER")
 	if defaultServer == "" {
 		defaultServer = "pulsar://localhost:6650"
 	}
-	defaultUser := os.Getenv("PMC_USER")
-	defaultPassword := os.Getenv("PMC_PASSWORD")
 
-	var connArgs pulsarpkg.ConnArguments
-
-	rootCmd.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
-	rootCmd.PersistentFlags().StringVarP(&connArgs.User, "user", "u", defaultUser, "Username for authentication")
-	rootCmd.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", defaultPassword, "Password for authentication")
-	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Print verbose output")
-
-	// TLS flags
-	rootCmd.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-	rootCmd.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
-
-	// Queue commands
-	queueFactory := cmd.QueueAdapterFactory(func() (backends.QueueBackend, error) {
-		return pulsarpkg.NewQueueAdapter(connArgs)
-	})
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewSendCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReceiveCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewPeekCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewRequestCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReplyCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewMoveCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewForwardCommand, queueFactory))
-
-	// Topic commands
-	topicFactory := cmd.TopicAdapterFactory(func() (backends.TopicBackend, error) {
-		return pulsarpkg.NewTopicAdapter(connArgs)
-	})
-	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewPublishCommand, topicFactory))
-	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewSubscribeCommand, topicFactory))
-
-	// Management commands
-	rootCmd.AddCommand(newPulsarManageCommand(&connArgs))
-
-	// Connectivity check
-	rootCmd.AddCommand(cmd.NewPingCommand(func() (cmd.Closeable, error) {
-		return pulsarpkg.NewQueueAdapter(connArgs)
-	}))
-
-	rootCmd.AddCommand(cmd.NewVersionCommand())
-
-	return rootCmd
-}
-
-func newPulsarManageCommand(connArgs *pulsarpkg.ConnArguments) *cobra.Command {
-	var adminPort int
-
-	mgmtCmd := &cobra.Command{
-		Use:   "manage",
-		Short: "Broker management operations",
-	}
-
-	mgmtCmd.PersistentFlags().IntVar(&adminPort, "admin-port", 8080, "Pulsar admin REST API port")
-
-	mgmtCmd.AddCommand(&cobra.Command{
-		Use:   "list",
-		Short: "List topics in public/default namespace",
-		RunE: func(c *cobra.Command, args []string) error {
-			topics, err := pulsarpkg.ListTopics(*connArgs, adminPort)
-			if err != nil {
-				return err
-			}
-			for _, t := range topics {
-				fmt.Println(t.Name)
-			}
-			return nil
+	return cmd.NewRootCommand(cmd.BrokerSpec{
+		Use:   "pmc",
+		Short: "Pulsar Messaging Client",
+		Long:  "Command-line interface for Apache Pulsar messaging",
+		RegisterFlags: func(c *cobra.Command) {
+			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
+			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("PMC_USER"), "Username for authentication")
+			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("PMC_PASSWORD"), "Password for authentication")
+			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
+			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
+			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
+			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
+			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
 		},
+		Queue: func() (backends.QueueBackend, error) { return pulsarpkg.NewQueueAdapter(connArgs) },
+		Topic: func() (backends.TopicBackend, error) { return pulsarpkg.NewTopicAdapter(connArgs) },
+		Ping:  func() (cmd.Closeable, error) { return pulsarpkg.NewQueueAdapter(connArgs) },
+		Manage: cmd.NewManageCommand(cmd.ManageSpec{
+			SetupFlags: func(c *cobra.Command) {
+				c.PersistentFlags().IntVar(&adminPort, "admin-port", 8080, "Pulsar admin REST API port")
+			},
+			ListTopics: func() ([]backends.TopicInfo, error) {
+				topics, err := pulsarpkg.ListTopics(connArgs, adminPort)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]backends.TopicInfo, len(topics))
+				for i, t := range topics {
+					out[i] = backends.TopicInfo{Name: t.Name}
+				}
+				return out, nil
+			},
+		}),
 	})
-
-	return mgmtCmd
 }

@@ -1,13 +1,10 @@
-//go:build awsmc
+//go:build aws
 
 package awssqs
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -55,16 +52,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		return nil, err
 	}
 
-	var queueName string
-	ephemeral := false
-	if opts.GroupID != "" {
-		queueName = opts.GroupID
-	} else if opts.Durable {
-		queueName = fmt.Sprintf("xmc-durable-%s", opts.Topic)
-	} else {
-		queueName = fmt.Sprintf("xmc-sub-%s", randomSuffix())
-		ephemeral = true
-	}
+	queueName, ephemeral := backends.SubscriptionName(opts)
 
 	queueURL, err := ensureQueue(ctx, a.sqsc, queueName)
 	if err != nil {
@@ -106,50 +94,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	}
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-	deadline := time.Now().Add(timeout)
-
-	allAttrs := "All"
-	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return nil, backends.ErrNoMessageAvailable
-		}
-
-		waitSecs := int32(remaining.Seconds())
-		if waitSecs > 20 {
-			waitSecs = 20
-		}
-		if waitSecs < 1 {
-			waitSecs = 1
-		}
-
-		out, err := a.sqsc.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl:              &queueURL,
-			MaxNumberOfMessages:   1,
-			WaitTimeSeconds:       waitSecs,
-			MessageAttributeNames: []string{allAttrs},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("receiving from subscriber queue: %w", err)
-		}
-
-		if len(out.Messages) == 0 {
-			if time.Now().After(deadline) {
-				return nil, backends.ErrNoMessageAvailable
-			}
-			continue
-		}
-
-		msg := out.Messages[0]
-		if msg.ReceiptHandle != nil {
-			a.sqsc.DeleteMessage(ctx, &sqs.DeleteMessageInput{
-				QueueUrl:      &queueURL,
-				ReceiptHandle: msg.ReceiptHandle,
-			}) //nolint:errcheck
-		}
-
-		return sqsToBackendMessage(msg), nil
-	}
+	return pollSQS(ctx, a.sqsc, queueURL, timeout, true, "subscriber queue "+queueName)
 }
 
 func (a *TopicAdapter) Close() error {
@@ -170,8 +115,3 @@ func (a *TopicAdapter) Close() error {
 	return nil
 }
 
-func randomSuffix() string {
-	var b [6]byte
-	rand.Read(b[:]) //nolint:errcheck
-	return hex.EncodeToString(b[:])
-}

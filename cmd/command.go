@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,11 @@ func WrapQueueCommand(newCmd func(backends.QueueBackend) *cobra.Command, factory
 		if err != nil {
 			return err
 		}
-		defer adapter.Close()
+		defer func() {
+			if cerr := adapter.Close(); cerr != nil {
+				log.Verbose("close: %s", cerr)
+			}
+		}()
 		return newCmd(adapter).RunE(c, args)
 	}
 	return cmd
@@ -36,7 +41,11 @@ func WrapTopicCommand(newCmd func(backends.TopicBackend) *cobra.Command, factory
 		if err != nil {
 			return err
 		}
-		defer adapter.Close()
+		defer func() {
+			if cerr := adapter.Close(); cerr != nil {
+				log.Verbose("close: %s", cerr)
+			}
+		}()
 		return newCmd(adapter).RunE(c, args)
 	}
 	return cmd

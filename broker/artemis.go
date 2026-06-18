@@ -4,196 +4,109 @@ package broker
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/makibytes/xmc/broker/artemis"
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/cmd"
-	"github.com/makibytes/xmc/log"
 	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
-// GetRootCommand returns the Artemis root command
 func GetRootCommand() *cobra.Command {
-	rootCmd := &cobra.Command{
-		Use:   "amc",
-		Short: "Apache Artemis Messaging Client",
-		Long:  "Command-line interface for Apache Artemis messaging",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
-				log.IsVerbose = true
-			}
-		},
-	}
+	var connArgs artemis.ConnArguments
 
-	// Connection flags
-	var defaultServer = os.Getenv("AMC_SERVER")
+	defaultServer := os.Getenv("AMC_SERVER")
 	if defaultServer == "" {
 		defaultServer = "amqp://localhost:5672"
 	}
-	var defaultUser = os.Getenv("AMC_USER")
-	var defaultPassword = os.Getenv("AMC_PASSWORD")
 
-	var connArgs artemis.ConnArguments
-
-	rootCmd.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
-	rootCmd.PersistentFlags().StringVarP(&connArgs.User, "user", "u", defaultUser, "Username for SASL PLAIN login")
-	rootCmd.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", defaultPassword, "Password for SASL PLAIN login")
-	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Print verbose output")
-
-	// TLS flags
-	rootCmd.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-	rootCmd.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-	rootCmd.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
-
-	// Queue commands
-	queueFactory := cmd.QueueAdapterFactory(func() (backends.QueueBackend, error) {
-		return artemis.NewQueueAdapter(connArgs)
-	})
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewSendCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReceiveCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewPeekCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewRequestCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewReplyCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewMoveCommand, queueFactory))
-	rootCmd.AddCommand(cmd.WrapQueueCommand(cmd.NewForwardCommand, queueFactory))
-
-	// Topic commands
-	topicFactory := cmd.TopicAdapterFactory(func() (backends.TopicBackend, error) {
-		return artemis.NewTopicAdapter(connArgs)
-	})
-	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewPublishCommand, topicFactory))
-	rootCmd.AddCommand(cmd.WrapTopicCommand(cmd.NewSubscribeCommand, topicFactory))
-
-	// Management commands
-	rootCmd.AddCommand(newManageCommand(connArgs))
-
-	// Connectivity check
-	rootCmd.AddCommand(cmd.NewPingCommand(func() (cmd.Closeable, error) {
-		return artemis.NewQueueAdapter(connArgs)
-	}))
-
-	// MCP server: exposes the messaging + management operations as tools for AI
-	// agents. Connection details are captured in the closures below, so they are
-	// configured once (flags/env) and never become tool parameters.
-	rootCmd.AddCommand(mcp.NewCommand(mcp.Deps{
-		ServerName:    "xmc-artemis",
-		ServerVersion: cmd.Version(),
-		Target:        connArgs.Server,
-		NewQueue: func() (backends.QueueBackend, error) {
-			return artemis.NewQueueAdapter(connArgs)
-		},
-		NewTopic: func() (backends.TopicBackend, error) {
-			return artemis.NewTopicAdapter(connArgs)
-		},
-		ListQueues: func(ctx context.Context) ([]mcp.QueueInfo, error) {
-			mgmtArgs := artemis.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password}
-			queues, err := artemis.ListQueues(mgmtArgs)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]mcp.QueueInfo, 0, len(queues))
-			for _, q := range queues {
-				out = append(out, mcp.QueueInfo{
-					Name:          q.Name,
-					RoutingType:   q.RoutingType,
-					MessageCount:  int64(q.MessageCount),
-					ConsumerCount: int64(q.ConsumerCount),
-				})
-			}
-			return out, nil
-		},
-		PurgeQueue: func(ctx context.Context, queue string) (int64, error) {
-			mgmtArgs := artemis.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password}
-			return artemis.PurgeQueue(mgmtArgs, queue)
-		},
-		QueueStats: func(ctx context.Context, queue string) (*mcp.QueueStats, error) {
-			mgmtArgs := artemis.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password}
-			stats, err := artemis.GetQueueStats(mgmtArgs, queue)
-			if err != nil {
-				return nil, err
-			}
-			return &mcp.QueueStats{
-				Name:          stats.Name,
-				MessageCount:  int64(stats.MessageCount),
-				ConsumerCount: int64(stats.ConsumerCount),
-				EnqueueCount:  int64(stats.EnqueueCount),
-				DequeueCount:  int64(stats.DequeueCount),
-			}, nil
-		},
-	}))
-
-	rootCmd.AddCommand(cmd.NewVersionCommand())
-
-	return rootCmd
-}
-
-func newManageCommand(connArgs artemis.ConnArguments) *cobra.Command {
-	mgmtCmd := &cobra.Command{
-		Use:   "manage",
-		Short: "Broker management operations (list, purge, stats)",
+	mgmtArgs := func() artemis.ManagementArgs {
+		return artemis.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password}
 	}
 
-	mgmtCmd.AddCommand(&cobra.Command{
-		Use:   "list",
-		Short: "List queues and topics",
-		RunE: func(c *cobra.Command, args []string) error {
-			mgmtArgs := artemis.ManagementArgs{
-				Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password,
-			}
-			queues, err := artemis.ListQueues(mgmtArgs)
-			if err != nil {
-				return err
-			}
-			for _, q := range queues {
-				fmt.Printf("%-40s  type=%-10s  messages=%d  consumers=%d\n",
-					q.Name, q.RoutingType, q.MessageCount, q.ConsumerCount)
-			}
-			return nil
+	return cmd.NewRootCommand(cmd.BrokerSpec{
+		Use:   "amc",
+		Short: "Apache Artemis Messaging Client",
+		Long:  "Command-line interface for Apache Artemis messaging",
+		RegisterFlags: func(c *cobra.Command) {
+			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
+			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("AMC_USER"), "Username for SASL PLAIN login")
+			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("AMC_PASSWORD"), "Password for SASL PLAIN login")
+			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
+			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
+			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
+			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
+			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+		},
+		Queue: func() (backends.QueueBackend, error) { return artemis.NewQueueAdapter(connArgs) },
+		Topic: func() (backends.TopicBackend, error) { return artemis.NewTopicAdapter(connArgs) },
+		Ping:  func() (cmd.Closeable, error) { return artemis.NewQueueAdapter(connArgs) },
+		Manage: cmd.NewManageCommand(cmd.ManageSpec{
+			ListQueues: func() ([]backends.QueueInfo, error) {
+				queues, err := artemis.ListQueues(mgmtArgs())
+				if err != nil {
+					return nil, err
+				}
+				out := make([]backends.QueueInfo, len(queues))
+				for i, q := range queues {
+					out[i] = backends.QueueInfo{Name: q.Name, MessageCount: q.MessageCount, ConsumerCount: q.ConsumerCount}
+				}
+				return out, nil
+			},
+			Purge: func(queue string) (int64, error) { return artemis.PurgeQueue(mgmtArgs(), queue) },
+			Stats: func(queue string) (*backends.QueueStats, error) {
+				stats, err := artemis.GetQueueStats(mgmtArgs(), queue)
+				if err != nil {
+					return nil, err
+				}
+				return &backends.QueueStats{
+					Name: stats.Name, MessageCount: stats.MessageCount,
+					ConsumerCount: stats.ConsumerCount, EnqueueCount: stats.EnqueueCount,
+					DequeueCount: stats.DequeueCount,
+				}, nil
+			},
+		}),
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-artemis",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return artemis.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return artemis.NewTopicAdapter(connArgs)
+				},
+				ListQueues: func(ctx context.Context) ([]mcp.QueueInfo, error) {
+					queues, err := artemis.ListQueues(mgmtArgs())
+					if err != nil {
+						return nil, err
+					}
+					out := make([]mcp.QueueInfo, 0, len(queues))
+					for _, q := range queues {
+						out = append(out, mcp.QueueInfo{
+							Name: q.Name, RoutingType: q.RoutingType,
+							MessageCount: int64(q.MessageCount), ConsumerCount: int64(q.ConsumerCount),
+						})
+					}
+					return out, nil
+				},
+				PurgeQueue: func(ctx context.Context, queue string) (int64, error) {
+					return artemis.PurgeQueue(mgmtArgs(), queue)
+				},
+				QueueStats: func(ctx context.Context, queue string) (*mcp.QueueStats, error) {
+					stats, err := artemis.GetQueueStats(mgmtArgs(), queue)
+					if err != nil {
+						return nil, err
+					}
+					return &mcp.QueueStats{
+						Name: stats.Name, MessageCount: int64(stats.MessageCount),
+						ConsumerCount: int64(stats.ConsumerCount), EnqueueCount: int64(stats.EnqueueCount),
+						DequeueCount: int64(stats.DequeueCount),
+					}, nil
+				},
+			}),
 		},
 	})
-
-	mgmtCmd.AddCommand(&cobra.Command{
-		Use:   "purge <queue>",
-		Short: "Remove all messages from a queue",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(c *cobra.Command, args []string) error {
-			mgmtArgs := artemis.ManagementArgs{
-				Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password,
-			}
-			count, err := artemis.PurgeQueue(mgmtArgs, args[0])
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Purged %d messages from %s\n", count, args[0])
-			return nil
-		},
-	})
-
-	mgmtCmd.AddCommand(&cobra.Command{
-		Use:   "stats <queue>",
-		Short: "Show queue statistics",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(c *cobra.Command, args []string) error {
-			mgmtArgs := artemis.ManagementArgs{
-				Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password,
-			}
-			stats, err := artemis.GetQueueStats(mgmtArgs, args[0])
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Queue:     %s\n", stats.Name)
-			fmt.Printf("Messages:  %d\n", stats.MessageCount)
-			fmt.Printf("Consumers: %d\n", stats.ConsumerCount)
-			fmt.Printf("Enqueued:  %d\n", stats.EnqueueCount)
-			fmt.Printf("Dequeued:  %d\n", stats.DequeueCount)
-			return nil
-		},
-	})
-
-	return mgmtCmd
 }
