@@ -57,47 +57,26 @@ func (c aiConfig) refreshIntervalDuration() (time.Duration, bool) {
 
 // parseRefreshInterval parses a user-provided refresh interval string.
 // Accepted forms: "off"/"none" (disable), bare number "3" (seconds),
-// "<n>s" (seconds), "<n>m" (minutes). Returns an error for values < 1s
-// or unparseable input.
+// or any duration accepted by time.ParseDuration ("5s", "3m", "1h", etc.).
+// Returns an error for values < 1s or unparseable input.
 func parseRefreshInterval(s string) (time.Duration, bool, error) {
 	s = strings.TrimSpace(s)
-	low := strings.ToLower(s)
-	if low == "off" || low == "none" {
+	if low := strings.ToLower(s); low == "off" || low == "none" {
 		return 0, false, nil
 	}
 
-	// Try bare number (seconds).
+	var d time.Duration
 	if v, err := strconv.ParseFloat(s, 64); err == nil {
-		d := time.Duration(v * float64(time.Second))
-		if d < minRefreshInterval {
-			return 0, false, fmt.Errorf("minimum refresh interval is %s", minRefreshInterval)
-		}
-		return d, true, nil
+		d = time.Duration(v * float64(time.Second))
+	} else if pd, err := time.ParseDuration(strings.ToLower(s)); err == nil {
+		d = pd
+	} else {
+		return 0, false, fmt.Errorf("cannot parse %q as a refresh interval (e.g. 3, 5s, 3m, off)", s)
 	}
-
-	// Try number + unit suffix (s or m only).
-	if len(s) > 1 {
-		unit := s[len(s)-1]
-		numStr := s[:len(s)-1]
-		v, err := strconv.ParseFloat(numStr, 64)
-		if err == nil {
-			var d time.Duration
-			switch unit {
-			case 's', 'S':
-				d = time.Duration(v * float64(time.Second))
-			case 'm', 'M':
-				d = time.Duration(v * float64(time.Minute))
-			default:
-				return 0, false, fmt.Errorf("unsupported unit %q (use s or m)", string(unit))
-			}
-			if d < minRefreshInterval {
-				return 0, false, fmt.Errorf("minimum refresh interval is %s", minRefreshInterval)
-			}
-			return d, true, nil
-		}
+	if d < minRefreshInterval {
+		return 0, false, fmt.Errorf("minimum refresh interval is %s", minRefreshInterval)
 	}
-
-	return 0, false, fmt.Errorf("cannot parse %q as a refresh interval (e.g. 3, 3s, 3m, off)", s)
+	return d, true, nil
 }
 
 // formatRefreshInterval produces a canonical string for persisting a refresh
@@ -113,37 +92,7 @@ func formatRefreshInterval(d time.Duration, enabled bool) string {
 }
 
 // saveRefreshInterval persists the refresh-interval value to the config file.
-func saveRefreshInterval(value string) error {
-	if err := ensureXMCDir(); err != nil {
-		return err
-	}
-	path, err := configFilePath()
-	if err != nil {
-		return err
-	}
-
-	var doc yaml.Node
-	data, readErr := os.ReadFile(path)
-	if readErr == nil && len(data) > 0 {
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	}
-	if doc.Kind == 0 {
-		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
-			{Kind: yaml.MappingNode},
-		}}
-	}
-	root := doc.Content[0]
-	aiNode := yamlFindOrCreateMapping(root, "ai")
-	yamlSetScalar(aiNode, "refresh-interval", value)
-
-	out, err := yaml.Marshal(&doc)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0o600)
-}
+func saveRefreshInterval(value string) error { return saveAIConfigKey("refresh-interval", value) }
 
 func loadConfig() (*xmcConfig, error) {
 	path, err := configFilePath()
@@ -245,9 +194,12 @@ func findKey(envKeys []string, getenv envLookup) string {
 	return ""
 }
 
-// saveAIModel writes the model name to the config file under ai.model,
+// saveAIModel writes the model name to the config file under ai.model.
+func saveAIModel(model string) error { return saveAIConfigKey("model", model) }
+
+// saveAIConfigKey persists key=value under the "ai" section of the config file,
 // preserving all other keys and comments via yaml.Node round-trip.
-func saveAIModel(model string) error {
+func saveAIConfigKey(key, value string) error {
 	if err := ensureXMCDir(); err != nil {
 		return err
 	}
@@ -263,19 +215,14 @@ func saveAIModel(model string) error {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
 	}
-
-	// Ensure we have a document → mapping structure.
 	if doc.Kind == 0 {
 		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
 			{Kind: yaml.MappingNode},
 		}}
 	}
-	root := doc.Content[0]
 
-	// Find or create the "ai" mapping.
-	aiNode := yamlFindOrCreateMapping(root, "ai")
-	// Set "model" inside the "ai" mapping.
-	yamlSetScalar(aiNode, "model", model)
+	aiNode := yamlFindOrCreateMapping(doc.Content[0], "ai")
+	yamlSetScalar(aiNode, key, value)
 
 	out, err := yaml.Marshal(&doc)
 	if err != nil {

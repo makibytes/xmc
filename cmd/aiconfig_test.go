@@ -219,8 +219,9 @@ func TestParseRefreshInterval(t *testing.T) {
 		{"0.5s", 0, false, true},
 		{"0.5", 0, false, true},
 		{"0", 0, false, true},
-		// Unsupported units
-		{"3h", 0, false, true},
+		// Hours accepted via time.ParseDuration
+		{"1h", time.Hour, true, false},
+		{"3h", 3 * time.Hour, true, false},
 		// Garbage
 		{"abc", 0, false, true},
 		{"", 0, false, true},

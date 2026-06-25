@@ -82,6 +82,10 @@ type refreshWatchdogMsg struct{ gen int }     // fired after refreshWatchdogTime
 var errNoManageAPI = errors.New("no management API")
 
 const (
+	// maxInputLines is the maximum number of rows the textarea grows to before it
+	// scrolls instead of expanding.
+	maxInputLines = 5
+
 	// baseRefreshPeriod is the default minimum interval between periodic sidebar fetches.
 	// Can be overridden at runtime via /refresh <dur> or in config (ai.refresh-interval).
 	baseRefreshPeriod = 5 * time.Second
@@ -234,6 +238,9 @@ type aiTUIModel struct {
 	objTypes       []objWindow
 	loadingObjects bool // true during the first (visible) load; false for periodic refreshes
 
+	// Input area height (grows as the user types, up to maxInputLines).
+	inputLines int
+
 	// Periodic sidebar refresh state
 	refreshing      bool          // true while a background fetch is in-flight
 	refreshStart    time.Time     // wall-clock time the current fetch started
@@ -338,6 +345,7 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 		follow:          true,
 		objTypes:        windows,
 		loadingObjects:  len(windows) > 0,
+		inputLines:      1,
 		refreshPeriod:   period,
 		refreshEnabled:  refreshOn,
 		completer:       comp,
@@ -370,7 +378,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.recalcLayout()
+		(&m).updateInputHeight()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -1010,10 +1018,12 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyUp:
 		m.historyPrev()
+		(&m).updateInputHeight()
 		return m, nil
 
 	case tea.KeyDown:
 		m.historyNext()
+		(&m).updateInputHeight()
 		return m, nil
 
 	case tea.KeyEnter:
@@ -1023,6 +1033,11 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.input.Reset()
 		m.histIdx = -1
+		if m.inputLines != 1 {
+			m.inputLines = 1
+			m.input.SetHeight(1)
+			m.recalcLayout()
+		}
 
 		// Slash commands (work in both modes).
 		if strings.HasPrefix(prompt, "/") {
@@ -1061,6 +1076,7 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
+		(&m).updateInputHeight()
 		return m, cmd
 	}
 }
@@ -1277,6 +1293,7 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.SetValue(m.proposedCmd)
 			m.state = tuiIdle
 			m.input.Focus()
+			(&m).updateInputHeight()
 			return m, nil
 		case "c":
 			m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
@@ -1286,6 +1303,7 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Placeholder = "Chat about the suggestion..."
 			m.state = tuiIdle
 			m.input.Focus()
+			(&m).updateInputHeight()
 			return m, nil
 		}
 	}
@@ -1316,6 +1334,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.SetValue(name)
 			m.focus = focusChat
 			m.input.Focus()
+			(&m).updateInputHeight()
 		}
 		return m, nil
 	case tea.KeySpace:
@@ -1594,15 +1613,12 @@ func (m aiTUIModel) startExecution(command string) (tea.Model, tea.Cmd) {
 			ai.refreshTopology()
 		}
 
-		feedback := buildFeedback(execErr, capBuf.String(), errBuf.String())
+		stdout, stderr := capBuf.String(), errBuf.String()
+		feedback := buildFeedback(execErr, stdout, stderr)
 		ai.history = append(ai.history, aiMessage{Role: "user", Content: feedback})
 		trimHistory(&ai.history, maxHistory)
 
-		return execDoneMsg{
-			err:    execErr,
-			stdout: capBuf.String(),
-			stderr: errBuf.String(),
-		}
+		return execDoneMsg{err: execErr, stdout: stdout, stderr: stderr}
 	}
 }
 
@@ -1656,7 +1672,11 @@ func appendShellHistory(command string) {
 
 func (m *aiTUIModel) recalcLayout() {
 	headerHeight := 2
-	inputHeight := 2
+	inputLines := m.inputLines
+	if inputLines < 1 {
+		inputLines = 1
+	}
+	inputHeight := 1 + inputLines // blank separator + textarea rows
 	statusHeight := 1
 	slack := 1
 	vpHeight := m.height - headerHeight - inputHeight - statusHeight - slack
@@ -1668,6 +1688,33 @@ func (m *aiTUIModel) recalcLayout() {
 	m.viewport.Height = vpHeight
 	m.input.SetWidth(m.width - 4)
 	m.setViewportContent()
+}
+
+// updateInputHeight recomputes how many visual rows the current input text
+// needs (up to maxInputLines), resizes the textarea if needed, and always
+// calls recalcLayout so that viewport height tracks any input-area changes.
+func (m *aiTUIModel) updateInputHeight() {
+	promptLen := len([]rune(m.input.Prompt))
+	textWidth := m.width - 4 - promptLen // matches the SetWidth(m.width-4) in recalcLayout
+	if textWidth < 1 {
+		textWidth = 1
+	}
+	runes := []rune(m.input.Value())
+	n := 1
+	if len(runes) > 0 {
+		n = (len(runes) + textWidth - 1) / textWidth
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > maxInputLines {
+		n = maxInputLines
+	}
+	if n != m.inputLines {
+		m.inputLines = n
+		m.input.SetHeight(n)
+	}
+	m.recalcLayout()
 }
 
 func (m *aiTUIModel) appendTranscript(text string) {
