@@ -19,7 +19,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/testcontainers/testcontainers-go v0.43.0
-	github.com/testcontainers/testcontainers-go/modules/nats v0.42.0
+	github.com/testcontainers/testcontainers-go/modules/nats v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/redpanda v0.42.0
 	google.golang.org/api v0.285.0
