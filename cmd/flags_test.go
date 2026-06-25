@@ -48,7 +48,7 @@ func TestDurationValue_AcceptsDurationsAndNumbers(t *testing.T) {
 
 func TestSendCommand_TTLAcceptsDurationString(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "hi", "--ttl", "5s"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -60,7 +60,7 @@ func TestSendCommand_TTLAcceptsDurationString(t *testing.T) {
 
 func TestSendCommand_TTLLegacyNumberIsMillis(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "hi", "-E", "1500"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -74,7 +74,7 @@ func TestSendCommand_ContentTypeAliases(t *testing.T) {
 	// Both the kebab-case name and the legacy concatenated name must work.
 	for _, name := range []string{"--content-type", "--contenttype"} {
 		mock := &mockQueueBackend{}
-		cmd := NewSendCommand(mock)
+		cmd := NewSendCommand(mock, nil, nil)
 		cmd.SetArgs([]string{"q", "hi", name, "application/json"})
 		if err := cmd.Execute(); err != nil {
 			t.Fatalf("%s: unexpected error: %v", name, err)

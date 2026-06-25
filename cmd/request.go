@@ -62,7 +62,7 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 		return err
 	}
 
-	data, err := readCommandMessage(args)
+	data, err := readCommandMessage(args, cmd.InOrStdin())
 	if err != nil {
 		return err
 	}
@@ -104,11 +104,13 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 		return fmt.Errorf("no reply received")
 	}
 
+	dataOut := cmd.OutOrStdout()
+	metaOut := cmd.ErrOrStderr()
 	if format != "" {
-		return displayMessageFormat(message, format)
+		return displayMessageFormat(dataOut, message, format)
 	}
 	if jsonOutput {
-		return displayMessageJSON(message)
+		return displayMessageJSON(dataOut, message)
 	}
-	return displayMessage(message, verbosity)
+	return displayMessage(dataOut, metaOut, message, verbosity)
 }

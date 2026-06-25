@@ -38,6 +38,11 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 		properties = make(map[string]any)
 	}
 
+	multicast := true // Topic = MULTICAST by default
+	if rt, ok := opts.Extra["routing-type"]; ok {
+		multicast = rt != "anycast"
+	}
+
 	args := SendArguments{
 		Address:       opts.Topic,
 		Message:       opts.Message,
@@ -48,7 +53,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 		ContentType:   opts.ContentType,
 		Priority:      uint8(opts.Priority),
 		Durable:       opts.Persistent,
-		Multicast:     true, // Topic = MULTICAST
+		Multicast:     multicast,
 		TTL:           opts.TTL,
 	}
 

@@ -47,9 +47,15 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		return nil, err
 	}
 
-	subName, ephemeral := backends.SubscriptionName(opts)
-	if ephemeral {
-		a.ephemeral = append(a.ephemeral, subName)
+	var subName string
+	var ephemeral bool
+	if opts.Extra != nil && opts.Extra["subscription"] != "" {
+		subName = opts.Extra["subscription"]
+	} else {
+		subName, ephemeral = backends.SubscriptionName(opts)
+		if ephemeral {
+			a.ephemeral = append(a.ephemeral, subName)
+		}
 	}
 
 	sub, err := ensureSubscription(ctx, a.client, subName, topic)

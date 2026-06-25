@@ -10,14 +10,26 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 )
 
 // ManagementArgs holds parameters for Artemis management operations
 type ManagementArgs struct {
-	Server   string // AMQP server URL - we derive the HTTP management URL from it
-	User     string
-	Password string
+	Server     string // AMQP server URL - we derive the HTTP management URL from it
+	User       string
+	Password   string
+	BrokerName string // Artemis broker name for Jolokia MBean paths (default "0.0.0.0")
+}
+
+// brokerMBean returns the Jolokia-encoded broker= prefix for MBean paths.
+// Uses args.BrokerName if set, otherwise defaults to "0.0.0.0".
+func (args ManagementArgs) brokerMBean() string {
+	name := args.BrokerName
+	if name == "" {
+		name = "0.0.0.0"
+	}
+	return "%22" + name + "%22"
 }
 
 // jolokiaURL converts the AMQP server URL to Jolokia HTTP URL
@@ -69,8 +81,8 @@ func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
 		return nil, err
 	}
 
-	// Query for all queue MBeans
-	path := "/read/org.apache.activemq.artemis:broker=%220.0.0.0%22,component=addresses,address=*,subcomponent=queues,routing-type=%22anycast%22,queue=*"
+	// Query for all queue MBeans (broker=* matches any broker name)
+	path := "/read/org.apache.activemq.artemis:broker=*,component=addresses,address=*,subcomponent=queues,routing-type=%22anycast%22,queue=*"
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		// Try alternative: search for queue names
@@ -129,7 +141,7 @@ func PurgeQueue(args ManagementArgs, queue string) (int64, error) {
 	}
 
 	// Exec removeAllMessages operation
-	path := fmt.Sprintf("/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22,component=addresses,address=%%22%s%%22,subcomponent=queues,routing-type=%%22anycast%%22,queue=%%22%s%%22/removeAllMessages()", queue, queue)
+	path := fmt.Sprintf("/exec/org.apache.activemq.artemis:broker=%s,component=addresses,address=%%22%s%%22,subcomponent=queues,routing-type=%%22anycast%%22,queue=%%22%s%%22/removeAllMessages()", args.brokerMBean(), queue, queue)
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		return 0, err
@@ -152,7 +164,7 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 		return nil, err
 	}
 
-	path := fmt.Sprintf("/read/org.apache.activemq.artemis:broker=%%220.0.0.0%%22,component=addresses,address=%%22%s%%22,subcomponent=queues,routing-type=%%22anycast%%22,queue=%%22%s%%22", queue, queue)
+	path := fmt.Sprintf("/read/org.apache.activemq.artemis:broker=%s,component=addresses,address=%%22%s%%22,subcomponent=queues,routing-type=%%22anycast%%22,queue=%%22%s%%22", args.brokerMBean(), queue, queue)
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		return nil, err
@@ -191,8 +203,8 @@ func CreateQueue(args ManagementArgs, queue string) error {
 
 	// createQueue(name, address, routingType) — routingType ANYCAST
 	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/createQueue(java.lang.String,java.lang.String,java.lang.String)/%s/%s/ANYCAST",
-		url.PathEscape(queue), url.PathEscape(queue))
+		"/exec/org.apache.activemq.artemis:broker=%s/createQueue(java.lang.String,java.lang.String,java.lang.String)/%s/%s/ANYCAST",
+		args.brokerMBean(), url.PathEscape(queue), url.PathEscape(queue))
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		return err
@@ -210,8 +222,8 @@ func DeleteQueue(args ManagementArgs, queue string) error {
 
 	// destroyQueue(name, removeConsumers, autoDeleteAddress) — true, true
 	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/destroyQueue(java.lang.String,boolean,boolean)/%s/true/true",
-		url.PathEscape(queue))
+		"/exec/org.apache.activemq.artemis:broker=%s/destroyQueue(java.lang.String,boolean,boolean)/%s/true/true",
+		args.brokerMBean(), url.PathEscape(queue))
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		return err
@@ -229,8 +241,8 @@ func CreateTopic(args ManagementArgs, topic string) error {
 
 	// createAddress(name, routingTypes) — MULTICAST
 	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/createAddress(java.lang.String,java.lang.String)/%s/MULTICAST",
-		url.PathEscape(topic))
+		"/exec/org.apache.activemq.artemis:broker=%s/createAddress(java.lang.String,java.lang.String)/%s/MULTICAST",
+		args.brokerMBean(), url.PathEscape(topic))
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		return err
@@ -248,14 +260,91 @@ func DeleteTopic(args ManagementArgs, topic string) error {
 
 	// deleteAddress(name, force)
 	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%%220.0.0.0%%22/deleteAddress(java.lang.String,boolean)/%s/true",
-		url.PathEscape(topic))
+		"/exec/org.apache.activemq.artemis:broker=%s/deleteAddress(java.lang.String,boolean)/%s/true",
+		args.brokerMBean(), url.PathEscape(topic))
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		return err
 	}
 
 	return checkJolokiaError(body)
+}
+
+// ListAddresses lists all MULTICAST addresses (topics) via Jolokia.
+func ListAddresses(args ManagementArgs) ([]backends.ObjectNode, error) {
+	base, err := jolokiaURL(args.Server)
+	if err != nil {
+		return nil, err
+	}
+
+	// Search for all address MBeans.
+	path := "/read/org.apache.activemq.artemis:broker=*,component=addresses,address=*"
+	body, err := jolokiaGet(base, path, args.User, args.Password)
+	if err != nil {
+		// Fall back to search.
+		path = "/search/org.apache.activemq.artemis:broker=*,component=addresses,address=*"
+		body, err = jolokiaGet(base, path, args.User, args.Password)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var result struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse Jolokia response: %w", err)
+	}
+
+	// Try parsing as array of MBean names (search result).
+	var mbeanNames []string
+	if err := json.Unmarshal(result.Value, &mbeanNames); err == nil {
+		seen := make(map[string]bool)
+		var out []backends.ObjectNode
+		for _, name := range mbeanNames {
+			addr := parseAddressFromMBean(name)
+			if addr == "" || seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			out = append(out, backends.ObjectNode{Name: addr})
+		}
+		return out, nil
+	}
+
+	// Try parsing as map of MBean name → attributes.
+	var mbeanMap map[string]map[string]any
+	if err := json.Unmarshal(result.Value, &mbeanMap); err == nil {
+		seen := make(map[string]bool)
+		var out []backends.ObjectNode
+		for name, attrs := range mbeanMap {
+			addr := parseAddressFromMBean(name)
+			if addr == "" || seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			node := backends.ObjectNode{Name: addr}
+			if rt, ok := attrs["RoutingTypes"].(string); ok && rt != "" {
+				node.Kind = normalizeRoutingType(rt)
+			}
+			out = append(out, node)
+		}
+		return out, nil
+	}
+
+	return nil, fmt.Errorf("unexpected Jolokia response format")
+}
+
+// parseAddressFromMBean extracts the address= value from a JMX MBean name.
+func parseAddressFromMBean(name string) string {
+	parts := strings.Split(name, ",")
+	for _, part := range parts {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) == 2 && kv[0] == "address" {
+			return strings.Trim(kv[1], "\"")
+		}
+	}
+	return ""
 }
 
 // checkJolokiaError inspects a Jolokia response for an error status.
@@ -306,4 +395,20 @@ func parseMBeanName(name string) QueueInfo {
 		}
 	}
 	return qi
+}
+
+// normalizeRoutingType maps Jolokia RoutingTypes values to short lowercase labels.
+func normalizeRoutingType(rt string) string {
+	rt = strings.TrimSpace(rt)
+	lower := strings.ToLower(rt)
+	switch {
+	case lower == "anycast":
+		return "anycast"
+	case lower == "multicast":
+		return "multicast"
+	case strings.Contains(lower, "anycast") && strings.Contains(lower, "multicast"):
+		return "any/multi"
+	default:
+		return lower
+	}
 }

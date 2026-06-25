@@ -41,7 +41,11 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	subject := queueSubject(opts.Queue)
 
-	if err := a.ensureStream(opts.Queue); err != nil {
+	sn := streamName(opts.Queue)
+	if opts.Extra != nil && opts.Extra["stream"] != "" {
+		sn = opts.Extra["stream"]
+	}
+	if err := a.ensureStreamWithName(sn, subject); err != nil {
 		return err
 	}
 
@@ -71,11 +75,15 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 
 // Receive implements backends.QueueBackend.
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	if err := a.ensureStream(opts.Queue); err != nil {
+	sn := streamName(opts.Queue)
+	if opts.Extra != nil && opts.Extra["stream"] != "" {
+		sn = opts.Extra["stream"]
+	}
+	if err := a.ensureStreamWithName(sn, queueSubject(opts.Queue)); err != nil {
 		return nil, err
 	}
 
-	sub, err := a.getOrCreateConsumer(opts.Queue)
+	sub, err := a.getOrCreateConsumer(opts.Queue, sn)
 	if err != nil {
 		return nil, err
 	}
@@ -111,13 +119,13 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 // getOrCreateConsumer returns a cached pull subscriber for the given queue,
 // creating one if it doesn't exist.
-func (a *QueueAdapter) getOrCreateConsumer(queue string) (*natsclient.Subscription, error) {
+func (a *QueueAdapter) getOrCreateConsumer(queue, sn string) (*natsclient.Subscription, error) {
 	if sub, ok := a.consumers[queue]; ok {
 		return sub, nil
 	}
 
 	sub, err := a.js.PullSubscribe(queueSubject(queue), "xmc-consumer",
-		natsclient.BindStream(streamName(queue)),
+		natsclient.BindStream(sn),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating pull subscriber: %w", err)
@@ -138,15 +146,11 @@ func (a *QueueAdapter) Close() error {
 	return nil
 }
 
-func (a *QueueAdapter) ensureStream(queue string) error {
-	name := streamName(queue)
+func (a *QueueAdapter) ensureStreamWithName(name, subject string) error {
 	if _, ok := a.ensured[name]; ok {
 		return nil
 	}
-	subject := queueSubject(queue)
 
-	// Validate any pre-existing stream: a non-WorkQueue retention or a stream that
-	// doesn't route this subject would silently produce wrong delivery semantics.
 	info, err := a.js.StreamInfo(name)
 	if err == nil {
 		if info.Config.Retention != natsclient.WorkQueuePolicy {

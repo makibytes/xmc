@@ -45,7 +45,7 @@ func (m *mockQueueBackend) Close() error { return nil }
 
 func TestSendCommand_WithMessageArg(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "hello world"})
 
 	err := cmd.Execute()
@@ -69,7 +69,7 @@ func TestSendCommand_WithMessageArg(t *testing.T) {
 
 func TestSendCommand_WithFlags(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{
 		"my-queue", "test-msg",
 		"-T", "application/json",
@@ -119,7 +119,7 @@ func TestSendCommand_WithFlags(t *testing.T) {
 
 func TestSendCommand_InvalidProperty(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"my-queue", "msg", "-P", "invalid-no-equals"})
 
 	err := cmd.Execute()
@@ -130,7 +130,7 @@ func TestSendCommand_InvalidProperty(t *testing.T) {
 
 func TestSendCommand_NoMessage(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"my-queue"})
 
 	err := cmd.Execute()
@@ -141,7 +141,7 @@ func TestSendCommand_NoMessage(t *testing.T) {
 
 func TestSendCommand_CountFlag(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "hello", "-n", "5"})
 
 	err := cmd.Execute()
@@ -156,7 +156,7 @@ func TestSendCommand_CountFlag(t *testing.T) {
 
 func TestSendCommand_TTLFlag(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "hello", "-E", "5000"})
 
 	err := cmd.Execute()
@@ -171,7 +171,7 @@ func TestSendCommand_TTLFlag(t *testing.T) {
 
 func TestSendCommand_TTLDefaultZero(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "hello"})
 
 	err := cmd.Execute()
@@ -186,7 +186,7 @@ func TestSendCommand_TTLDefaultZero(t *testing.T) {
 
 func TestSendCommand_CountDefaultOne(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "hello"})
 
 	err := cmd.Execute()
@@ -201,7 +201,7 @@ func TestSendCommand_CountDefaultOne(t *testing.T) {
 
 func TestSendCommand_SendError(t *testing.T) {
 	mock := &mockQueueBackend{sendErr: fmt.Errorf("broker down")}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "hello"})
 
 	err := cmd.Execute()
@@ -212,7 +212,7 @@ func TestSendCommand_SendError(t *testing.T) {
 
 func TestSendCommand_StdinData(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	// Pipe data into stdin
@@ -235,7 +235,7 @@ func TestSendCommand_StdinData(t *testing.T) {
 
 func TestSendCommand_LinesMode(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-l"})
 
 	r, w, _ := os.Pipe()
@@ -260,7 +260,7 @@ func TestSendCommand_LinesMode(t *testing.T) {
 
 func TestSendCommand_LinesModeWithError(t *testing.T) {
 	mock := &mockQueueBackend{sendErr: fmt.Errorf("broker error")}
-	cmd := NewSendCommand(mock)
+	cmd := NewSendCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-l"})
 
 	r, w, _ := os.Pipe()
@@ -274,5 +274,102 @@ func TestSendCommand_LinesModeWithError(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+// stubResolver mimics RabbitMQ address resolution for exchange routing tests.
+func stubResolver(spec TargetSpec) (string, error) {
+	if spec.Queue != "" {
+		return "/queues/" + spec.Queue, nil
+	}
+	if spec.Exchange != "" {
+		if spec.To != "" {
+			return "/exchanges/" + spec.Exchange + "/" + spec.To, nil
+		}
+		return "/exchanges/" + spec.Exchange, nil
+	}
+	if spec.IsTopic {
+		return "/exchanges/amq.topic/" + spec.To, nil
+	}
+	return "/queues/" + spec.To, nil
+}
+
+func TestSendExchangeRouting_SinglePositionalIsBody(t *testing.T) {
+	// send -e fo1 "hello" → body "hello", address /exchanges/fo1 (no routing key)
+	mock := &mockQueueBackend{}
+	cmd := NewSendCommand(mock, stubResolver, nil, true)
+	cmd.SetArgs([]string{"-e", "fo1", "hello"})
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastSendOpts.Queue != "/exchanges/fo1" {
+		t.Errorf("queue = %q, want %q", mock.lastSendOpts.Queue, "/exchanges/fo1")
+	}
+	if string(mock.lastSendOpts.Message) != "hello" {
+		t.Errorf("message = %q, want %q", mock.lastSendOpts.Message, "hello")
+	}
+}
+
+func TestSendExchangeRouting_TwoPositionalsLegacy(t *testing.T) {
+	// send -e amq.direct key1 "hi" → routing key "key1", body "hi"
+	mock := &mockQueueBackend{}
+	cmd := NewSendCommand(mock, stubResolver, nil, true)
+	cmd.SetArgs([]string{"-e", "amq.direct", "key1", "hi"})
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastSendOpts.Queue != "/exchanges/amq.direct/key1" {
+		t.Errorf("queue = %q, want %q", mock.lastSendOpts.Queue, "/exchanges/amq.direct/key1")
+	}
+	if string(mock.lastSendOpts.Message) != "hi" {
+		t.Errorf("message = %q, want %q", mock.lastSendOpts.Message, "hi")
+	}
+}
+
+func TestSendExchangeRouting_RoutingKeyFlag(t *testing.T) {
+	// send -e amq.direct --routing-key key1 "hi" → routing key via flag, body "hi"
+	mock := &mockQueueBackend{}
+	cmd := NewSendCommand(mock, stubResolver, nil, true)
+	cmd.SetArgs([]string{"-e", "amq.direct", "--routing-key", "key1", "hi"})
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastSendOpts.Queue != "/exchanges/amq.direct/key1" {
+		t.Errorf("queue = %q, want %q", mock.lastSendOpts.Queue, "/exchanges/amq.direct/key1")
+	}
+	if string(mock.lastSendOpts.Message) != "hi" {
+		t.Errorf("message = %q, want %q", mock.lastSendOpts.Message, "hi")
+	}
+}
+
+func TestSendExchangeRouting_NoArgsStdin(t *testing.T) {
+	// send -e fo1 (no args) → no routing key, body from stdin
+	mock := &mockQueueBackend{}
+	cmd := NewSendCommand(mock, stubResolver, nil, true)
+	cmd.SetArgs([]string{"-e", "fo1"})
+
+	r, w, _ := os.Pipe()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	w.WriteString("stdin msg")
+	w.Close()
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastSendOpts.Queue != "/exchanges/fo1" {
+		t.Errorf("queue = %q, want %q", mock.lastSendOpts.Queue, "/exchanges/fo1")
+	}
+	if string(mock.lastSendOpts.Message) != "stdin msg" {
+		t.Errorf("message = %q, want %q", mock.lastSendOpts.Message, "stdin msg")
 	}
 }

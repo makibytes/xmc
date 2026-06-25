@@ -12,6 +12,46 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// ListTopicsWithSubscriptions returns topics as ObjectNodes with subscriptions
+// as children.
+func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, error) {
+	adm, err := AdminClient(args)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	var nodes []backends.ObjectNode
+
+	pager := adm.NewListTopicsPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing topics: %w", err)
+		}
+		for _, t := range page.Topics {
+			node := backends.ObjectNode{Name: t.TopicName}
+			// List subscriptions for this topic.
+			subPager := adm.NewListSubscriptionsPager(t.TopicName, nil)
+			for subPager.More() {
+				subPage, err := subPager.NextPage(ctx)
+				if err != nil {
+					break // subscription listing failed — still show the topic
+				}
+				for _, s := range subPage.Subscriptions {
+					node.Children = append(node.Children, backends.ObjectNode{
+						Name: s.SubscriptionName,
+						Kind: "subscription",
+					})
+				}
+			}
+			nodes = append(nodes, node)
+		}
+	}
+
+	return nodes, nil
+}
+
 func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 	adm, err := AdminClient(args)
 	if err != nil {

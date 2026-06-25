@@ -48,7 +48,7 @@ func (m *mockTopicBackend) Close() error { return nil }
 
 func TestPublishCommand_WithMessageArg(t *testing.T) {
 	mock := &mockTopicBackend{}
-	cmd := NewPublishCommand(mock)
+	cmd := NewPublishCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "hello world"})
 
 	err := cmd.Execute()
@@ -66,7 +66,7 @@ func TestPublishCommand_WithMessageArg(t *testing.T) {
 
 func TestPublishCommand_WithAllFlags(t *testing.T) {
 	mock := &mockTopicBackend{}
-	cmd := NewPublishCommand(mock)
+	cmd := NewPublishCommand(mock, nil, nil)
 	cmd.SetArgs([]string{
 		"my-topic", "test-msg",
 		"-T", "application/json",
@@ -116,7 +116,7 @@ func TestSubscribeCommand_DisplaysMessage(t *testing.T) {
 		Data: []byte("topic message"),
 	}
 	mock := &mockTopicBackend{subscribeMsg: msg}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic"})
 
 	err := cmd.Execute()
@@ -131,7 +131,7 @@ func TestSubscribeCommand_DisplaysMessage(t *testing.T) {
 
 func TestSubscribeCommand_TimeoutReturnsNil(t *testing.T) {
 	mock := &mockTopicBackend{subscribeErr: context.DeadlineExceeded}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic"})
 
 	err := cmd.Execute()
@@ -142,7 +142,7 @@ func TestSubscribeCommand_TimeoutReturnsNil(t *testing.T) {
 
 func TestSubscribeCommand_WrappedTimeoutReturnsNil(t *testing.T) {
 	mock := &mockTopicBackend{subscribeErr: fmt.Errorf("wrapped: %w", context.DeadlineExceeded)}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic"})
 
 	err := cmd.Execute()
@@ -153,7 +153,7 @@ func TestSubscribeCommand_WrappedTimeoutReturnsNil(t *testing.T) {
 
 func TestPublishCommand_CountFlag(t *testing.T) {
 	mock := &mockTopicBackend{}
-	cmd := NewPublishCommand(mock)
+	cmd := NewPublishCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "hello", "-n", "3"})
 
 	err := cmd.Execute()
@@ -168,7 +168,7 @@ func TestPublishCommand_CountFlag(t *testing.T) {
 
 func TestPublishCommand_TTLFlag(t *testing.T) {
 	mock := &mockTopicBackend{}
-	cmd := NewPublishCommand(mock)
+	cmd := NewPublishCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "hello", "-E", "10000"})
 
 	err := cmd.Execute()
@@ -183,7 +183,7 @@ func TestPublishCommand_TTLFlag(t *testing.T) {
 
 func TestPublishCommand_InvalidProperty(t *testing.T) {
 	mock := &mockTopicBackend{}
-	cmd := NewPublishCommand(mock)
+	cmd := NewPublishCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "msg", "-P", "no-equals"})
 
 	err := cmd.Execute()
@@ -199,7 +199,7 @@ func TestSubscribeCommand_CountFlag(t *testing.T) {
 		{Data: []byte("sub3")},
 	}
 	mock := &mockTopicBackend{subscribeMsgs: msgs}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-n", "3"})
 
 	old := os.Stdout
@@ -235,7 +235,7 @@ func TestSubscribeCommand_JSONOutput(t *testing.T) {
 		Properties: map[string]any{"env": "staging"},
 	}
 	mock := &mockTopicBackend{subscribeMsg: msg}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-J"})
 
 	old := os.Stdout
@@ -268,7 +268,7 @@ func TestSubscribeCommand_JSONOutput(t *testing.T) {
 func TestSubscribeCommand_SelectorFlag(t *testing.T) {
 	msg := &backends.Message{Data: []byte("filtered")}
 	mock := &mockTopicBackend{subscribeMsg: msg}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-S", "type='order'"})
 
 	old := os.Stdout
@@ -293,7 +293,7 @@ func TestSubscribeCommand_SelectorFlag(t *testing.T) {
 func TestSubscribeCommand_DurableFlag(t *testing.T) {
 	msg := &backends.Message{Data: []byte("durable msg")}
 	mock := &mockTopicBackend{subscribeMsg: msg}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-D"})
 
 	old := os.Stdout
@@ -321,7 +321,7 @@ func TestSubscribeCommand_QuietFlag(t *testing.T) {
 		Properties: map[string]any{"key": "val"},
 	}
 	mock := &mockTopicBackend{subscribeMsg: msg}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-q"})
 
 	oldStderr := os.Stderr
@@ -360,7 +360,7 @@ func TestSubscribeCommand_QuietFlag(t *testing.T) {
 
 func TestSubscribeCommand_NilMessageReturnsError(t *testing.T) {
 	mock := &mockTopicBackend{subscribeMsg: nil}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic"})
 
 	err := cmd.Execute()
@@ -371,7 +371,7 @@ func TestSubscribeCommand_NilMessageReturnsError(t *testing.T) {
 
 func TestPublishCommand_LinesMode(t *testing.T) {
 	mock := &mockTopicBackend{}
-	cmd := NewPublishCommand(mock)
+	cmd := NewPublishCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-l"})
 
 	r, w, _ := os.Pipe()
@@ -396,7 +396,7 @@ func TestPublishCommand_LinesMode(t *testing.T) {
 
 func TestPublishCommand_LinesModeWithError(t *testing.T) {
 	mock := &mockTopicBackend{publishErr: fmt.Errorf("broker error")}
-	cmd := NewPublishCommand(mock)
+	cmd := NewPublishCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-l"})
 
 	r, w, _ := os.Pipe()

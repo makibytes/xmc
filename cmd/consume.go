@@ -16,6 +16,22 @@ import (
 	"github.com/makibytes/xmc/log"
 )
 
+// dataWriter returns the configured data output writer, defaulting to os.Stdout.
+func (c consumeConfig) dataWriter() io.Writer {
+	if c.dataOut != nil {
+		return c.dataOut
+	}
+	return os.Stdout
+}
+
+// metaWriter returns the configured metadata output writer, defaulting to os.Stderr.
+func (c consumeConfig) metaWriter() io.Writer {
+	if c.metaOut != nil {
+		return c.metaOut
+	}
+	return os.Stderr
+}
+
 type flagValueGetter interface {
 	GetString(name string) (string, error)
 	GetStringSlice(name string) ([]string, error)
@@ -35,6 +51,8 @@ type consumeConfig struct {
 	ndjson     bool   // emit one lossless JSON record per line; overrides format/json
 	follow     bool   // streaming: keep polling across empty reads until ctx ends
 	stats      *streamStats
+	dataOut    io.Writer // message payload output; nil defaults to os.Stdout
+	metaOut    io.Writer // metadata/properties output; nil defaults to os.Stderr
 }
 
 func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeConfig) error {
@@ -90,11 +108,10 @@ func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeCo
 // stream ends. When neither streaming option is active it behaves exactly like a
 // plain consumeMessages call on a background context.
 func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool) error {
-	ctx := context.Background()
-	cancel := func() {}
-	if cfg.follow {
-		ctx, cancel = streamContext(duration)
-	}
+	// Always use streamContext so that Ctrl-C cleanly cancels the receive
+	// loop — even for non-streaming commands like "receive q -n 1". Without
+	// this, SIGINT terminates the entire process instead of just the command.
+	ctx, cancel := streamContext(duration)
 	defer cancel()
 
 	if stats {
@@ -111,15 +128,16 @@ func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Durati
 }
 
 func outputMessage(message *backends.Message, cfg consumeConfig) error {
+	w := cfg.dataWriter()
 	switch {
 	case cfg.ndjson:
-		return displayMessageNDJSON(message)
+		return displayMessageNDJSON(w, message)
 	case cfg.format != "":
-		return displayMessageFormat(message, cfg.format)
+		return displayMessageFormat(w, message, cfg.format)
 	case cfg.jsonOutput:
-		return displayMessageJSON(message)
+		return displayMessageJSON(w, message)
 	default:
-		return displayMessage(message, cfg.verbosity)
+		return displayMessage(w, cfg.metaWriter(), message, cfg.verbosity)
 	}
 }
 
@@ -136,29 +154,41 @@ func commandVerbosity(quiet bool) backends.Verbosity {
 	}
 }
 
-func displayMessage(message *backends.Message, verbosity backends.Verbosity) error {
+func displayMessage(dataOut, metaOut io.Writer, message *backends.Message, verbosity backends.Verbosity) error {
 	if verbosity >= backends.VerbosityVerbose {
-		if err := writeKeyValueMap(os.Stderr, message.InternalMetadata, "", ": %v\n"); err != nil {
+		if err := writeKeyValueMap(metaOut, message.InternalMetadata, "", ": %v\n"); err != nil {
 			return err
 		}
 	}
 
 	if verbosity >= backends.VerbosityNormal {
-		if err := writeProperties(os.Stderr, message.Properties); err != nil {
+		if err := writeProperties(metaOut, message.Properties); err != nil {
 			return err
 		}
 	}
 
-	fmt.Print(string(message.Data))
-	if log.IsStdout {
-		fmt.Println()
+	fmt.Fprint(dataOut, string(message.Data))
+	if shouldAddNewline(dataOut) {
+		fmt.Fprintln(dataOut)
 	}
 
 	return nil
 }
 
+// shouldAddNewline reports whether a trailing newline should be appended after
+// message data. When writing to the real os.Stdout it honours the original
+// log.IsStdout heuristic (true when stdout is a terminal, false when redirected
+// to a file). For any other writer (pipe, buffer) a newline is always added so
+// that line-oriented tools like grep and jq work correctly in pipelines.
+func shouldAddNewline(w io.Writer) bool {
+	if w == os.Stdout {
+		return log.IsStdout
+	}
+	return true
+}
+
 // displayMessageJSON outputs the message as a JSON object
-func displayMessageJSON(message *backends.Message) error {
+func displayMessageJSON(w io.Writer, message *backends.Message) error {
 	output := map[string]any{
 		"data": string(message.Data),
 	}
@@ -192,7 +222,7 @@ func displayMessageJSON(message *backends.Message) error {
 		return fmt.Errorf("failed to marshal message to JSON: %w", err)
 	}
 
-	fmt.Println(string(data))
+	fmt.Fprintln(w, string(data))
 	return nil
 }
 

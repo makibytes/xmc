@@ -80,7 +80,7 @@ func TestReceiveCommand_NDJSONOutput(t *testing.T) {
 		Properties:    map[string]any{"k": "v"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "--ndjson"})
 
 	out := captureStdout(t, func() {
@@ -100,7 +100,7 @@ func TestReceiveCommand_NDJSONOutput(t *testing.T) {
 
 func TestReceiveCommand_NDJSONOverridesFormat(t *testing.T) {
 	mock := &mockQueueBackend{receiveMsg: &backends.Message{Data: []byte("x"), MessageID: "m1"}}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "--ndjson", "-F", "SHOULD-NOT-APPEAR"})
 
 	out := captureStdout(t, func() {
@@ -124,7 +124,7 @@ func TestReceiveCommand_DrainAll(t *testing.T) {
 		{Data: []byte("c")},
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-n", "0", "--ndjson"})
 
 	out := captureStdout(t, func() {
@@ -149,7 +149,7 @@ func TestSendCommand_NDJSONImport(t *testing.T) {
 
 	withStdin(t, input, func() {
 		mock := &mockQueueBackend{}
-		cmd := NewSendCommand(mock)
+		cmd := NewSendCommand(mock, nil, nil)
 		cmd.SetArgs([]string{"q", "--ndjson"})
 		if err := cmd.Execute(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -172,7 +172,7 @@ func TestPublishCommand_NDJSONImport(t *testing.T) {
 
 	withStdin(t, input, func() {
 		mock := &mockTopicBackend{}
-		cmd := NewPublishCommand(mock)
+		cmd := NewPublishCommand(mock, nil, nil)
 		cmd.SetArgs([]string{"topic", "--ndjson"})
 		if err := cmd.Execute(); err != nil {
 			t.Fatalf("unexpected error: %v", err)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
@@ -13,7 +14,6 @@ import (
 )
 
 const queueTopicPrefix = "queue/"
-const sharedSubPrefix = "$share/xmc/"
 
 // QueueAdapter adapts MQTT to QueueBackend using shared subscriptions.
 type QueueAdapter struct {
@@ -31,10 +31,14 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 }
 
 // Send implements backends.QueueBackend.
-// It publishes the message to topic "queue/{queue-name}" with QoS 1.
+// It publishes the message to topic "queue/{queue-name}" with the configured QoS.
 func (a *QueueAdapter) Send(_ context.Context, opts backends.SendOptions) error {
 	topic := queueTopicPrefix + opts.Queue
-	token := a.client.Publish(topic, 1, false, opts.Message)
+	qos := byte(1)
+	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
+		qos = byte(v)
+	}
+	token := a.client.Publish(topic, qos, false, opts.Message)
 	token.Wait()
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("MQTT publish to %q: %w", topic, err)
@@ -52,7 +56,11 @@ func (a *QueueAdapter) Receive(_ context.Context, opts backends.ReceiveOptions) 
 
 	if opts.Acknowledge {
 		// Destructive read via shared subscription – competing consumers.
-		topic = sharedSubPrefix + queueTopicPrefix + opts.Queue
+		group := "xmc"
+		if g := opts.Extra["group"]; g != "" {
+			group = g
+		}
+		topic = "$share/" + group + "/" + queueTopicPrefix + opts.Queue
 		client = a.client
 	} else {
 		// Peek: use a fresh client with a unique clientID so the broker
@@ -69,8 +77,13 @@ func (a *QueueAdapter) Receive(_ context.Context, opts backends.ReceiveOptions) 
 		topic = queueTopicPrefix + opts.Queue
 	}
 
+	qos := byte(1)
+	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
+		qos = byte(v)
+	}
+
 	msgCh := make(chan pahomqtt.Message, 1)
-	token := client.Subscribe(topic, 1, func(_ pahomqtt.Client, msg pahomqtt.Message) {
+	token := client.Subscribe(topic, qos, func(_ pahomqtt.Client, msg pahomqtt.Message) {
 		select {
 		case msgCh <- msg:
 		default:

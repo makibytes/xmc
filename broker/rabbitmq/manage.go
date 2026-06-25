@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 )
 
@@ -287,6 +288,78 @@ func UnbindQueue(args ManagementArgs, queue, exchange, routingKey string) error 
 	}
 	_, err = managementDelete(base, fmt.Sprintf("/bindings/%%2F/e/%s/q/%s/%s", url.PathEscape(exchange), url.PathEscape(queue), url.PathEscape(propKey)), args.User, args.Password)
 	return err
+}
+
+// ListExchanges lists all exchanges and their bindings via the RabbitMQ
+// Management API. Each exchange is returned as an ObjectNode; if the exchange
+// has bindings, they appear as Children with the bound queue name and routing
+// key.
+func ListExchanges(args ManagementArgs) ([]backends.ObjectNode, error) {
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch exchanges.
+	body, err := managementGet(base, "/exchanges/%2F", args.User, args.Password)
+	if err != nil {
+		return nil, err
+	}
+
+	var rawExchanges []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(body, &rawExchanges); err != nil {
+		return nil, fmt.Errorf("failed to parse exchange list: %w", err)
+	}
+
+	// Fetch all bindings (source → destination).
+	bindBody, err := managementGet(base, "/bindings/%2F", args.User, args.Password)
+	if err != nil {
+		return nil, err
+	}
+
+	var rawBindings []struct {
+		Source          string `json:"source"`
+		Destination     string `json:"destination"`
+		DestinationType string `json:"destination_type"`
+		RoutingKey      string `json:"routing_key"`
+	}
+	if err := json.Unmarshal(bindBody, &rawBindings); err != nil {
+		return nil, fmt.Errorf("failed to parse bindings: %w", err)
+	}
+
+	// Group bindings by source exchange.
+	bindMap := make(map[string][]backends.ObjectNode)
+	for _, b := range rawBindings {
+		if b.Source == "" {
+			continue // default exchange binding
+		}
+		child := backends.ObjectNode{
+			Name: b.Destination,
+			Kind: b.DestinationType,
+		}
+		if b.RoutingKey != "" {
+			child.Kind = fmt.Sprintf("%s key=%s", b.DestinationType, b.RoutingKey)
+		}
+		bindMap[b.Source] = append(bindMap[b.Source], child)
+	}
+
+	var exchanges []backends.ObjectNode
+	for _, e := range rawExchanges {
+		if e.Name == "" {
+			continue // skip the default exchange
+		}
+		node := backends.ObjectNode{
+			Name:     e.Name,
+			Kind:     e.Type,
+			Children: bindMap[e.Name],
+		}
+		exchanges = append(exchanges, node)
+	}
+
+	return exchanges, nil
 }
 
 // GetQueueStats returns detailed statistics for a queue

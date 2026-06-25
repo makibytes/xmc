@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"time"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/makibytes/xmc/broker/tlsutil"
@@ -34,7 +35,9 @@ func Connect(args ConnArguments) (pahomqtt.Client, error) {
 		AddBroker(args.Server).
 		SetClientID(clientID).
 		SetCleanSession(true).
-		SetAutoReconnect(false)
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetMaxReconnectInterval(30 * time.Second)
 
 	if args.User != "" {
 		opts.SetUsername(args.User)

@@ -1,202 +1,48 @@
-# Getting Started with Azure Service Bus (`azmc`)
+# Azure Service Bus (`azmc`)
 
-Binary: **`azmc`** — Azure Service Bus Messaging Client
+Auth: `--connection-string` / `-s` (env `AZMC_CONNECTION_STRING`) or `--namespace` (env `AZMC_NAMESPACE`, uses Azure AD / `az login`). One of the two is required.
 
-```bash
-go build -tags azure -o azmc .
+## Addressing
+
+Queue and topic names are flat strings — used directly as Service Bus entity names. Entities are auto-created if they don't exist (requires Manage claim on the connection string).
+
+```
+send myqueue "msg"
+receive myqueue
+publish notifications "alert"
+subscribe notifications -g team-ops -n 0
 ```
 
-## Authentication
+## Subscriptions
 
-`azmc` connects to Azure Service Bus using either a **connection string** (most common) or **Azure AD** credentials.
+- `-g <group>`: named subscription (competing consumers within the group; different groups = fan-out)
+- `-D`: durable subscription (persists read position)
+- Default `-g xmc-consumer-group` creates a persistent subscription on the topic
+- Ephemeral subscriptions (no `-g`, no `-D`) are auto-deleted on close
 
-### Connection string (90% of users)
+## Dead-letter queues
 
-```bash
-export AZMC_CONNECTION_STRING="Endpoint=sb://mynamespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=..."
+Access via `/$deadletterqueue` suffix:
+
+```
+receive myqueue/$deadletterqueue -n 0     # peek at dead-lettered messages
+move myqueue/$deadletterqueue myqueue -n 0  # redrive
 ```
 
-The `-s` flag maps to `--connection-string`:
+## Manage commands
 
-```bash
-azmc -s "Endpoint=sb://..." send myqueue "Hello"
-```
+`list`, `purge <queue>` (drains by receiving — no native purge API), `stats <queue>` (active + total counts).
 
-### Azure AD / Managed Identity
+## Supported features
 
-```bash
-export AZMC_NAMESPACE="mynamespace.servicebus.windows.net"
-az login    # or use managed identity on Azure VMs/AKS
-```
+- Application properties (`-P`), message-id, correlation-id, reply-to, content-type
+- Per-message TTL (`-E`): native `TimeToLive` field (first-class, enforced by the broker)
+- Priority (`-Y`), persistent (`-d`)
+- Native peek (non-destructive at the API level)
+- Request/reply, move, forward
+- Durable subscriptions
 
-One of `--connection-string` or `--namespace` is required.
+## Constraints
 
----
-
-## 1. Send and Receive
-
-```bash
-azmc send myqueue "Hello World"
-azmc receive myqueue
-```
-
-Output:
-```
-Hello World
-```
-
-Azure Service Bus has native queue and topic support — no auto-creation. Create queues and topics in the Azure Portal, Azure CLI, or use Azure's management SDKs.
-
----
-
-## 2. Admin Commands and Azure Service Bus Features
-
-### List, stats, and purge
-
-```bash
-azmc manage list                  # lists all queues and topics
-azmc manage stats myqueue         # active + total message counts
-azmc manage purge myqueue         # drains all messages from the queue
-```
-
-### Topics and subscriptions
-
-Azure Service Bus topics work like RabbitMQ's fan-out — each subscription gets a copy of every message. Create topics and subscriptions via the Azure Portal or CLI, then use `azmc`:
-
-```bash
-# Terminal 1
-azmc subscribe notifications -g team-ops -n 0
-
-# Terminal 2
-azmc subscribe notifications -g team-dev -n 0
-```
-
-Publish to the topic:
-
-```bash
-azmc publish notifications "Deployment complete"
-```
-
-Both subscribers receive the message.
-
-### Native peek
-
-Azure Service Bus supports non-destructive peek at the protocol level:
-
-```bash
-azmc peek myqueue                 # view the next message without consuming it
-azmc peek myqueue -n 5            # peek at up to 5 messages
-```
-
-### TTL / Message Expiry
-
-Set a per-message time-to-live — the message expires and is removed (or dead-lettered) after the duration:
-
-```bash
-azmc send myqueue "Temporary alert" -E 5m
-```
-
-**Available manage commands:** `list`, `purge`, `stats`.
-
----
-
-## 3. Deep-Dive into xmc Features
-
-### Request / Reply
-
-Start a responder:
-
-```bash
-azmc reply requests -e -n 0
-```
-
-Send a request and wait for the reply:
-
-```bash
-azmc request requests "Health check"
-```
-
-Process requests dynamically:
-
-```bash
-azmc reply requests -x "echo 'OK'" -n 0
-```
-
-### Message Properties
-
-Attach application properties to messages:
-
-```bash
-azmc send tasks "Deploy" -P env=prod -P region=westeurope
-```
-
-Receive with JSON output:
-
-```bash
-azmc receive tasks -J
-```
-
-### Custom Output Format
-
-```bash
-azmc receive tasks -F "[%i] %p{env}: %s\n"
-```
-
-### Full Metadata Control
-
-```bash
-azmc send myqueue "Important" \
-  -I "msg-001" \
-  -C "batch-42" \
-  -T application/json \
-  -d \
-  -E 1h
-```
-
-### Move and Forward
-
-Redrive messages from a dead-letter queue:
-
-```bash
-azmc move "myqueue/$deadletterqueue" myqueue -n 0
-```
-
-> **Tip:** Azure Service Bus dead-letter queues are accessed by appending `/$deadletterqueue` to the queue name.
-
-Continuous forwarding with transformation:
-
-```bash
-azmc forward incoming processed -x "jq '.reviewed = true'"
-```
-
-### Durable Subscriptions
-
-Azure subscriptions are durable by default:
-
-```bash
-azmc subscribe events -D -g my-durable-sub -n 0
-```
-
-### Bulk and Streaming
-
-```bash
-seq 100 | azmc send loadtest -l --rate 10
-azmc receive loadtest -n 0 --stats
-azmc subscribe events --for 30s --stats
-```
-
----
-
-## 4. Bridge to Another Broker
-
-Stream from Azure Service Bus to RabbitMQ using NDJSON:
-
-```bash
-# Drain an Azure queue into a RabbitMQ queue
-azmc receive myqueue -n 0 --ndjson | rmc send target --ndjson
-
-# Continuous bridge from Azure topic to RabbitMQ
-azmc subscribe events -n 0 --ndjson | rmc send events --ndjson
-```
-
-NDJSON preserves message ID, correlation ID, content type, properties, and payload across brokers.
+- No selectors on subscriptions (selector flag is accepted but not applied as a filter rule)
+- Entities must be pre-created or xmc auto-creates them (needs Manage claim)

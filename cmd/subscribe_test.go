@@ -8,7 +8,7 @@ import (
 
 func TestSubscribeCommand_PassesGroupID(t *testing.T) {
 	mock := &mockTopicBackend{subscribeMsg: &backends.Message{Data: []byte("x")}}
-	cmd := NewSubscribeCommand(mock)
+	cmd := NewSubscribeCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-topic", "-n", "1", "-g", "my-group"})
 
 	_ = captureStdout(t, func() {

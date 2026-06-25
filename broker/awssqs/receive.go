@@ -19,12 +19,14 @@ import (
 // When acknowledge is true, the message is deleted (acked) before returning.
 // When false, the message's visibility is immediately restored so it remains
 // available to other consumers (peek semantics).
-func pollSQS(ctx context.Context, sqsc *sqs.Client, queueURL string, timeout time.Duration, acknowledge bool, errLabel string) (*backends.Message, error) {
+func pollSQS(ctx context.Context, sqsc *sqs.Client, queueURL string, timeout time.Duration, acknowledge bool, errLabel string, visOverride ...int32) (*backends.Message, error) {
 	deadline := time.Now().Add(timeout)
 
 	var visibilityTimeout int32 = 30
 	if !acknowledge {
 		visibilityTimeout = 0
+	} else if len(visOverride) > 0 && visOverride[0] > 0 {
+		visibilityTimeout = visOverride[0]
 	}
 
 	allAttrs := "All"

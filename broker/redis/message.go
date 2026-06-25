@@ -73,11 +73,3 @@ func streamToMessage(id string, values map[string]any) *backends.Message {
 
 	return msg
 }
-
-func queueKey(queue string) string {
-	return "xmc:queue:" + queue
-}
-
-func topicKey(topic string) string {
-	return "xmc:topic:" + topic
-}

@@ -5,7 +5,6 @@ package pulsar
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -34,8 +33,7 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 
 // Send implements backends.QueueBackend.
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
-	topic := queueTopic(opts.Queue)
-	producer, err := a.getProducer(topic)
+	producer, err := a.getProducer(opts.Queue)
 	if err != nil {
 		return err
 	}
@@ -67,9 +65,8 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 // Receive implements backends.QueueBackend.
 // Uses Shared subscription for queue semantics (each message delivered to one consumer).
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	topic := queueTopic(opts.Queue)
 	consumer, err := a.getConsumer(pulsar.ConsumerOptions{
-		Topic:                       topic,
+		Topic:                       opts.Queue,
 		SubscriptionName:            queueSubscription,
 		Type:                        pulsar.Shared,
 		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
@@ -104,10 +101,6 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 func (a *QueueAdapter) Close() error {
 	a.close()
 	return nil
-}
-
-func queueTopic(queue string) string {
-	return fmt.Sprintf("persistent://public/default/%s", queue)
 }
 
 func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {

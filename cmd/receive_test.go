@@ -19,7 +19,7 @@ func TestReceiveCommand_DisplaysMessage(t *testing.T) {
 		Properties: map[string]any{"env": "test"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	// Capture stdout
@@ -59,7 +59,7 @@ func TestReceiveCommand_DisplaysMessage(t *testing.T) {
 
 func TestReceiveCommand_TimeoutReturnsNil(t *testing.T) {
 	mock := &mockQueueBackend{receiveErr: context.DeadlineExceeded}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	err := cmd.Execute()
@@ -70,7 +70,7 @@ func TestReceiveCommand_TimeoutReturnsNil(t *testing.T) {
 
 func TestReceiveCommand_WrappedTimeoutReturnsNil(t *testing.T) {
 	mock := &mockQueueBackend{receiveErr: fmt.Errorf("wrapped: %w", context.DeadlineExceeded)}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	err := cmd.Execute()
@@ -81,7 +81,7 @@ func TestReceiveCommand_WrappedTimeoutReturnsNil(t *testing.T) {
 
 func TestReceiveCommand_NilMessageReturnsError(t *testing.T) {
 	mock := &mockQueueBackend{receiveMsg: nil}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	err := cmd.Execute()
@@ -92,7 +92,7 @@ func TestReceiveCommand_NilMessageReturnsError(t *testing.T) {
 
 func TestReceiveCommand_NoMessageErrorReturnsError(t *testing.T) {
 	mock := &mockQueueBackend{receiveErr: backends.ErrNoMessageAvailable}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	err := cmd.Execute()
@@ -111,7 +111,7 @@ func TestReceiveCommand_CountFlag(t *testing.T) {
 		{Data: []byte("msg3")},
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-n", "3"})
 
 	old := os.Stdout
@@ -149,7 +149,7 @@ func TestReceiveCommand_JSONOutput(t *testing.T) {
 		Properties:    map[string]any{"env": "test"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-J"})
 
 	old := os.Stdout
@@ -193,7 +193,7 @@ func TestReceiveCommand_JSONOutput(t *testing.T) {
 func TestReceiveCommand_SelectorFlag(t *testing.T) {
 	msg := &backends.Message{Data: []byte("filtered")}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-S", "color='red'"})
 
 	old := os.Stdout
@@ -221,7 +221,7 @@ func TestReceiveCommand_QuietFlag(t *testing.T) {
 		Properties: map[string]any{"key": "val"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-q"})
 
 	// Capture stderr to verify properties are NOT printed
@@ -262,7 +262,7 @@ func TestReceiveCommand_QuietFlag(t *testing.T) {
 func TestReceiveCommand_AcknowledgeTrue(t *testing.T) {
 	msg := &backends.Message{Data: []byte("ack me")}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	old := os.Stdout
@@ -287,7 +287,7 @@ func TestReceiveCommand_AcknowledgeTrue(t *testing.T) {
 func TestReceiveCommand_DisplaysNewlineWhenIsStdout(t *testing.T) {
 	msg := &backends.Message{Data: []byte("hello")}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	old := os.Stdout
@@ -319,7 +319,7 @@ func TestReceiveCommand_NilMessageAfterFirst(t *testing.T) {
 		nil,
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-n", "5"})
 
 	old := os.Stdout
@@ -354,7 +354,7 @@ func TestReceiveCommand_JSONOutputAllFields(t *testing.T) {
 		InternalMetadata: map[string]any{"Header": "hdr"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-J"})
 
 	old := os.Stdout

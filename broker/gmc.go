@@ -15,9 +15,20 @@ func GetRootCommand() *cobra.Command {
 	var connArgs gcppkg.ConnArguments
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:   "gmc",
-		Short: "Google Pub/Sub Messaging Client",
-		Long:  "Command-line interface for Google Cloud Pub/Sub messaging",
+		Use:       "gmc",
+		Short:     "Google Pub/Sub Messaging Client",
+		Long:      "Command-line interface for Google Cloud Pub/Sub messaging",
+		AIContext: AIDoc("google"),
+		ConsumeFlags: func(c *cobra.Command) {
+			c.Flags().String("subscription", "", "Named subscription override for receive/subscribe")
+		},
+		ConsumeExtra: func(c *cobra.Command) map[string]string {
+			extra := make(map[string]string)
+			if s, _ := c.Flags().GetString("subscription"); s != "" {
+				extra["subscription"] = s
+			}
+			return extra
+		},
 		RegisterFlags: func(c *cobra.Command) {
 			c.PersistentFlags().StringVarP(&connArgs.Project, "project", "s", os.Getenv("GMC_PROJECT"), "Google Cloud project ID")
 			c.PersistentFlags().StringVar(&connArgs.Credentials, "credentials", os.Getenv("GMC_CREDENTIALS"), "Path to service account credentials JSON file")
@@ -26,9 +37,37 @@ func GetRootCommand() *cobra.Command {
 		Queue: func() (backends.QueueBackend, error) { return gcppkg.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return gcppkg.NewTopicAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return gcppkg.NewQueueAdapter(connArgs) },
-		Manage: cmd.NewManageCommand(cmd.ManageSpec{
-			ListQueues: func() ([]backends.QueueInfo, error) { return gcppkg.ListSubscriptions(connArgs) },
-			ListTopics: func() ([]backends.TopicInfo, error) { return gcppkg.ListTopics(connArgs) },
-		}),
+		ManageSpec: &cmd.ManageSpec{
+			Objects: []cmd.ObjectType{
+				{
+					Label: "Topics",
+					List: func() ([]backends.ObjectNode, error) {
+						topics, err := gcppkg.ListTopics(connArgs)
+						if err != nil {
+							return nil, err
+						}
+						out := make([]backends.ObjectNode, len(topics))
+						for i, t := range topics {
+							out[i] = backends.ObjectNode{Name: t.Name}
+						}
+						return out, nil
+					},
+				},
+				{
+					Label: "Subscriptions",
+					List: func() ([]backends.ObjectNode, error) {
+						subs, err := gcppkg.ListSubscriptions(connArgs)
+						if err != nil {
+							return nil, err
+						}
+						out := make([]backends.ObjectNode, len(subs))
+						for i, s := range subs {
+							out[i] = backends.ObjectNode{Name: s.Name}
+						}
+						return out, nil
+					},
+				},
+			},
+		},
 	})
 }

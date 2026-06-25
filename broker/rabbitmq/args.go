@@ -4,8 +4,6 @@ package rabbitmq
 
 type SendArguments struct {
 	Queue         string
-	Exchange      string // For topic mode: specify exchange name
-	RoutingKey    string // For topic mode: routing key
 	Message       []byte
 	ContentType   string
 	CorrelationID string

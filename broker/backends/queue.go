@@ -31,7 +31,8 @@ type SendOptions struct {
 	ContentType   string
 	Priority      int
 	Persistent    bool
-	TTL           int64 // Time-to-live in milliseconds (0 = no expiry)
+	TTL           int64             // Time-to-live in milliseconds (0 = no expiry)
+	Extra         map[string]string // Broker-specific flags (e.g. fifo, qos, routing-type)
 }
 
 // ReceiveOptions contains options for receiving messages from a queue
@@ -42,6 +43,7 @@ type ReceiveOptions struct {
 	Acknowledge bool // true = destructive read (get), false = browse (peek)
 	Verbosity   Verbosity
 	Selector    string // JMS-style message selector expression
+	Extra       map[string]string // Broker-specific flags (e.g. visibility-timeout, qos)
 }
 
 // QueueBackend defines the interface for queue-based messaging brokers

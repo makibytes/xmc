@@ -1,203 +1,46 @@
-# Getting Started with Apache Kafka (`kmc`)
+# Apache Kafka (`kmc`)
 
-Binary: **`kmc`** — Kafka Messaging Client
+Default: `kafka://localhost:9092` (env `KMC_SERVER`). Auth: `-u`/`-p` (SASL PLAIN). TLS: `kafka+ssl://` or `--tls`. Multiple brokers: `kafka://b1:9092,b2:9092`.
 
-```bash
-go build -tags kafka -o kmc .
+## Addressing
+
+Topic-only broker — no queue commands (send/receive/peek/request/reply/move unavailable). Topic names are bare strings, no transformation.
+
+```
+publish mytopic "msg"
+subscribe mytopic
+publish mytopic -K "user-42" "msg"    # -K sets the partition key
 ```
 
-## Authentication
+## Consumer groups
 
-`kmc` connects to Kafka brokers using the native Kafka protocol. The default server is `kafka://localhost:9092`.
+`-g <group>` (default: `xmc-consumer-group`). Kafka manages offsets per group — restart with the same group to resume. Multiple consumers in the same group share partitions.
 
-```bash
-export KMC_SERVER="kafka://localhost:9092"
+```
+subscribe orders -g processors -n 0
 ```
 
-For SASL PLAIN authentication (both must be set):
+## Topic forward
 
-```bash
-export KMC_USER="my-user"
-export KMC_PASSWORD="my-password"
+Kafka supports topic-to-topic forwarding:
+
+```
+forward source-topic dest-topic
+forward raw clean -x "jq '.status = \"done\"'"
 ```
 
-For TLS use `kafka+ssl://` or add `--tls`. Multiple brokers: `kafka://broker1:9092,broker2:9092`.
+## Manage commands
 
-> **Quick start with Docker:**
-> ```bash
-> docker run -d --name kafka -p 9092:9092 apache/kafka:latest
-> ```
+`list`, `create-topic <name> --partitions N --replication-factor N --config key=value`, `delete-topic <name>`.
 
----
+## Supported features
 
-## 1. Publish and Subscribe
+- Application properties (`-P`, carried as Kafka headers), content-type, correlation-id, message-id
+- Message key (`-K`) for partition affinity
+- TTL (`-E`): stamps a `ttl` header (advisory only — Kafka uses topic-level `retention.ms` for actual expiry)
 
-Kafka is topic-centric — there are no queues. The natural operations are publish and subscribe.
+## Constraints
 
-```bash
-kmc publish mytopic "Hello World"
-kmc subscribe mytopic
-```
-
-Output:
-```
-Hello World
-```
-
-Subscribe blocks by default (`--wait` is on) and waits for messages. Press Ctrl-C to stop, or use `-n 1` to receive exactly one message.
-
----
-
-## 2. Admin Commands and Kafka Topics
-
-### Create a topic with partitions
-
-```bash
-kmc manage create-topic orders --partitions 3 --replication-factor 1
-kmc manage list
-```
-
-The list shows all topics with their partition counts.
-
-### Consumer groups for parallel processing
-
-Kafka's consumer groups distribute partitions across consumers. Start two subscribers in the same group:
-
-```bash
-# Terminal 1
-kmc subscribe orders -g order-processors -n 0
-
-# Terminal 2
-kmc subscribe orders -g order-processors -n 0
-```
-
-Publish messages — they are distributed across the two consumers (each partition assigned to one consumer):
-
-```bash
-for i in $(seq 1 10); do kmc publish orders "Order $i"; done
-```
-
-Start a second group to independently consume the same topic:
-
-```bash
-kmc subscribe orders -g analytics -n 0
-```
-
-Both `order-processors` and `analytics` receive all messages, but within `order-processors` the load is split.
-
-### Message keys for partition affinity
-
-Use `-K` to set a message key — messages with the same key always go to the same partition:
-
-```bash
-kmc publish orders -K "customer-42" "Order for customer 42"
-kmc publish orders -K "customer-42" "Another order for customer 42"
-kmc publish orders -K "customer-99" "Order for customer 99"
-```
-
-### Topic configuration
-
-Pass Kafka-native topic configs at creation time:
-
-```bash
-kmc manage create-topic logs \
-  --partitions 6 \
-  --replication-factor 1 \
-  --config retention.ms=86400000 \
-  --config cleanup.policy=delete
-```
-
-### Clean up
-
-```bash
-kmc manage delete-topic orders
-kmc manage delete-topic logs
-```
-
-**Available manage commands:** `list`, `create-topic` (with `--partitions`, `--replication-factor`, `--config`), `delete-topic`.
-
----
-
-## 3. Deep-Dive into xmc Features
-
-> **Note:** Kafka is topic-only in xmc — queue commands (`send`, `receive`, `peek`, `request`, `reply`, `move`) are not available. Use `publish`, `subscribe`, and `forward` instead.
-
-### Message Properties
-
-Attach application properties (Kafka headers) to messages:
-
-```bash
-kmc publish events "User signed up" -P source=web -P region=eu
-```
-
-Subscribe with JSON output to see properties:
-
-```bash
-kmc subscribe events -J -n 1
-```
-
-### Custom Output Format
-
-```bash
-kmc subscribe events -n 0 -F "%p{source} [%y]: %s\n"
-```
-
-### Forward between topics
-
-Continuously relay messages from one topic to another:
-
-```bash
-kmc forward raw-events clean-events
-```
-
-Transform each message during forwarding:
-
-```bash
-kmc forward raw-events clean-events -x "jq '{event: .type, ts: .timestamp}'"
-```
-
-### Bulk Publishing
-
-```bash
-seq 1000 | kmc publish loadtest -l --rate 100    # 100 msg/s, one per line
-```
-
-### Streaming with Stats
-
-```bash
-kmc subscribe mytopic -n 0 --for 30s --stats
-```
-
-### TTL / Message Headers
-
-Use `-E` to stamp a `ttl` header on a message. Consumers can read this header and honor it, but Kafka itself does **not** enforce per-message expiry — actual deletion is governed by the topic's `retention.ms` setting:
-
-```bash
-kmc publish events "temporary" -E 10s
-```
-
-To set topic-level retention at creation time:
-
-```bash
-kmc manage create-topic ephemeral --partitions 1 --config retention.ms=60000
-```
-
-### Durable Consumption
-
-The consumer group offset is managed by Kafka — restart a subscriber with the same `-g` group and it resumes from where it left off.
-
----
-
-## 4. Bridge to Another Broker
-
-Stream Kafka topics into RabbitMQ using NDJSON:
-
-```bash
-# One-shot: drain a Kafka topic into a RabbitMQ queue
-kmc subscribe mytopic -n 0 --ndjson | rmc send target --ndjson
-
-# Continuous bridge
-kmc subscribe events -n 0 --ndjson | rmc send events --ndjson
-```
-
-NDJSON preserves message ID, correlation ID, content type, properties, and payload across brokers.
+- Topic-only: no queue commands
+- No selectors, no priority, no persistent flag (Kafka always persists)
+- Topics auto-created on publish by default

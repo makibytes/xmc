@@ -2,10 +2,23 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
 )
+
+// formatMetrics formats a node's metrics as "label=value" pairs for text output.
+func formatMetrics(metrics []backends.Metric) string {
+	if len(metrics) == 0 {
+		return ""
+	}
+	parts := make([]string, len(metrics))
+	for i, m := range metrics {
+		parts[i] = fmt.Sprintf("%s=%d", m.Label, m.Value)
+	}
+	return strings.Join(parts, " ")
+}
 
 // ManageAction is one create/delete subcommand: optional flags + a run closure
 // that closes over those flag-bound vars (same lazy-capture idiom as the rest
@@ -22,14 +35,24 @@ type BindAction struct {
 	Run        func(queue, exchange string) error
 }
 
+// ObjectType declares one browsable object type for the AI TUI sidebar. Each
+// broker fills in its own set (e.g. RabbitMQ: Queues, Exchanges; Kafka: Topics,
+// Consumer Groups). Hierarchical types (exchange→binding→queue) populate
+// Children on the returned nodes when expanded.
+type ObjectType struct {
+	Label        string                                      // window title: "Queues", "Exchanges", "Subscriptions"
+	Hierarchical bool                                        // true → expand hotkey reveals Children as a tree
+	List         func() ([]backends.ObjectNode, error)       // returns the current objects
+}
+
 // ManageSpec describes the management capabilities a broker exposes. Each
 // closure is optional — nil means the broker does not support that operation,
 // and the corresponding subcommand is omitted.
 type ManageSpec struct {
-	// ListQueues returns all queues known to the broker.
-	ListQueues func() ([]backends.QueueInfo, error)
-	// ListTopics returns all topics known to the broker.
-	ListTopics func() ([]backends.TopicInfo, error)
+	// Objects declares the browsable object types shown in the AI TUI sidebar.
+	// Each entry becomes a window. Order determines the display order.
+	Objects []ObjectType
+
 	// Purge removes all messages from a queue and returns the count removed
 	// (or 0 when the broker does not report a count).
 	Purge func(queue string) (int64, error)
@@ -40,10 +63,10 @@ type ManageSpec struct {
 	SetupFlags func(cmd *cobra.Command)
 
 	// Resource lifecycle operations — all optional.
-	CreateQueue   *ManageAction
-	DeleteQueue   *ManageAction
-	CreateTopic   *ManageAction
-	DeleteTopic   *ManageAction
+	CreateQueue    *ManageAction
+	DeleteQueue    *ManageAction
+	CreateTopic    *ManageAction
+	DeleteTopic    *ManageAction
 	CreateExchange *ManageAction
 	DeleteExchange *ManageAction
 	BindQueue      *BindAction
@@ -62,36 +85,42 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 		spec.SetupFlags(mgmtCmd)
 	}
 
-	hasBoth := spec.ListQueues != nil && spec.ListTopics != nil
+	hasMultiple := len(spec.Objects) > 1
 
-	if spec.ListQueues != nil || spec.ListTopics != nil {
+	if len(spec.Objects) > 0 {
 		mgmtCmd.AddCommand(&cobra.Command{
 			Use:   "list",
-			Short: "List queues and topics",
+			Short: "List broker objects",
 			RunE: func(c *cobra.Command, args []string) error {
-				if spec.ListQueues != nil {
-					queues, err := spec.ListQueues()
+				w := c.OutOrStdout()
+				for _, ot := range spec.Objects {
+					nodes, err := ot.List()
 					if err != nil {
 						return err
 					}
-					for _, q := range queues {
-						if hasBoth {
-							fmt.Printf("queue  %-40s  messages=%d\n", q.Name, q.MessageCount)
+					prefix := ""
+					if hasMultiple {
+						prefix = strings.ToLower(ot.Label) + "  "
+					}
+					for _, n := range nodes {
+						metricStr := formatMetrics(n.Metrics)
+						detail := strings.TrimSpace(n.Kind + " " + metricStr)
+						if detail != "" {
+							fmt.Fprintf(w, "%s%-40s  %s\n", prefix, n.Name, detail)
 						} else {
-							fmt.Printf("%-40s  messages=%d\n", q.Name, q.MessageCount)
+							fmt.Fprintf(w, "%s%s\n", prefix, n.Name)
 						}
-					}
-				}
-				if spec.ListTopics != nil {
-					topics, err := spec.ListTopics()
-					if err != nil {
-						return err
-					}
-					for _, t := range topics {
-						if hasBoth {
-							fmt.Printf("topic  %s\n", t.Name)
-						} else {
-							fmt.Printf("%s\n", t.Name)
+						for _, child := range n.Children {
+							childMetrics := formatMetrics(child.Metrics)
+							kind := child.Kind
+							if kind != "" {
+								kind += " "
+							}
+							if childMetrics != "" {
+								fmt.Fprintf(w, "%s  └ %s%s  %s\n", prefix, kind, child.Name, childMetrics)
+							} else {
+								fmt.Fprintf(w, "%s  └ %s%s\n", prefix, kind, child.Name)
+							}
 						}
 					}
 				}
@@ -106,14 +135,15 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 			Short: "Remove all messages from a queue",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(c *cobra.Command, args []string) error {
+				w := c.OutOrStdout()
 				count, err := spec.Purge(args[0])
 				if err != nil {
 					return err
 				}
 				if count > 0 {
-					fmt.Printf("Purged %d messages from %s\n", count, args[0])
+					fmt.Fprintf(w, "Purged %d messages from %s\n", count, args[0])
 				} else {
-					fmt.Printf("Purged queue %s\n", args[0])
+					fmt.Fprintf(w, "Purged queue %s\n", args[0])
 				}
 				return nil
 			},
@@ -126,18 +156,19 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 			Short: "Show queue statistics",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(c *cobra.Command, args []string) error {
+				w := c.OutOrStdout()
 				stats, err := spec.Stats(args[0])
 				if err != nil {
 					return err
 				}
-				fmt.Printf("Queue:     %s\n", stats.Name)
-				fmt.Printf("Messages:  %d\n", stats.MessageCount)
-				fmt.Printf("Consumers: %d\n", stats.ConsumerCount)
+				fmt.Fprintf(w, "Queue:     %s\n", stats.Name)
+				fmt.Fprintf(w, "Messages:  %d\n", stats.MessageCount)
+				fmt.Fprintf(w, "Consumers: %d\n", stats.ConsumerCount)
 				if stats.EnqueueCount > 0 {
-					fmt.Printf("Enqueued:  %d\n", stats.EnqueueCount)
+					fmt.Fprintf(w, "Enqueued:  %d\n", stats.EnqueueCount)
 				}
 				if stats.DequeueCount > 0 {
-					fmt.Printf("Dequeued:  %d\n", stats.DequeueCount)
+					fmt.Fprintf(w, "Dequeued:  %d\n", stats.DequeueCount)
 				}
 				return nil
 			},
@@ -170,7 +201,7 @@ func addManageAction(parent *cobra.Command, use, short, argName, successFmt stri
 			if err := action.Run(args[0]); err != nil {
 				return err
 			}
-			fmt.Printf(successFmt, args[0])
+			fmt.Fprintf(c.OutOrStdout(), successFmt, args[0])
 			return nil
 		},
 	}
@@ -194,7 +225,7 @@ func addBindAction(parent *cobra.Command, use, short, successFmt string, action 
 			if err := action.Run(args[0], args[1]); err != nil {
 				return err
 			}
-			fmt.Printf(successFmt, args[0], args[1])
+			fmt.Fprintf(c.OutOrStdout(), successFmt, args[0], args[1])
 			return nil
 		},
 	}

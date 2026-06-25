@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"context"
-	"os"
+	"io"
 	"time"
 
 	"github.com/makibytes/xmc/log"
@@ -85,13 +85,14 @@ type emitterFromRecord func(ctx context.Context, rec messageRecord) error
 
 // runProduce drives the produce loop shared by send and publish:
 // NDJSON import, line-delimited mode, or a counted send of a single payload.
-func runProduce(cmd *cobra.Command, args []string, pf produceFlags,
+// The input reader is used for stdin-based modes (lines, ndjson, pipe).
+func runProduce(ctx context.Context, input io.Reader, args []string, pf produceFlags,
 	emit emitter, emitRecord emitterFromRecord, verb string,
 ) error {
 	if pf.ndjson {
-		sent, err := forEachRecord(os.Stdin, func(rec messageRecord) error {
+		sent, err := forEachRecord(input, func(rec messageRecord) error {
 			pf.limiter.wait()
-			return emitRecord(context.Background(), rec)
+			return emitRecord(ctx, rec)
 		})
 		if err != nil {
 			return err
@@ -101,9 +102,9 @@ func runProduce(cmd *cobra.Command, args []string, pf produceFlags,
 	}
 
 	if pf.lines {
-		sent, err := forEachInputLine(func(line string) error {
+		sent, err := forEachInputLine(input, func(line string) error {
 			pf.limiter.wait()
-			return emit(context.Background(), []byte(line))
+			return emit(ctx, []byte(line))
 		})
 		if err != nil {
 			return err
@@ -112,14 +113,14 @@ func runProduce(cmd *cobra.Command, args []string, pf produceFlags,
 		return nil
 	}
 
-	data, err := readCommandMessage(args)
+	data, err := readCommandMessage(args, input)
 	if err != nil {
 		return err
 	}
 
 	for i := 0; i < pf.count; i++ {
 		pf.limiter.wait()
-		if err := emit(context.Background(), data); err != nil {
+		if err := emit(ctx, data); err != nil {
 			return err
 		}
 		if pf.count > 1 {

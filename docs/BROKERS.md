@@ -77,9 +77,10 @@ flowchart LR
 - Protocol: AMQP 1.0 (RabbitMQ v4+)
 - AMQP 1.0 address format: v2 (`/queues/<name>`, `/exchanges/<exchange>/<routing-key>`)
 - Queues must be pre-declared (RabbitMQ does not auto-create queues over AMQP 1.0)
-- Choose between exchange/queue model (also for topics & subscriptions) and simple queue model
+- Smart addressing defaults: `send` → `/queues/<name>`, `publish` → `/exchanges/amq.topic/<name>`
+- Explicit routing: `-e <exchange>` sets the exchange (with optional routing key as `<to>`), `-q <queue>` forces queue routing
+- Full v2 addresses (starting with `/`) are always used verbatim (highest precedence)
 - Choose between `fanout`, `direct`, `topic` and `headers` exchange types
-- Topics use exchange-based routing (default exchange: `amq.topic`, configurable via `--exchange/-e`)
 - Selectors: Supported via AMQP source filters
 - Management: RabbitMQ Management API on HTTP port 15672 (list, purge, stats, create/delete queue, create/delete exchange, bind/unbind queue)
 

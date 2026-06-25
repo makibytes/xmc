@@ -11,29 +11,30 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-func ListQueues(connArgs ConnArguments) ([]backends.QueueInfo, error) {
-	return listByPrefix(connArgs, "xmc:queue:")
+func ListQueues(connArgs ConnArguments, prefix string) ([]backends.QueueInfo, error) {
+	return listByPattern(connArgs, prefix+":queue:")
 }
 
-func ListTopics(connArgs ConnArguments) ([]backends.TopicInfo, error) {
+func ListTopics(connArgs ConnArguments, prefix string) ([]backends.TopicInfo, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
 
+	topicPrefix := prefix + ":topic:"
 	ctx := context.Background()
 	var topics []backends.TopicInfo
 	var cursor uint64
 
 	for {
-		keys, next, err := client.Scan(ctx, cursor, "xmc:topic:*", 100).Result()
+		keys, next, err := client.Scan(ctx, cursor, topicPrefix+"*", 100).Result()
 		if err != nil {
 			return nil, fmt.Errorf("scanning topics: %w", err)
 		}
 		for _, k := range keys {
 			topics = append(topics, backends.TopicInfo{
-				Name: strings.TrimPrefix(k, "xmc:topic:"),
+				Name: strings.TrimPrefix(k, topicPrefix),
 			})
 		}
 		cursor = next
@@ -46,7 +47,7 @@ func ListTopics(connArgs ConnArguments) ([]backends.TopicInfo, error) {
 }
 
 // CreateQueue creates a Redis stream for a queue and its consumer group.
-func CreateQueue(connArgs ConnArguments, queue string) error {
+func CreateQueue(connArgs ConnArguments, prefix, queue string) error {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return err
@@ -54,14 +55,13 @@ func CreateQueue(connArgs ConnArguments, queue string) error {
 	defer client.Close()
 
 	ctx := context.Background()
-	key := queueKey(queue)
+	key := prefix + ":queue:" + queue
 
-	// XGROUP CREATE with MKSTREAM creates both the stream and the consumer group.
 	return client.XGroupCreateMkStream(ctx, key, xmcQueueGroup, "0").Err()
 }
 
 // DeleteQueue deletes the Redis stream for a queue.
-func DeleteQueue(connArgs ConnArguments, queue string) error {
+func DeleteQueue(connArgs ConnArguments, prefix, queue string) error {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return err
@@ -69,11 +69,11 @@ func DeleteQueue(connArgs ConnArguments, queue string) error {
 	defer client.Close()
 
 	ctx := context.Background()
-	return client.Del(ctx, queueKey(queue)).Err()
+	return client.Del(ctx, prefix+":queue:"+queue).Err()
 }
 
 // CreateTopic creates a Redis stream for a topic.
-func CreateTopic(connArgs ConnArguments, topic string) error {
+func CreateTopic(connArgs ConnArguments, prefix, topic string) error {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return err
@@ -81,25 +81,20 @@ func CreateTopic(connArgs ConnArguments, topic string) error {
 	defer client.Close()
 
 	ctx := context.Background()
-	key := topicKey(topic)
+	key := prefix + ":topic:" + topic
 
-	// Add and immediately trim to create an empty stream with MAXLEN ~ 10000
-	// (matching the topic adapter's trimming policy).
 	_, err = client.XAdd(ctx, &redis.XAddArgs{
 		Stream: key,
-		MaxLen: 10000,
-		Approx: true,
 		Values: map[string]any{"_init": "1"},
 	}).Result()
 	if err != nil {
 		return fmt.Errorf("creating topic stream: %w", err)
 	}
-	// Trim the init message — XTRIM MAXLEN 0 removes everything.
 	return client.XTrimMaxLen(ctx, key, 0).Err()
 }
 
 // DeleteTopic deletes the Redis stream for a topic.
-func DeleteTopic(connArgs ConnArguments, topic string) error {
+func DeleteTopic(connArgs ConnArguments, prefix, topic string) error {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return err
@@ -107,10 +102,10 @@ func DeleteTopic(connArgs ConnArguments, topic string) error {
 	defer client.Close()
 
 	ctx := context.Background()
-	return client.Del(ctx, topicKey(topic)).Err()
+	return client.Del(ctx, prefix+":topic:"+topic).Err()
 }
 
-func PurgeQueue(connArgs ConnArguments, queue string) (int64, error) {
+func PurgeQueue(connArgs ConnArguments, prefix, queue string) (int64, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return 0, err
@@ -118,7 +113,7 @@ func PurgeQueue(connArgs ConnArguments, queue string) (int64, error) {
 	defer client.Close()
 
 	ctx := context.Background()
-	key := queueKey(queue)
+	key := prefix + ":queue:" + queue
 
 	count, err := client.XLen(ctx, key).Result()
 	if err != nil {
@@ -132,7 +127,7 @@ func PurgeQueue(connArgs ConnArguments, queue string) (int64, error) {
 	return count, nil
 }
 
-func GetQueueStats(connArgs ConnArguments, queue string) (*backends.QueueStats, error) {
+func GetQueueStats(connArgs ConnArguments, prefix, queue string) (*backends.QueueStats, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return nil, err
@@ -140,7 +135,7 @@ func GetQueueStats(connArgs ConnArguments, queue string) (*backends.QueueStats, 
 	defer client.Close()
 
 	ctx := context.Background()
-	key := queueKey(queue)
+	key := prefix + ":queue:" + queue
 
 	length, err := client.XLen(ctx, key).Result()
 	if err != nil {
@@ -162,7 +157,7 @@ func GetQueueStats(connArgs ConnArguments, queue string) (*backends.QueueStats, 
 	}, nil
 }
 
-func listByPrefix(connArgs ConnArguments, prefix string) ([]backends.QueueInfo, error) {
+func listByPattern(connArgs ConnArguments, prefix string) ([]backends.QueueInfo, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return nil, err

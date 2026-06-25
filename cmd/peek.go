@@ -14,7 +14,7 @@ func NewPeekCommand(backend backends.QueueBackend) *cobra.Command {
 		Short: "Peek at a message in the queue without removing it (non-destructive read)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return doReceive(cmd, args, backend, false)
+			return doReceive(cmd, args, backend, false, nil, nil)
 		},
 	}
 

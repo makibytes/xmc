@@ -48,6 +48,9 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	subName := fmt.Sprintf("xmc-queue-%s", opts.Queue)
+	if opts.Extra != nil && opts.Extra["subscription"] != "" {
+		subName = opts.Extra["subscription"]
+	}
 	topic, err := ensureTopic(ctx, a.client, opts.Queue)
 	if err != nil {
 		return nil, err

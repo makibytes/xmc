@@ -61,30 +61,33 @@ func adminPutJSON(endpoint string, body []byte) error {
 	return nil
 }
 
-// CreateTopic creates a persistent topic via the Admin REST API. If partitions > 0,
+// CreateTopic creates a topic via the Admin REST API. If partitions > 0,
 // a partitioned topic is created; otherwise a non-partitioned topic.
-func CreateTopic(connArgs ConnArguments, adminPort int, topic string, partitions int) error {
+func CreateTopic(connArgs ConnArguments, adminPort int, topic, tenant, namespace string, nonPersistent bool, partitions int) error {
 	adminURL := buildAdminURL(connArgs.Server, adminPort)
+	persistence := persistenceScheme(nonPersistent)
 	if partitions > 0 {
-		endpoint := fmt.Sprintf("%s/admin/v2/persistent/public/default/%s/partitions", adminURL, url.PathEscape(topic))
+		endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s/%s/partitions", adminURL, persistence, tenant, namespace, url.PathEscape(topic))
 		body := fmt.Sprintf("%d", partitions)
 		return adminPutJSON(endpoint, []byte(body))
 	}
-	endpoint := fmt.Sprintf("%s/admin/v2/persistent/public/default/%s", adminURL, url.PathEscape(topic))
+	endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s/%s", adminURL, persistence, tenant, namespace, url.PathEscape(topic))
 	return adminRequest("PUT", endpoint)
 }
 
-// DeleteTopic deletes a persistent topic via the Admin REST API.
-func DeleteTopic(connArgs ConnArguments, adminPort int, topic string) error {
+// DeleteTopic deletes a topic via the Admin REST API.
+func DeleteTopic(connArgs ConnArguments, adminPort int, topic, tenant, namespace string, nonPersistent bool) error {
 	adminURL := buildAdminURL(connArgs.Server, adminPort)
-	endpoint := fmt.Sprintf("%s/admin/v2/persistent/public/default/%s", adminURL, url.PathEscape(topic))
+	persistence := persistenceScheme(nonPersistent)
+	endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s/%s", adminURL, persistence, tenant, namespace, url.PathEscape(topic))
 	return adminRequest("DELETE", endpoint)
 }
 
-// ListTopics lists persistent topics in the public/default namespace via the Admin REST API.
-func ListTopics(connArgs ConnArguments, adminPort int) ([]TopicInfo, error) {
+// ListTopics lists topics in the given tenant/namespace via the Admin REST API.
+func ListTopics(connArgs ConnArguments, adminPort int, tenant, namespace string, nonPersistent bool) ([]TopicInfo, error) {
 	adminURL := buildAdminURL(connArgs.Server, adminPort)
-	endpoint := fmt.Sprintf("%s/admin/v2/persistent/public/default", adminURL)
+	persistence := persistenceScheme(nonPersistent)
+	endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s", adminURL, persistence, tenant, namespace)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(endpoint)
@@ -130,4 +133,11 @@ func buildAdminURL(brokerURL string, adminPort int) string {
 	}
 
 	return fmt.Sprintf("%s://%s:%d", scheme, host, adminPort)
+}
+
+func persistenceScheme(nonPersistent bool) string {
+	if nonPersistent {
+		return "non-persistent"
+	}
+	return "persistent"
 }

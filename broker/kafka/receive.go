@@ -30,10 +30,18 @@ func SubscribeMessage(ctx context.Context, connArgs ConnArguments, args ReceiveA
 	readerConfig := kafka.ReaderConfig{
 		Brokers:  brokers,
 		Topic:    args.Topic,
-		GroupID:  args.GroupID,
 		MinBytes: 10e3, // 10KB
 		MaxBytes: 10e6, // 10MB
 		Dialer:   buildDialer(connArgs, tlsConfig),
+	}
+
+	if args.Partition >= 0 {
+		readerConfig.Partition = args.Partition
+		if args.Offset >= 0 {
+			readerConfig.StartOffset = args.Offset
+		}
+	} else {
+		readerConfig.GroupID = args.GroupID
 	}
 
 	reader := kafka.NewReader(readerConfig)

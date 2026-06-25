@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"maps"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -151,9 +151,9 @@ func formatProperties(properties map[string]any) string {
 }
 
 // displayMessageFormat writes the message rendered through the format string to
-// stdout. Unlike displayMessage it adds no trailing newline: the format string
-// is responsible for all output, including line breaks via \n.
-func displayMessageFormat(message *backends.Message, format string) error {
-	_, err := fmt.Fprint(os.Stdout, formatMessage(message, format))
+// the given writer. Unlike displayMessage it adds no trailing newline: the
+// format string is responsible for all output, including line breaks via \n.
+func displayMessageFormat(w io.Writer, message *backends.Message, format string) error {
+	_, err := fmt.Fprint(w, formatMessage(message, format))
 	return err
 }

@@ -42,12 +42,7 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 	}
 
 	targetAddress := args.Queue
-	if args.Exchange != "" {
-		targetAddress = "/exchanges/" + args.Exchange + "/" + args.RoutingKey
-		log.Verbose("📤 sending to exchange %s (routing key: %s)...", args.Exchange, args.RoutingKey)
-	} else {
-		log.Verbose("📤 sending to queue %s...", args.Queue)
-	}
+	log.Verbose("📤 sending to %s...", targetAddress)
 
 	senderOptions := &amqp.SenderOptions{
 		Durability:       durability,

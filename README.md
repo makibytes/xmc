@@ -490,6 +490,134 @@ next message boundary when the window elapses or on Ctrl-C, so `--stats` totals
 are always printed. Combined with `-n` (count) you get "whichever comes first":
 `xmc receive -n 1000 --for 10s q` stops at 1000 messages or 10 seconds.
 
+### Interactive Shell
+
+Start an interactive REPL with a persistent, auto-reconnecting broker connection:
+
+```sh
+xmc shell              # or: xmc sh
+```
+
+All xmc verbs are available at the prompt. Pipelines work: xmc verbs pipe through
+each other in-process (using NDJSON framing to preserve metadata), and external
+commands run in your real shell:
+
+```sh
+amc> subscribe events | send archive-queue        # verb-to-verb bridge
+amc> receive dlq | grep -i error | jq .           # filter with external tools
+amc> receive dlq -n 0 | jq . | xxd                # chain multiple externals
+amc> !ls -la                                       # escape to full shell
+amc> help                                          # list available commands
+amc> exit                                          # leave the shell (or Ctrl-D)
+```
+
+The shell holds one connection for the entire session and automatically
+reconnects on transient failures. Command history is saved to `~/.xmc/<binary>-sh.log`
+with arrow-key recall and Ctrl-R reverse search.
+
+## AI Shell
+
+XMC's AI Shell lets you describe what you want in natural language and translates your
+request into the correct xmc command. It knows your broker's topology (queues,
+topics, exchanges) and all available flags, so you don't have to memorize them.
+
+### Setup
+
+xmc supports these AI providers:
+
+| Provider | Environment variable | Default model |
+| --- | --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-6 |
+| OpenAI | `OPENAI_API_KEY` | gpt-4o |
+| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-2.0-flash |
+| xAI | `XAI_API_KEY` | grok-2-latest |
+| DeepSeek | `DEEPSEEK_API_KEY` | deepseek-chat |
+| Mistral | `MISTRAL_API_KEY` | mistral-large-latest |
+| OpenCode AI (Zen) | `OPENCODE_API_KEY` or `OPENCODE_ZEN_API_KEY` | mimo-v2.5-free |
+
+The recommended provider for getting started is **OpenCode AI** — their free
+models (like mimo-v2.5-free, which xmc uses by default) work well for command
+generation and cost nothing. Sign up at [opencode.ai](https://opencode.ai),
+grab an API key, and export it:
+
+```sh
+export OPENCODE_API_KEY="your-key-here"
+```
+
+xmc auto-detects API keys in the order listed above.
+
+### Using AI Shell
+
+Start the AI Shell:
+
+```sh
+xmc ai
+```
+
+The AI Shell has two input modes, toggled with **Esc**:
+
+- **`ask>`** — type a natural-language request. The AI generates an xmc command
+  and shows it as a proposal. Press **Enter** to execute it, or **Ctrl+C** to
+  discard.
+- **`xmc>`** — type xmc commands directly (like the regular shell), with
+  **Tab** autocomplete. Useful when you already know the command and want to
+  stay in the same TUI.
+
+The right side of the screen shows a sidebar with your broker's objects (queues,
+topics, exchanges) and their message counts, refreshed automatically in the
+background.
+
+Key bindings:
+
+```
+Esc          toggle between ask> (AI) and xmc> (command) mode
+Enter        execute the proposed command
+Ctrl+C       discard the proposal / cancel thinking
+Tab          autocomplete (command mode)
+Shift+Tab    browse broker objects in the sidebar
+Up/Down      recall command history
+PgUp/PgDn    scroll conversation
+```
+
+### Slash Commands
+
+Inside AI Shell, these slash commands are available:
+
+| Command | Description |
+| --- | --- |
+| `/model` | Pick a model interactively from the provider's model list |
+| `/model <name>` | Switch to a specific model directly (persisted to config) |
+| `/effort low\|med\|high` | Set reasoning effort (temperature) |
+| `/refresh` | Reload broker objects now (one-shot) |
+| `/refresh <dur>` | Set the periodic refresh interval (e.g. `3s`, `3m`; minimum `1s`; persisted to config) |
+| `/refresh off` | Disable periodic sidebar refresh |
+| `/reset` | Clear conversation history |
+| `/clear` | Clear the display |
+| `/exit` | Quit |
+
+## Config File
+
+The config file `~/.xmc/<binary>.yml` can e.g. supply broker authentication as a fallback
+(precedence: flag > env var > YAML > built-in default):
+
+```yaml
+connection:
+  server: amqp://broker.internal:5672
+  user: admin
+  password: secret
+```
+
+On Windows, config files live in `%LOCALAPPDATA%\xmc\`.
+
+And if you have multiple AI providers and keys in your environment, you can
+select the specific provider and model xmc should use:
+
+```yaml
+ai:
+  provider: opencode
+  model: mimo-v2.5-free
+```
+
 ### Version
 
 Print the version of the binary:
@@ -500,7 +628,7 @@ xmc version
 
 ## More Documentation
 
-The table at the top has links to the Getting Started Guides for each supported broker. Each guide covers authentication, basic send/receive, admin commands, broker specific features, advanced xmc features, and cross-broker bridging. There's also a [Bridging Brokers Guide](docs/BRIDGING.md), which covers details of how to pipe messages between brokers without data loss using `--ndjson`. We also have an [MCP guide](docs/MCP.md), which covers details of how to use xmc's MCP mode. You might want to use MCP mode as a standalone service in your k8s cluster.
+The table at the top has links to the Getting Started Guides for each supported broker. Each guide covers authentication, basic send/receive, admin commands, broker specific features, advanced xmc features, and cross-broker bridging. There's also a [Forwarding & Bridging Guide](docs/BRIDGE_AND_FORWARD.md), which covers when to use `forward`, `bridge`, and `receive | send` for relaying messages within or across brokers. We also have an [MCP guide](docs/MCP.md), which covers details of how to use xmc's MCP mode. You might want to use MCP mode as a standalone service in your k8s cluster.
 
 Not all brokers support all features. Take a look at the [feature matrix](docs/BROKERS.md) for more details.
 

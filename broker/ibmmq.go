@@ -20,9 +20,10 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:   "imc",
-		Short: "IBM MQ Messaging Client",
-		Long:  "Command-line interface for IBM MQ messaging",
+		Use:       "imc",
+		Short:     "IBM MQ Messaging Client",
+		Long:      "Command-line interface for IBM MQ messaging",
+		AIContext: AIDoc("ibmmq"),
 		RegisterFlags: func(c *cobra.Command) {
 			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("IMC_USER"), "Username for authentication")

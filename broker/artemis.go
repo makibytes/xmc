@@ -21,18 +21,36 @@ func GetRootCommand() *cobra.Command {
 		defaultServer = "amqp://localhost:5672"
 	}
 
+	var brokerName string
+
 	mgmtArgs := func() artemis.ManagementArgs {
-		return artemis.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password}
+		return artemis.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password, BrokerName: brokerName}
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:   "amc",
-		Short: "Apache Artemis Messaging Client",
-		Long:  "Command-line interface for Apache Artemis messaging",
+		Use:       "amc",
+		Short:     "Apache Artemis Messaging Client",
+		Long:      "Command-line interface for Apache Artemis messaging",
+		AIContext: AIDoc("artemis"),
+		ProduceFlags: func(c *cobra.Command) {
+			c.Flags().Bool("anycast", false, "Force ANYCAST routing type")
+			c.Flags().Bool("multicast", false, "Force MULTICAST routing type")
+		},
+		ProduceExtra: func(c *cobra.Command) map[string]string {
+			extra := make(map[string]string)
+			if ac, _ := c.Flags().GetBool("anycast"); ac {
+				extra["routing-type"] = "anycast"
+			}
+			if mc, _ := c.Flags().GetBool("multicast"); mc {
+				extra["routing-type"] = "multicast"
+			}
+			return extra
+		},
 		RegisterFlags: func(c *cobra.Command) {
 			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("AMC_USER"), "Username for SASL PLAIN login")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("AMC_PASSWORD"), "Password for SASL PLAIN login")
+			c.PersistentFlags().StringVar(&brokerName, "broker-name", "", "Artemis broker name for Jolokia management")
 			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
 			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
 			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
@@ -42,17 +60,31 @@ func GetRootCommand() *cobra.Command {
 		Queue: func() (backends.QueueBackend, error) { return artemis.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return artemis.NewTopicAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return artemis.NewQueueAdapter(connArgs) },
-		Manage: cmd.NewManageCommand(cmd.ManageSpec{
-			ListQueues: func() ([]backends.QueueInfo, error) {
-				queues, err := artemis.ListQueues(mgmtArgs())
-				if err != nil {
-					return nil, err
-				}
-				out := make([]backends.QueueInfo, len(queues))
-				for i, q := range queues {
-					out[i] = backends.QueueInfo{Name: q.Name, MessageCount: q.MessageCount, ConsumerCount: q.ConsumerCount}
-				}
-				return out, nil
+		ManageSpec: &cmd.ManageSpec{
+			Objects: []cmd.ObjectType{
+				{
+					Label: "Queues",
+					List: func() ([]backends.ObjectNode, error) {
+						queues, err := artemis.ListQueues(mgmtArgs())
+						if err != nil {
+							return nil, err
+						}
+						out := make([]backends.ObjectNode, len(queues))
+						for i, q := range queues {
+							out[i] = backends.ObjectNode{
+								Name:    q.Name,
+								Metrics: []backends.Metric{{Label: "msgs", Value: q.MessageCount}, {Label: "consumers", Value: int64(q.ConsumerCount)}},
+							}
+						}
+						return out, nil
+					},
+				},
+				{
+					Label: "Addresses",
+					List: func() ([]backends.ObjectNode, error) {
+						return artemis.ListAddresses(mgmtArgs())
+					},
+				},
 			},
 			Purge: func(queue string) (int64, error) { return artemis.PurgeQueue(mgmtArgs(), queue) },
 			Stats: func(queue string) (*backends.QueueStats, error) {
@@ -70,7 +102,7 @@ func GetRootCommand() *cobra.Command {
 			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return artemis.DeleteQueue(mgmtArgs(), queue) }},
 			CreateTopic: &cmd.ManageAction{Run: func(topic string) error { return artemis.CreateTopic(mgmtArgs(), topic) }},
 			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return artemis.DeleteTopic(mgmtArgs(), topic) }},
-		}),
+		},
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-artemis",

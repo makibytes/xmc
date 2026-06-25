@@ -9,10 +9,24 @@ import (
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
-	"github.com/segmentio/kafka-go"
+	kafka "github.com/segmentio/kafka-go"
 )
 
 const propTTL = "ttl"
+
+// keyAwareBalancer uses Hash when a message key is set (so --key routes
+// deterministically), and falls back to LeastBytes for keyless messages.
+type keyAwareBalancer struct {
+	hash       kafka.Hash
+	leastBytes kafka.LeastBytes
+}
+
+func (b *keyAwareBalancer) Balance(msg kafka.Message, partitions ...int) int {
+	if len(msg.Key) > 0 {
+		return b.hash.Balance(msg, partitions...)
+	}
+	return b.leastBytes.Balance(msg, partitions...)
+}
 
 // TopicAdapter adapts Kafka to the TopicBackend interface
 type TopicAdapter struct {
@@ -29,7 +43,7 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  brokers,
-		Balancer: &kafka.LeastBytes{},
+		Balancer: &keyAwareBalancer{},
 		Dialer:   buildDialer(connArgs, tlsConfig),
 	})
 	writer.AllowAutoTopicCreation = true
@@ -73,11 +87,37 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 // Subscribe implements backends.TopicBackend
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Topic:   opts.Topic,
-		GroupID: opts.GroupID,
-		Timeout: opts.Timeout,
-		Wait:    opts.Wait,
-		Number:  1,
+		Topic:     opts.Topic,
+		GroupID:   opts.GroupID,
+		Timeout:   opts.Timeout,
+		Wait:      opts.Wait,
+		Number:    1,
+		Partition: -1,
+		Offset:    -1,
+	}
+
+	if opts.Extra != nil {
+		if v, ok := opts.Extra["partition"]; ok {
+			p, err := strconv.Atoi(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --partition value %q: %w", v, err)
+			}
+			args.Partition = p
+		}
+		if v, ok := opts.Extra["offset"]; ok {
+			switch v {
+			case "earliest":
+				args.Offset = kafka.FirstOffset
+			case "latest":
+				args.Offset = kafka.LastOffset
+			default:
+				o, err := strconv.ParseInt(v, 10, 64)
+				if err != nil {
+					return nil, fmt.Errorf("invalid --offset value %q (use earliest, latest, or a number): %w", v, err)
+				}
+				args.Offset = o
+			}
+		}
 	}
 
 	message, err := SubscribeMessage(ctx, a.connArgs, args)

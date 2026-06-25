@@ -94,7 +94,7 @@ func TestStreamContext_NoLimit(t *testing.T) {
 
 func TestReceiveCommand_StatsBounded(t *testing.T) {
 	mock := &mockQueueBackend{receiveMsgs: []*backends.Message{{Data: []byte("a")}, {Data: []byte("b")}}}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-n", "2", "--stats", "--ndjson"})
 
 	out := captureStdout(t, func() {
@@ -110,7 +110,7 @@ func TestReceiveCommand_StatsBounded(t *testing.T) {
 
 func TestReceiveCommand_ForEmptyStops(t *testing.T) {
 	mock := &mockQueueBackend{} // empty source: returns (nil, nil) repeatedly
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "--for", "50ms"})
 
 	start := time.Now()

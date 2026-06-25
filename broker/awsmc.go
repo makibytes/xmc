@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -20,9 +21,38 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:   "awsmc",
-		Short: "AWS SQS/SNS Messaging Client",
-		Long:  "Command-line interface for AWS SQS (queues) and SNS (topics)",
+		Use:       "awsmc",
+		Short:     "AWS SQS/SNS Messaging Client",
+		Long:      "Command-line interface for AWS SQS (queues) and SNS (topics)",
+		AIContext: AIDoc("aws"),
+		ProduceFlags: func(c *cobra.Command) {
+			c.Flags().Bool("fifo", false, "Send to a FIFO queue")
+			c.Flags().String("message-group-id", "", "Message group ID for FIFO queues")
+			c.Flags().String("dedup-id", "", "Deduplication ID for FIFO queues")
+		},
+		ProduceExtra: func(c *cobra.Command) map[string]string {
+			extra := make(map[string]string)
+			if fifo, _ := c.Flags().GetBool("fifo"); fifo {
+				extra["fifo"] = "true"
+			}
+			if gid, _ := c.Flags().GetString("message-group-id"); gid != "" {
+				extra["message-group-id"] = gid
+			}
+			if did, _ := c.Flags().GetString("dedup-id"); did != "" {
+				extra["dedup-id"] = did
+			}
+			return extra
+		},
+		ConsumeFlags: func(c *cobra.Command) {
+			c.Flags().Int("visibility-timeout", 30, "Visibility timeout in seconds")
+		},
+		ConsumeExtra: func(c *cobra.Command) map[string]string {
+			extra := make(map[string]string)
+			if vt, _ := c.Flags().GetInt("visibility-timeout"); vt != 30 {
+				extra["visibility-timeout"] = fmt.Sprintf("%d", vt)
+			}
+			return extra
+		},
 		RegisterFlags: func(c *cobra.Command) {
 			c.PersistentFlags().StringVarP(&connArgs.Region, "region", "s", defaultRegion, "AWS region")
 			c.PersistentFlags().StringVar(&connArgs.Endpoint, "endpoint", os.Getenv("AWSMC_ENDPOINT"), "Custom endpoint URL (e.g. for LocalStack)")
@@ -31,11 +61,42 @@ func GetRootCommand() *cobra.Command {
 		Queue: func() (backends.QueueBackend, error) { return awspkg.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return awspkg.NewTopicAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return awspkg.NewQueueAdapter(connArgs) },
-		Manage: cmd.NewManageCommand(cmd.ManageSpec{
-			ListQueues: func() ([]backends.QueueInfo, error) { return awspkg.ListQueues(connArgs) },
-			ListTopics: func() ([]backends.TopicInfo, error) { return awspkg.ListTopics(connArgs) },
-			Purge:      func(queue string) (int64, error) { return awspkg.PurgeQueue(connArgs, queue) },
-			Stats:      func(queue string) (*backends.QueueStats, error) { return awspkg.GetQueueStats(connArgs, queue) },
-		}),
+		ManageSpec: &cmd.ManageSpec{
+			Objects: []cmd.ObjectType{
+				{
+					Label: "Queues",
+					List: func() ([]backends.ObjectNode, error) {
+						queues, err := awspkg.ListQueues(connArgs)
+						if err != nil {
+							return nil, err
+						}
+						out := make([]backends.ObjectNode, len(queues))
+						for i, q := range queues {
+							out[i] = backends.ObjectNode{
+								Name:    q.Name,
+								Metrics: []backends.Metric{{Label: "msgs", Value: q.MessageCount}},
+							}
+						}
+						return out, nil
+					},
+				},
+				{
+					Label: "Topics",
+					List: func() ([]backends.ObjectNode, error) {
+						topics, err := awspkg.ListTopics(connArgs)
+						if err != nil {
+							return nil, err
+						}
+						out := make([]backends.ObjectNode, len(topics))
+						for i, t := range topics {
+							out[i] = backends.ObjectNode{Name: t.Name}
+						}
+						return out, nil
+					},
+				},
+			},
+			Purge: func(queue string) (int64, error) { return awspkg.PurgeQueue(connArgs, queue) },
+			Stats: func(queue string) (*backends.QueueStats, error) { return awspkg.GetQueueStats(connArgs, queue) },
+		},
 	})
 }

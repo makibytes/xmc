@@ -4,6 +4,7 @@ package awssqs
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
@@ -36,11 +37,20 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	attrs := sqsAttributes(opts.Properties,
 		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
 
-	_, err = a.sqsc.SendMessage(ctx, &sqs.SendMessageInput{
+	input := &sqs.SendMessageInput{
 		QueueUrl:          &url,
 		MessageBody:       &body,
 		MessageAttributes: attrs,
-	})
+	}
+
+	if gid := opts.Extra["message-group-id"]; gid != "" {
+		input.MessageGroupId = &gid
+	}
+	if did := opts.Extra["dedup-id"]; did != "" {
+		input.MessageDeduplicationId = &did
+	}
+
+	_, err = a.sqsc.SendMessage(ctx, input)
 	return err
 }
 
@@ -51,7 +61,15 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	}
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-	return pollSQS(ctx, a.sqsc, url, timeout, opts.Acknowledge, "queue "+opts.Queue)
+
+	var visTimeout int32
+	if vt := opts.Extra["visibility-timeout"]; vt != "" {
+		if n, err := strconv.Atoi(vt); err == nil {
+			visTimeout = int32(n)
+		}
+	}
+
+	return pollSQS(ctx, a.sqsc, url, timeout, opts.Acknowledge, "queue "+opts.Queue, visTimeout)
 }
 
 func (a *QueueAdapter) Close() error {

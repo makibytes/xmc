@@ -13,7 +13,6 @@ import (
 
 func GetRootCommand() *cobra.Command {
 	var connArgs rabbitmq.ConnArguments
-	var exchange string
 	var exchangeType string
 	var routingKey string
 
@@ -21,24 +20,24 @@ func GetRootCommand() *cobra.Command {
 	if defaultServer == "" {
 		defaultServer = "amqp://localhost:5672"
 	}
-	defaultExchange := os.Getenv("RMC_EXCHANGE")
-	if defaultExchange == "" {
-		defaultExchange = "amq.topic"
-	}
 
 	mgmtArgs := func() rabbitmq.ManagementArgs {
 		return rabbitmq.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password}
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:   "rmc",
-		Short: "RabbitMQ Messaging Client",
-		Long:  "Command-line interface for RabbitMQ messaging (AMQP 1.0)",
+		Use:       "rmc",
+		Short:     "RabbitMQ Messaging Client",
+		Long:      "Command-line interface for RabbitMQ messaging (AMQP 1.0)",
+		AIContext: AIDoc("rabbitmq"),
+		ResolveTarget: func(t cmd.TargetSpec) (string, error) {
+			return rabbitmq.ResolveTarget(t.IsTopic, t.To, t.Exchange, t.Queue)
+		},
+		ExchangeRouting: true,
 		RegisterFlags: func(c *cobra.Command) {
 			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("RMC_USER"), "Username for SASL PLAIN login")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("RMC_PASSWORD"), "Password for SASL PLAIN login")
-			c.PersistentFlags().StringVarP(&exchange, "exchange", "e", defaultExchange, "Exchange name for topic operations")
 			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
 			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
 			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
@@ -46,19 +45,34 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
 		},
 		Queue: func() (backends.QueueBackend, error) { return rabbitmq.NewQueueAdapter(connArgs) },
-		Topic: func() (backends.TopicBackend, error) { return rabbitmq.NewTopicAdapter(connArgs, exchange) },
+		Topic: func() (backends.TopicBackend, error) { return rabbitmq.NewTopicAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return rabbitmq.NewQueueAdapter(connArgs) },
-		Manage: cmd.NewManageCommand(cmd.ManageSpec{
-			ListQueues: func() ([]backends.QueueInfo, error) {
-				queues, err := rabbitmq.ListQueues(mgmtArgs())
-				if err != nil {
-					return nil, err
-				}
-				out := make([]backends.QueueInfo, len(queues))
-				for i, q := range queues {
-					out[i] = backends.QueueInfo{Name: q.Name, MessageCount: q.MessageCount, ConsumerCount: q.ConsumerCount}
-				}
-				return out, nil
+		ManageSpec: &cmd.ManageSpec{
+			Objects: []cmd.ObjectType{
+				{
+					Label: "Queues",
+					List: func() ([]backends.ObjectNode, error) {
+						queues, err := rabbitmq.ListQueues(mgmtArgs())
+						if err != nil {
+							return nil, err
+						}
+						out := make([]backends.ObjectNode, len(queues))
+						for i, q := range queues {
+							out[i] = backends.ObjectNode{
+								Name:    q.Name,
+								Metrics: []backends.Metric{{Label: "msgs", Value: q.MessageCount}, {Label: "consumers", Value: int64(q.ConsumerCount)}},
+							}
+						}
+						return out, nil
+					},
+				},
+				{
+					Label:        "Exchanges",
+					Hierarchical: true,
+					List: func() ([]backends.ObjectNode, error) {
+						return rabbitmq.ListExchanges(mgmtArgs())
+					},
+				},
 			},
 			Purge: func(queue string) (int64, error) {
 				return 0, rabbitmq.PurgeQueue(mgmtArgs(), queue)
@@ -95,6 +109,6 @@ func GetRootCommand() *cobra.Command {
 				},
 				Run: func(queue, exchange string) error { return rabbitmq.UnbindQueue(mgmtArgs(), queue, exchange, routingKey) },
 			},
-		}),
+		},
 	})
 }

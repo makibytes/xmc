@@ -13,41 +13,44 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
-const topicMaxLen int64 = 10000
-
 type TopicAdapter struct {
 	client  *redis.Client
+	maxLen  int64
 	lastID  map[string]string
 	ensured map[string]struct{}
 }
 
-func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
+func NewTopicAdapter(connArgs ConnArguments, maxLen int64) (*TopicAdapter, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return nil, err
 	}
 	return &TopicAdapter{
 		client:  client,
+		maxLen:  maxLen,
 		lastID:  make(map[string]string),
 		ensured: make(map[string]struct{}),
 	}, nil
 }
 
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	key := topicKey(opts.Topic)
 	fields := buildFields(opts.Message, opts.Properties,
 		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
 
-	return a.client.XAdd(ctx, &redis.XAddArgs{
-		Stream: key,
-		MaxLen: topicMaxLen,
-		Approx: true,
+	args := &redis.XAddArgs{
+		Stream: opts.Topic,
 		Values: fields,
-	}).Err()
+	}
+	if a.maxLen > 0 {
+		args.MaxLen = a.maxLen
+		args.Approx = true
+	}
+
+	return a.client.XAdd(ctx, args).Err()
 }
 
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	key := topicKey(opts.Topic)
+	key := opts.Topic
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
 	if opts.GroupID != "" {

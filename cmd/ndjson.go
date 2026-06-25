@@ -70,12 +70,12 @@ func (r messageRecord) payload() ([]byte, error) {
 // displayMessageNDJSON writes a single message as one NDJSON record line. A
 // trailing newline is always written so records remain line-delimited
 // regardless of whether stdout is a terminal.
-func displayMessageNDJSON(message *backends.Message) error {
+func displayMessageNDJSON(w io.Writer, message *backends.Message) error {
 	data, err := json.Marshal(newMessageRecord(message))
 	if err != nil {
 		return fmt.Errorf("failed to marshal message record: %w", err)
 	}
-	fmt.Println(string(data))
+	fmt.Fprintln(w, string(data))
 	return nil
 }
 

@@ -38,11 +38,20 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	attrs := snsAttributes(opts.Properties,
 		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
 
-	_, err = a.snsc.Publish(ctx, &sns.PublishInput{
+	input := &sns.PublishInput{
 		TopicArn:          &topicARN,
 		Message:           &body,
 		MessageAttributes: attrs,
-	})
+	}
+
+	if gid := opts.Extra["message-group-id"]; gid != "" {
+		input.MessageGroupId = &gid
+	}
+	if did := opts.Extra["dedup-id"]; did != "" {
+		input.MessageDeduplicationId = &did
+	}
+
+	_, err = a.snsc.Publish(ctx, input)
 	return err
 }
 

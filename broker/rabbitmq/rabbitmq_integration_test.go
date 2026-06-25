@@ -329,14 +329,14 @@ func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
 	// Give subscriber time to set up before publishing.
 	time.Sleep(500 * time.Millisecond)
 
-	publisher, err := NewTopicAdapter(newConnArgs(), "amq.topic")
+	publisher, err := NewTopicAdapter(newConnArgs())
 	if err != nil {
 		t.Fatalf("NewTopicAdapter (publisher): %v", err)
 	}
 	defer publisher.Close()
 
 	if err := publisher.Publish(ctx, backends.PublishOptions{
-		Topic:   topic,
+		Topic:   "/exchanges/amq.topic/" + topic,
 		Message: payload,
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)

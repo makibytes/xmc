@@ -31,8 +31,7 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 }
 
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
-	key := queueKey(opts.Queue)
-	if err := a.ensureGroup(ctx, key); err != nil {
+	if err := a.ensureGroup(ctx, opts.Queue); err != nil {
 		return err
 	}
 
@@ -40,19 +39,17 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
 
 	return a.client.XAdd(ctx, &redis.XAddArgs{
-		Stream: key,
+		Stream: opts.Queue,
 		Values: fields,
 	}).Err()
 }
 
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	key := queueKey(opts.Queue)
-
 	if !opts.Acknowledge {
-		return a.peek(ctx, key, opts)
+		return a.peek(ctx, opts.Queue, opts)
 	}
 
-	if err := a.ensureGroup(ctx, key); err != nil {
+	if err := a.ensureGroup(ctx, opts.Queue); err != nil {
 		return nil, err
 	}
 
@@ -61,7 +58,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	result, err := a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    xmcQueueGroup,
 		Consumer: "xmc",
-		Streams:  []string{key, ">"},
+		Streams:  []string{opts.Queue, ">"},
 		Count:    1,
 		Block:    timeout,
 	}).Result()
@@ -78,8 +75,8 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 	entry := result[0].Messages[0]
 
-	a.client.XAck(ctx, key, xmcQueueGroup, entry.ID)  //nolint:errcheck
-	a.client.XDel(ctx, key, entry.ID)                  //nolint:errcheck
+	a.client.XAck(ctx, opts.Queue, xmcQueueGroup, entry.ID)  //nolint:errcheck
+	a.client.XDel(ctx, opts.Queue, entry.ID)                  //nolint:errcheck
 
 	return streamToMessage(entry.ID, entry.Values), nil
 }

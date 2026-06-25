@@ -5,6 +5,7 @@ package mqtt
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/makibytes/xmc/broker/backends"
@@ -26,13 +27,18 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 }
 
 // Publish implements backends.TopicBackend.
-// Publishes to the topic with QoS 1 (QoS 0 if not persistent).
+// Publishes to the topic with the configured QoS (falls back to 1, or 0 if not
+// persistent) and retain flag.
 func (a *TopicAdapter) Publish(_ context.Context, opts backends.PublishOptions) error {
 	qos := byte(1)
 	if !opts.Persistent {
 		qos = 0
 	}
-	token := a.client.Publish(opts.Topic, qos, false, opts.Message)
+	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
+		qos = byte(v)
+	}
+	retain := opts.Extra["retain"] == "true"
+	token := a.client.Publish(opts.Topic, qos, retain, opts.Message)
 	token.Wait()
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("MQTT publish to %q: %w", opts.Topic, err)
@@ -49,8 +55,13 @@ func (a *TopicAdapter) Subscribe(_ context.Context, opts backends.SubscribeOptio
 		topic = "$share/" + opts.GroupID + "/" + opts.Topic
 	}
 
+	qos := byte(1)
+	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
+		qos = byte(v)
+	}
+
 	msgCh := make(chan pahomqtt.Message, 1)
-	token := a.client.Subscribe(topic, 1, func(_ pahomqtt.Client, msg pahomqtt.Message) {
+	token := a.client.Subscribe(topic, qos, func(_ pahomqtt.Client, msg pahomqtt.Message) {
 		select {
 		case msgCh <- msg:
 		default:

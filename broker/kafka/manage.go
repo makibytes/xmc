@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 	kafkago "github.com/segmentio/kafka-go"
 )
@@ -70,6 +71,49 @@ func DeleteTopic(connArgs ConnArguments, topic string) error {
 	defer conn.Close()
 
 	return conn.DeleteTopics(topic)
+}
+
+// ListConsumerGroups lists all consumer groups on the Kafka cluster.
+func ListConsumerGroups(connArgs ConnArguments) ([]backends.ObjectNode, error) {
+	brokers, tlsConfig, err := parseKafkaURL(connArgs.Server, connArgs.TLS)
+	if err != nil {
+		return nil, err
+	}
+
+	transport := &kafkago.Transport{TLS: tlsConfig}
+	sasl := getSASLMechanism(connArgs.User, connArgs.Password)
+	if sasl != nil {
+		transport.SASL = sasl
+	}
+
+	client := &kafkago.Client{
+		Addr:      kafkago.TCP(brokers...),
+		Transport: transport,
+	}
+
+	log.Verbose("listing consumer groups on %s...", brokers[0])
+	resp, err := client.ListGroups(context.Background(), &kafkago.ListGroupsRequest{
+		Addr: kafkago.TCP(brokers[0]),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list consumer groups: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("list consumer groups: %w", resp.Error)
+	}
+
+	var out []backends.ObjectNode
+	for _, g := range resp.Groups {
+		kind := g.ProtocolType
+		if kind == "" {
+			kind = "simple"
+		}
+		out = append(out, backends.ObjectNode{
+			Name: g.GroupID,
+			Kind: kind,
+		})
+	}
+	return out, nil
 }
 
 // ListTopics lists all topics on the Kafka cluster

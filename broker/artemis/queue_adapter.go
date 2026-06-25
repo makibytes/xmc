@@ -34,6 +34,11 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 
 // Send implements backends.QueueBackend
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
+	multicast := false // Queue = ANYCAST by default
+	if rt, ok := opts.Extra["routing-type"]; ok {
+		multicast = rt == "multicast"
+	}
+
 	args := SendArguments{
 		Address:       opts.Queue,
 		Message:       opts.Message,
@@ -44,7 +49,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 		ContentType:   opts.ContentType,
 		Priority:      uint8(opts.Priority),
 		Durable:       opts.Persistent,
-		Multicast:     false, // Queue = ANYCAST
+		Multicast:     multicast,
 		TTL:           opts.TTL,
 	}
 

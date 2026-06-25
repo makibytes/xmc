@@ -55,7 +55,13 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 }
 
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	subName, ephemeral := backends.SubscriptionName(opts)
+	var subName string
+	var ephemeral bool
+	if opts.Extra != nil && opts.Extra["subscription"] != "" {
+		subName = opts.Extra["subscription"]
+	} else {
+		subName, ephemeral = backends.SubscriptionName(opts)
+	}
 
 	if err := ensureTopicAndSub(ctx, a.adm, opts.Topic, subName); err != nil {
 		return nil, err

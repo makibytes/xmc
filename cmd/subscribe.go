@@ -8,14 +8,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewSubscribeCommand creates a subscribe command for topic-based brokers
-func NewSubscribeCommand(backend backends.TopicBackend) *cobra.Command {
+// NewSubscribeCommand creates a subscribe command for topic-based brokers.
+// When resolver is non-nil, --exchange and --queue flags are registered
+// for exchange-routed brokers (e.g. RabbitMQ). Note: -q is already taken
+// by --quiet, so long-form only.
+func NewSubscribeCommand(backend backends.TopicBackend, resolver TargetResolver, consumeExtra func(*cobra.Command) map[string]string, exchRouting ...bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "subscribe <topic>",
 		Short: "Subscribe and receive a message from a topic",
-		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return doSubscribe(cmd, args, backend)
+			return doSubscribe(cmd, args, backend, resolver, consumeExtra)
 		},
 	}
 
@@ -32,10 +34,23 @@ func NewSubscribeCommand(backend backends.TopicBackend) *cobra.Command {
 	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
 
+	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
+	if hasExchRouting {
+		cmd.Use = "subscribe [--exchange <exchange> [--routing-key <key>] | --queue-name <queue>] [<to>]"
+		cmd.Flags().String("exchange", "", "Exchange to subscribe to (default: amq.topic)")
+		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
+		cmd.Flags().String("queue-name", "", "Queue to subscribe to (AMQP 1.0 v2: /queues/<name>)")
+		cmd.Args = cobra.MaximumNArgs(1)
+	} else if resolver != nil {
+		cmd.Args = cobra.MinimumNArgs(1)
+	} else {
+		cmd.Args = cobra.MinimumNArgs(1)
+	}
+
 	return cmd
 }
 
-func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBackend) error {
+func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBackend, resolver TargetResolver, extraFn func(*cobra.Command) map[string]string) error {
 	groupID, _ := cmd.Flags().GetString("group")
 	timeout := float32(getDuration(cmd, "timeout").Seconds())
 	wait, _ := cmd.Flags().GetBool("wait")
@@ -55,14 +70,25 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	}
 	follow := duration > 0 || stats
 
+	topic, err := resolveConsumeTarget(cmd, args, resolver, true)
+	if err != nil {
+		return err
+	}
+
+	var extra map[string]string
+	if extraFn != nil {
+		extra = extraFn(cmd)
+	}
+
 	opts := backends.SubscribeOptions{
-		Topic:     args[0],
+		Topic:     topic,
 		GroupID:   groupID,
 		Timeout:   timeout,
 		Wait:      wait,
 		Verbosity: commandVerbosity(quiet),
 		Selector:  selector,
 		Durable:   durable,
+		Extra:     extra,
 	}
 
 	return runConsume(func(ctx context.Context) (*backends.Message, error) {

@@ -14,7 +14,8 @@ type PublishOptions struct {
 	ContentType   string
 	Priority      int
 	Persistent    bool
-	TTL           int64 // Time-to-live in milliseconds (0 = no expiry)
+	TTL           int64             // Time-to-live in milliseconds (0 = no expiry)
+	Extra         map[string]string // Broker-specific flags (e.g. qos, retain, routing-type)
 }
 
 // SubscribeOptions contains options for subscribing to messages from a topic
@@ -26,6 +27,7 @@ type SubscribeOptions struct {
 	Verbosity Verbosity
 	Selector  string // JMS-style message selector expression
 	Durable   bool   // Create a durable subscription
+	Extra     map[string]string // Broker-specific flags (e.g. subscription, partition, offset)
 }
 
 // TopicBackend defines the interface for topic-based messaging brokers

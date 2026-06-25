@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/makibytes/xmc/broker/backends"
+	"github.com/spf13/cobra"
 )
 
 func TestWrapQueueCommand_CreatesAdapter(t *testing.T) {
@@ -16,7 +17,7 @@ func TestWrapQueueCommand_CreatesAdapter(t *testing.T) {
 		return mock, nil
 	})
 
-	cmd := WrapQueueCommand(NewSendCommand, factory)
+	cmd := WrapQueueCommand(func(b backends.QueueBackend) *cobra.Command { return NewSendCommand(b, nil, nil) }, factory)
 	cmd.SetArgs([]string{"test-queue", "hello"})
 
 	err := cmd.Execute()
@@ -34,7 +35,7 @@ func TestWrapQueueCommand_FactoryError(t *testing.T) {
 		return nil, fmt.Errorf("connection failed")
 	})
 
-	cmd := WrapQueueCommand(NewSendCommand, factory)
+	cmd := WrapQueueCommand(func(b backends.QueueBackend) *cobra.Command { return NewSendCommand(b, nil, nil) }, factory)
 	cmd.SetArgs([]string{"test-queue", "hello"})
 
 	err := cmd.Execute()
@@ -49,7 +50,7 @@ func TestWrapTopicCommand_CreatesAdapter(t *testing.T) {
 		return mock, nil
 	})
 
-	cmd := WrapTopicCommand(NewPublishCommand, factory)
+	cmd := WrapTopicCommand(func(b backends.TopicBackend) *cobra.Command { return NewPublishCommand(b, nil, nil) }, factory)
 	cmd.SetArgs([]string{"test-topic", "hello"})
 
 	err := cmd.Execute()
@@ -67,7 +68,7 @@ func TestWrapTopicCommand_FactoryError(t *testing.T) {
 		return nil, fmt.Errorf("connection failed")
 	})
 
-	cmd := WrapTopicCommand(NewPublishCommand, factory)
+	cmd := WrapTopicCommand(func(b backends.TopicBackend) *cobra.Command { return NewPublishCommand(b, nil, nil) }, factory)
 	cmd.SetArgs([]string{"test-topic", "hello"})
 
 	err := cmd.Execute()

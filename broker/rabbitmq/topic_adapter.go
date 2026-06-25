@@ -4,6 +4,7 @@ package rabbitmq
 
 import (
 	"context"
+	"strings"
 
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/broker/amqpcommon"
@@ -15,26 +16,34 @@ type TopicAdapter struct {
 	connArgs   ConnArguments
 	connection *amqp.Conn
 	session    *amqp.Session
-	exchange   string
 }
 
 // NewTopicAdapter creates a new RabbitMQ topic adapter
-func NewTopicAdapter(connArgs ConnArguments, exchange string) (*TopicAdapter, error) {
+func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	connection, session, err := Connect(connArgs)
 	if err != nil {
 		return nil, err
-	}
-
-	if exchange == "" {
-		exchange = "amq.topic"
 	}
 
 	return &TopicAdapter{
 		connArgs:   connArgs,
 		connection: connection,
 		session:    session,
-		exchange:   exchange,
 	}, nil
+}
+
+// exchangeAddress returns the AMQP 1.0 v2 address for an exchange on RabbitMQ 4.x.
+// Names already using an absolute path prefix are returned as-is.
+// A bare name is treated as an exchange: /exchanges/<name>.
+// When key is non-empty it is appended as the routing key: /exchanges/<name>/<key>.
+func exchangeAddress(name, key string) string {
+	if strings.HasPrefix(name, "/") {
+		return name
+	}
+	if key != "" {
+		return "/exchanges/" + name + "/" + key
+	}
+	return "/exchanges/" + name
 }
 
 // Publish implements backends.TopicBackend
@@ -44,14 +53,8 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 		properties = make(map[string]any)
 	}
 
-	routingKey := opts.Key
-	if routingKey == "" {
-		routingKey = opts.Topic
-	}
-
 	args := SendArguments{
-		Exchange:      a.exchange,
-		RoutingKey:    routingKey,
+		Queue:         exchangeAddress(opts.Topic, opts.Key),
 		Message:       opts.Message,
 		Properties:    properties,
 		MessageID:     opts.MessageID,
@@ -69,7 +72,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 // Subscribe implements backends.TopicBackend
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
-		Queue:               "/exchanges/" + a.exchange + "/" + opts.Topic,
+		Queue:               exchangeAddress(opts.Topic, ""),
 		Acknowledge:         true,
 		Durable:             false,
 		DurableSubscription: opts.Durable,

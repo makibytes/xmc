@@ -66,7 +66,7 @@ func TestReceiveCommand_FormatOutput(t *testing.T) {
 		Properties: map[string]any{"k": "v"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-F", "%i|%p{k}|%s"})
 
 	old := os.Stdout
@@ -91,7 +91,7 @@ func TestReceiveCommand_FormatOutput(t *testing.T) {
 func TestReceiveCommand_FormatOverridesJSON(t *testing.T) {
 	msg := &backends.Message{Data: []byte("data")}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewReceiveCommand(mock)
+	cmd := NewReceiveCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-J", "-F", "%s"})
 
 	old := os.Stdout
