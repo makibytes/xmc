@@ -22,7 +22,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/nats v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/redpanda v0.42.0
-	google.golang.org/api v0.285.0
+	google.golang.org/api v0.286.0
 )
 
 require (
