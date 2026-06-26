@@ -67,6 +67,8 @@ type ManageSpec struct {
 	DeleteQueue    *ManageAction
 	CreateTopic    *ManageAction
 	DeleteTopic    *ManageAction
+	CreateAddress  *ManageAction // Artemis-only: bare address (routing namespace)
+	DeleteAddress  *ManageAction // Artemis-only: bare address
 	CreateExchange *ManageAction
 	DeleteExchange *ManageAction
 	BindQueue      *BindAction
@@ -179,6 +181,8 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 	addManageAction(mgmtCmd, "delete-queue", "Delete a queue", "<queue>", "Deleted queue %s\n", spec.DeleteQueue)
 	addManageAction(mgmtCmd, "create-topic", "Create a topic", "<topic>", "Created topic %s\n", spec.CreateTopic)
 	addManageAction(mgmtCmd, "delete-topic", "Delete a topic", "<topic>", "Deleted topic %s\n", spec.DeleteTopic)
+	addManageAction(mgmtCmd, "create-address", "Create an address (routing namespace)", "<address>", "Created address %s\n", spec.CreateAddress)
+	addManageAction(mgmtCmd, "delete-address", "Delete an address", "<address>", "Deleted address %s\n", spec.DeleteAddress)
 	addManageAction(mgmtCmd, "create-exchange", "Create an exchange", "<exchange>", "Created exchange %s\n", spec.CreateExchange)
 	addManageAction(mgmtCmd, "delete-exchange", "Delete an exchange", "<exchange>", "Deleted exchange %s\n", spec.DeleteExchange)
 	addBindAction(mgmtCmd, "bind-queue", "Bind a queue to an exchange", "Bound queue %s to exchange %s\n", spec.BindQueue)

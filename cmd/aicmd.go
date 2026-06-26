@@ -70,8 +70,9 @@ func runAI(cmd *cobra.Command, spec BrokerSpec) error {
 		server = f.Value.String()
 	}
 
-	fmt.Fprintf(os.Stderr, "xmc ai — type /help for commands, /exit to quit\n")
-
-	_, err := runAITUI(ai, session, rootCmd, baseName, server)
+	_, totalIn, totalOut, err := runAITUI(ai, session, rootCmd, baseName, server)
+	if totalIn > 0 || totalOut > 0 {
+		fmt.Fprintf(os.Stderr, "tokens: %s in, %s out\n", fmtTokens(totalIn), fmtTokens(totalOut))
+	}
 	return err
 }

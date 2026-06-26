@@ -234,39 +234,47 @@ func DeleteQueue(args ManagementArgs, queue string) error {
 
 // CreateTopic creates a MULTICAST address via Jolokia.
 func CreateTopic(args ManagementArgs, topic string) error {
-	base, err := jolokiaURL(args.Server)
-	if err != nil {
-		return err
-	}
-
-	// createAddress(name, routingTypes) — MULTICAST
-	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%s/createAddress(java.lang.String,java.lang.String)/%s/MULTICAST",
-		args.brokerMBean(), url.PathEscape(topic))
-	body, err := jolokiaGet(base, path, args.User, args.Password)
-	if err != nil {
-		return err
-	}
-
-	return checkJolokiaError(body)
+	return CreateAddress(args, topic, "MULTICAST")
 }
 
 // DeleteTopic deletes a MULTICAST address via Jolokia.
 func DeleteTopic(args ManagementArgs, topic string) error {
+	return DeleteAddress(args, topic)
+}
+
+// CreateAddress creates a bare address with the given routing type via Jolokia.
+// routingType may be "ANYCAST", "MULTICAST", or "ANYCAST,MULTICAST".
+func CreateAddress(args ManagementArgs, name, routingType string) error {
 	base, err := jolokiaURL(args.Server)
 	if err != nil {
 		return err
 	}
-
-	// deleteAddress(name, force)
+	if routingType == "" {
+		routingType = "ANYCAST"
+	}
 	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%s/deleteAddress(java.lang.String,boolean)/%s/true",
-		args.brokerMBean(), url.PathEscape(topic))
+		"/exec/org.apache.activemq.artemis:broker=%s/createAddress(java.lang.String,java.lang.String)/%s/%s",
+		args.brokerMBean(), url.PathEscape(name), url.PathEscape(routingType))
 	body, err := jolokiaGet(base, path, args.User, args.Password)
 	if err != nil {
 		return err
 	}
+	return checkJolokiaError(body)
+}
 
+// DeleteAddress deletes an address (and all its queues) via Jolokia.
+func DeleteAddress(args ManagementArgs, name string) error {
+	base, err := jolokiaURL(args.Server)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf(
+		"/exec/org.apache.activemq.artemis:broker=%s/deleteAddress(java.lang.String,boolean)/%s/true",
+		args.brokerMBean(), url.PathEscape(name))
+	body, err := jolokiaGet(base, path, args.User, args.Password)
+	if err != nil {
+		return err
+	}
 	return checkJolokiaError(body)
 }
 

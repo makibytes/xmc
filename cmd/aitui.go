@@ -1005,11 +1005,15 @@ func (m aiTUIModel) renderStatusBar() string {
 				tabHint = statusStyle.Render("  ") +
 					statusKeyStyle.Render("Tab") + statusStyle.Render(" complete")
 			}
-			scrollHint := statusStyle.Render("  ") +
-				statusKeyStyle.Render("PgUp/PgDn") + statusStyle.Render(" scroll")
-			if !m.follow {
-				scrollHint += statusStyle.Render("  ") +
-					statusKeyStyle.Render("End") + statusStyle.Render(" ↓bottom")
+			scrollHint := ""
+			canScroll := m.viewport.TotalLineCount() > m.viewport.Height
+			if canScroll {
+				scrollHint = statusStyle.Render("  ") +
+					statusKeyStyle.Render("PgUp/PgDn") + statusStyle.Render(" scroll")
+				if !m.follow {
+					scrollHint += statusStyle.Render("  ") +
+						statusKeyStyle.Render("End") + statusStyle.Render(" ↓bottom")
+				}
 			}
 			copyHint := ""
 			if len(m.copyItems) > 0 {
@@ -1024,7 +1028,7 @@ func (m aiTUIModel) renderStatusBar() string {
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" "+modeHint) +
 				statusStyle.Render("  ") +
-				statusKeyStyle.Render("/exit") + statusStyle.Render(" quit")
+				statusKeyStyle.Render("/help") + statusStyle.Render(" help")
 		}
 	case tuiThinking:
 		left = m.spinner.View() + " " +
@@ -2764,15 +2768,19 @@ func derefProgram(pptr **tea.Program) *tea.Program {
 	return *pptr
 }
 
-func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, binaryName, server string) (exitAll bool, err error) {
+func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, binaryName, server string) (exitAll bool, totalIn, totalOut int, err error) {
 	var prog *tea.Program
 	model := newAITUIModel(ai, session, rootCmd, binaryName, server)
 	model.program = &prog
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	prog = p
 	finalModel, err := p.Run()
-	if m, ok := finalModel.(aiTUIModel); ok && m.exitAll {
-		return true, err
+	if m, ok := finalModel.(aiTUIModel); ok {
+		totalIn = m.totalIn
+		totalOut = m.totalOut
+		if m.exitAll {
+			return true, totalIn, totalOut, err
+		}
 	}
-	return false, err
+	return false, totalIn, totalOut, err
 }
