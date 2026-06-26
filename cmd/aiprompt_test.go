@@ -222,3 +222,136 @@ func TestSystemPrompt_ContainsMultiTurnGuidance(t *testing.T) {
 		t.Error("system prompt should explain multi-turn conversation support")
 	}
 }
+
+// ---------- capTopologyLines ----------
+
+func TestCapTopologyLines_UnderLimit(t *testing.T) {
+	topo := "line1\nline2\nline3"
+	got := capTopologyLines(topo, 10)
+	if got != topo {
+		t.Errorf("under limit: got %q, want unchanged", got)
+	}
+}
+
+func TestCapTopologyLines_ExactLimit(t *testing.T) {
+	topo := "line1\nline2\nline3"
+	got := capTopologyLines(topo, 3)
+	if got != topo {
+		t.Errorf("exact limit: got %q, want unchanged", got)
+	}
+}
+
+func TestCapTopologyLines_OverLimit(t *testing.T) {
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = "queue" + string(rune('A'+i))
+	}
+	topo := strings.Join(lines, "\n")
+	got := capTopologyLines(topo, 3)
+	if !strings.Contains(got, "queueA") || !strings.Contains(got, "queueC") {
+		t.Errorf("should contain first 3 lines, got %q", got)
+	}
+	if strings.Contains(got, "queueD") {
+		t.Errorf("should NOT contain 4th line, got %q", got)
+	}
+	if !strings.Contains(got, "7 more lines") {
+		t.Errorf("should note 7 more lines, got %q", got)
+	}
+}
+
+// ---------- buildVerbSet ----------
+
+func testVerbRoot() *cobra.Command {
+	root := &cobra.Command{Use: "amc"}
+	root.AddCommand(&cobra.Command{Use: "send", Short: "Send"})
+	root.AddCommand(&cobra.Command{Use: "receive", Short: "Receive"})
+	root.AddCommand(&cobra.Command{Use: "peek", Short: "Peek"})
+	root.AddCommand(&cobra.Command{Use: "shell", Short: "Shell"}) // excluded
+	root.AddCommand(&cobra.Command{Use: "ai", Short: "AI"})       // excluded
+	root.AddCommand(&cobra.Command{Use: "help", Short: "Help"})   // excluded
+	manage := &cobra.Command{Use: "manage", Short: "Manage"}
+	manage.AddCommand(&cobra.Command{Use: "list", Short: "List"})
+	manage.AddCommand(&cobra.Command{Use: "purge", Short: "Purge"})
+	root.AddCommand(manage)
+	return root
+}
+
+func TestBuildVerbSet(t *testing.T) {
+	verbs := buildVerbSet(testVerbRoot())
+
+	for _, v := range []string{"send", "receive", "peek", "manage"} {
+		if !verbs[v] {
+			t.Errorf("verb %q should be in set", v)
+		}
+	}
+	// Two-word manage subcommands.
+	for _, v := range []string{"manage list", "manage purge"} {
+		if !verbs[v] {
+			t.Errorf("two-word verb %q should be in set", v)
+		}
+	}
+	// Excluded verbs.
+	for _, v := range []string{"shell", "ai", "help"} {
+		if verbs[v] {
+			t.Errorf("verb %q should NOT be in set", v)
+		}
+	}
+}
+
+// ---------- extractCommandWithVerbs ----------
+
+func TestExtractCommandWithVerbs_ProseFallback(t *testing.T) {
+	verbs := buildVerbSet(testVerbRoot())
+	input := "Sure, here's how to do it:\nreceive orders -n 5\nThis reads 5 messages."
+	got := extractCommandWithVerbs(input, verbs)
+	if got != "receive orders -n 5" {
+		t.Errorf("got %q, want 'receive orders -n 5'", got)
+	}
+}
+
+func TestExtractCommandWithVerbs_FencedPassthrough(t *testing.T) {
+	verbs := buildVerbSet(testVerbRoot())
+	input := "```\nreceive orders -n 5\n```"
+	got := extractCommandWithVerbs(input, verbs)
+	if got != "receive orders -n 5" {
+		t.Errorf("got %q, want 'receive orders -n 5'", got)
+	}
+}
+
+func TestExtractCommandWithVerbs_KnownVerbDirect(t *testing.T) {
+	verbs := buildVerbSet(testVerbRoot())
+	got := extractCommandWithVerbs("send q hello", verbs)
+	if got != "send q hello" {
+		t.Errorf("got %q, want 'send q hello'", got)
+	}
+}
+
+func TestExtractCommandWithVerbs_CommentPassthrough(t *testing.T) {
+	verbs := buildVerbSet(testVerbRoot())
+	for _, input := range []string{"# ask: what queue?", "# cannot: no such command"} {
+		got := extractCommandWithVerbs(input, verbs)
+		if got != input {
+			t.Errorf("extractCommandWithVerbs(%q) = %q, want unchanged", input, got)
+		}
+	}
+}
+
+func TestExtractCommandWithVerbs_TwoWordProse(t *testing.T) {
+	verbs := buildVerbSet(testVerbRoot())
+	// "manage list" must appear as the first tokens on its own line for the
+	// prose fallback to recognise it.
+	input := "Here's what to run:\nmanage list\nThat lists all queues."
+	got := extractCommandWithVerbs(input, verbs)
+	if got != "manage list" {
+		t.Errorf("got %q, want 'manage list'", got)
+	}
+}
+
+func TestExtractCommandWithVerbs_NilVerbSet(t *testing.T) {
+	// With a nil verb set, falls back to extractCommand behaviour.
+	got := extractCommandWithVerbs("receive q -n 5", nil)
+	if got != "receive q -n 5" {
+		t.Errorf("got %q, want 'receive q -n 5'", got)
+	}
+}
+

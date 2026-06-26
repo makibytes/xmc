@@ -8,6 +8,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/ibmmq"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -33,5 +34,15 @@ func GetRootCommand() *cobra.Command {
 		},
 		Queue: func() (backends.QueueBackend, error) { return ibmmq.NewQueueAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return ibmmq.NewQueueAdapter(connArgs) },
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-ibmmq",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return ibmmq.NewQueueAdapter(connArgs)
+				},
+			}),
+		},
 	})
 }

@@ -3,11 +3,13 @@
 package broker
 
 import (
+	"context"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/rabbitmq"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -109,6 +111,45 @@ func GetRootCommand() *cobra.Command {
 				},
 				Run: func(queue, exchange string) error { return rabbitmq.UnbindQueue(mgmtArgs(), queue, exchange, routingKey) },
 			},
+		},
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-rabbitmq",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return rabbitmq.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return rabbitmq.NewTopicAdapter(connArgs)
+				},
+				ListQueues: func(_ context.Context) ([]mcp.QueueInfo, error) {
+					queues, err := rabbitmq.ListQueues(mgmtArgs())
+					if err != nil {
+						return nil, err
+					}
+					out := make([]mcp.QueueInfo, len(queues))
+					for i, q := range queues {
+						out[i] = mcp.QueueInfo{
+							Name: q.Name, MessageCount: q.MessageCount, ConsumerCount: int64(q.ConsumerCount),
+						}
+					}
+					return out, nil
+				},
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
+					return 0, rabbitmq.PurgeQueue(mgmtArgs(), queue)
+				},
+				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
+					s, err := rabbitmq.GetQueueStats(mgmtArgs(), queue)
+					if err != nil {
+						return nil, err
+					}
+					return &mcp.QueueStats{
+						Name: s.Name, MessageCount: s.MessageCount, ConsumerCount: int64(s.ConsumerCount),
+						EnqueueCount: s.EnqueueCount, DequeueCount: s.DequeueCount,
+					}, nil
+				},
+			}),
 		},
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	pulsarpkg "github.com/makibytes/xmc/broker/pulsar"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -82,6 +83,19 @@ func GetRootCommand() *cobra.Command {
 			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error {
 				return pulsarpkg.DeleteTopic(connArgs, adminPort, topic, tenant, namespace, nonPersistent)
 			}},
+		},
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-pulsar",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return pulsarpkg.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return pulsarpkg.NewTopicAdapter(connArgs)
+				},
+			}),
 		},
 	})
 }

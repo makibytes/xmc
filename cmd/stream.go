@@ -13,9 +13,17 @@ import (
 // the streaming features: --for bounds a stream by time, while the interrupt
 // handler lets an unbounded stream stop cleanly and print its summary.
 //
+// An optional parent context may be supplied so that external cancellation
+// (e.g. from the AI TUI's Esc handler) also propagates into the consume loop.
+// Pass nil or omit to use context.Background() as the parent.
+//
 // The returned CancelFunc must be called (typically via defer).
-func streamContext(duration time.Duration) (context.Context, context.CancelFunc) {
-	ctx, stop := interruptContext()
+func streamContext(duration time.Duration, parents ...context.Context) (context.Context, context.CancelFunc) {
+	var parent context.Context
+	if len(parents) > 0 && parents[0] != nil {
+		parent = parents[0]
+	}
+	ctx, stop := interruptContext(parent)
 	if duration <= 0 {
 		return ctx, stop
 	}

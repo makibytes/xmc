@@ -50,6 +50,7 @@ type consumeConfig struct {
 	format     string // optional kcat-style output template; overrides jsonOutput
 	ndjson     bool   // emit one lossless JSON record per line; overrides format/json
 	follow     bool   // streaming: keep polling across empty reads until ctx ends
+	omit       int    // skip (offset past) the first N messages before outputting
 	stats      *streamStats
 	dataOut    io.Writer // message payload output; nil defaults to os.Stdout
 	metaOut    io.Writer // metadata/properties output; nil defaults to os.Stderr
@@ -65,8 +66,13 @@ func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeCo
 	// passes, which is what makes time-bounded and continuous streaming work.
 	unbounded := cfg.count <= 0
 	received := 0
+	omitted := 0
 	for unbounded || received < cfg.count {
-		if cfg.follow && ctx.Err() != nil {
+		// Always check for cancellation — not just in follow mode. This lets
+		// Ctrl-C in the shell (SIGINT → streamContext) and Esc in the AI TUI
+		// (execCancel → cobra ctx → streamContext parent) stop any loop,
+		// including unbounded non-streaming ones like peek -n 0.
+		if ctx.Err() != nil {
 			return nil
 		}
 
@@ -91,6 +97,15 @@ func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeCo
 			return err
 		}
 
+		// --omit / -o: skip the first N messages (offset style).
+		// For peek this advances the browse cursor non-destructively;
+		// for receive the skipped messages are consumed and discarded.
+		// Skipped messages are not counted toward --count / -n.
+		if omitted < cfg.omit {
+			omitted++
+			continue
+		}
+
 		if err := outputMessage(message, cfg); err != nil {
 			return err
 		}
@@ -107,11 +122,18 @@ func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeCo
 // optional live throughput reporter (--stats), printing a final summary when the
 // stream ends. When neither streaming option is active it behaves exactly like a
 // plain consumeMessages call on a background context.
-func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool) error {
-	// Always use streamContext so that Ctrl-C cleanly cancels the receive
-	// loop — even for non-streaming commands like "receive q -n 1". Without
-	// this, SIGINT terminates the entire process instead of just the command.
-	ctx, cancel := streamContext(duration)
+//
+// An optional parent context may be supplied so that external cancellation
+// (e.g. the AI TUI's Esc handler or cobra's ExecuteContext ctx) propagates
+// into the receive loop alongside SIGINT.
+func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool, parents ...context.Context) error {
+	var parent context.Context
+	if len(parents) > 0 && parents[0] != nil {
+		parent = parents[0]
+	}
+	// streamContext merges SIGINT with the optional parent so that both
+	// Ctrl-C (shell) and Esc (AI TUI) cleanly stop the consume loop.
+	ctx, cancel := streamContext(duration, parent)
 	defer cancel()
 
 	if stats {

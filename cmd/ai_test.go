@@ -51,14 +51,24 @@ func TestIsDestructive(t *testing.T) {
 		cmd  string
 		want bool
 	}{
+		// Destructive: deleting broker objects and purging message storage.
 		{"manage delete-queue orders", true},
 		{"manage delete-topic events", true},
 		{"manage delete-exchange amq.topic", true},
 		{"manage unbind-queue orders", true},
 		{"manage purge orders", true},
-		{"move dlq orders", true},
 		{"MANAGE DELETE-QUEUE orders", true},
 		{"  manage purge q", true},
+		// Non-destructive: fetching/relaying messages is NOT destructive,
+		// regardless of drain mode. Only object deletion is destructive.
+		{"move dlq orders", false},
+		{"forward dlq orders", false},
+		{"forward src dst --for 30s", false},
+		{"receive orders -n 0", false},
+		{"receive orders --count 0", false},
+		{"move dlq orders -n 0", false},
+		{"subscribe events -n 0", false},
+		{"forward src dst -n 0", false},
 		{"receive orders -n 5", false},
 		{"send orders hello", false},
 		{"peek orders", false},
@@ -71,6 +81,34 @@ func TestIsDestructive(t *testing.T) {
 		got := isDestructive(tt.cmd)
 		if got != tt.want {
 			t.Errorf("isDestructive(%q) = %v, want %v", tt.cmd, got, tt.want)
+		}
+	}
+}
+
+func TestIsDrainCommand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"receive q -n 0", true},
+		{"receive q --count 0", true},
+		{"move src dst -n 0", true},
+		{"forward src dst -n 0", true},
+		{"subscribe topic -n 0", true},
+		// Positive count — not a drain.
+		{"receive q -n 1", false},
+		{"receive q --count 5", false},
+		// Non-drain verbs with -n 0.
+		{"send q -n 0", false},
+		{"publish t -n 0", false},
+		{"peek q -n 0", false},
+		// Drain flag but no matching verb.
+		{"-n 0", false},
+	}
+	for _, tt := range tests {
+		got := isDrainCommand(tt.cmd)
+		if got != tt.want {
+			t.Errorf("isDrainCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
 		}
 	}
 }

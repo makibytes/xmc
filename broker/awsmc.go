@@ -3,12 +3,14 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
 	awspkg "github.com/makibytes/xmc/broker/awssqs"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -97,6 +99,43 @@ func GetRootCommand() *cobra.Command {
 			},
 			Purge: func(queue string) (int64, error) { return awspkg.PurgeQueue(connArgs, queue) },
 			Stats: func(queue string) (*backends.QueueStats, error) { return awspkg.GetQueueStats(connArgs, queue) },
+		},
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-aws",
+				ServerVersion: cmd.Version(),
+				Target:        "aws-sqs://" + connArgs.Region,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return awspkg.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return awspkg.NewTopicAdapter(connArgs)
+				},
+				ListQueues: func(_ context.Context) ([]mcp.QueueInfo, error) {
+					queues, err := awspkg.ListQueues(connArgs)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]mcp.QueueInfo, len(queues))
+					for i, q := range queues {
+						out[i] = mcp.QueueInfo{Name: q.Name, MessageCount: q.MessageCount}
+					}
+					return out, nil
+				},
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
+					return awspkg.PurgeQueue(connArgs, queue)
+				},
+				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
+					s, err := awspkg.GetQueueStats(connArgs, queue)
+					if err != nil {
+						return nil, err
+					}
+					return &mcp.QueueStats{
+						Name: s.Name, MessageCount: s.MessageCount, ConsumerCount: int64(s.ConsumerCount),
+						EnqueueCount: s.EnqueueCount, DequeueCount: s.DequeueCount,
+					}, nil
+				},
+			}),
 		},
 	})
 }

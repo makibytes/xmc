@@ -8,6 +8,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	natspkg "github.com/makibytes/xmc/broker/nats"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -88,6 +89,19 @@ func GetRootCommand() *cobra.Command {
 				Run: func(queue string) error { return natspkg.CreateStream(connArgs, queue, retention, maxMsgs, subjects) },
 			},
 			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return natspkg.DeleteStream(connArgs, queue) }},
+		},
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-nats",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return natspkg.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return natspkg.NewTopicAdapter(connArgs)
+				},
+			}),
 		},
 	})
 }

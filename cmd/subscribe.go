@@ -41,8 +41,6 @@ func NewSubscribeCommand(backend backends.TopicBackend, resolver TargetResolver,
 		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
 		cmd.Flags().String("queue-name", "", "Queue to subscribe to (AMQP 1.0 v2: /queues/<name>)")
 		cmd.Args = cobra.MaximumNArgs(1)
-	} else if resolver != nil {
-		cmd.Args = cobra.MinimumNArgs(1)
 	} else {
 		cmd.Args = cobra.MinimumNArgs(1)
 	}
@@ -91,6 +89,7 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 		Extra:     extra,
 	}
 
+	parentCtx := cmd.Context()
 	return runConsume(func(ctx context.Context) (*backends.Message, error) {
 		return backend.Subscribe(ctx, opts)
 	}, consumeConfig{
@@ -100,5 +99,7 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 		format:     format,
 		ndjson:     ndjson,
 		follow:     follow,
-	}, duration, stats)
+		dataOut:    cmd.OutOrStdout(),
+		metaOut:    cmd.ErrOrStderr(),
+	}, duration, stats, parentCtx)
 }

@@ -29,6 +29,20 @@ type aiConfig struct {
 	AutoUpdateObjects  *bool  `yaml:"auto-update-objects"`   // refresh sidebar on create/delete/bind (default: true)
 	AutoUpdateMessages *bool  `yaml:"auto-update-messages"`  // refresh sidebar on send/publish/receive/purge (default: true)
 	RefreshInterval    string `yaml:"refresh-interval"`      // periodic sidebar refresh interval (e.g. "5s", "3m", "off"; default: "5s")
+	RequestTimeout     string `yaml:"request-timeout"`       // max time for a single AI API call (e.g. "120s", "2m"; default: "120s")
+}
+
+// requestTimeoutDuration returns the configured AI request timeout.
+// An empty or invalid value falls back to defaultRequestTimeout.
+func (c aiConfig) requestTimeoutDuration() time.Duration {
+	if c.RequestTimeout == "" {
+		return 0 // caller uses defaultRequestTimeout
+	}
+	d, _, err := parseRefreshInterval(c.RequestTimeout) // reuse the same duration parser
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
 }
 
 // autoUpdateObjectsEnabled returns true unless the config explicitly disables it.
@@ -119,11 +133,12 @@ func loadConfig() (*xmcConfig, error) {
 const defaultMaxTokens = 4096
 
 type providerSpec struct {
-	name      string
-	apiKey    string
-	baseURL   string
-	model     string
-	maxTokens int
+	name           string
+	apiKey         string
+	baseURL        string
+	model          string
+	maxTokens      int
+	requestTimeout time.Duration // 0 means use defaultRequestTimeout
 }
 
 type providerDef struct {
@@ -150,6 +165,7 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 	if maxTok <= 0 {
 		maxTok = defaultMaxTokens
 	}
+	reqTimeout := cfg.AI.requestTimeoutDuration()
 
 	if cfg.AI.Provider != "" {
 		for _, def := range providerOrder {
@@ -165,7 +181,7 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 			if model == "" {
 				model = def.defaultModel
 			}
-			return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok}, nil
+			return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok, requestTimeout: reqTimeout}, nil
 		}
 		return providerSpec{}, fmt.Errorf("unknown AI provider %q (supported: anthropic, openai, gemini, xai, deepseek, mistral, opencode)", cfg.AI.Provider)
 	}
@@ -179,7 +195,7 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 		if model == "" {
 			model = def.defaultModel
 		}
-		return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok}, nil
+		return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok, requestTimeout: reqTimeout}, nil
 	}
 
 	return providerSpec{}, fmt.Errorf("no AI API key found; set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY, OPENCODE_API_KEY")

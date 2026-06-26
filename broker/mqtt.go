@@ -9,6 +9,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/mqtt"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -67,5 +68,18 @@ func GetRootCommand() *cobra.Command {
 		Queue: func() (backends.QueueBackend, error) { return mqtt.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return mqtt.NewTopicAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return mqtt.NewQueueAdapter(connArgs) },
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-mqtt",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return mqtt.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return mqtt.NewTopicAdapter(connArgs)
+				},
+			}),
+		},
 	})
 }

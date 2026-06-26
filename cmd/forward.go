@@ -98,7 +98,7 @@ func doForwardQueue(cmd *cobra.Command, args []string, backend backends.QueueBac
 		return err
 	}
 
-	ctx, cancel := streamContext(duration)
+	ctx, cancel := streamContext(duration, cmd.Context())
 	defer cancel()
 	st, stopStats := startForwardStats(statsOn)
 	defer stopStats()
@@ -175,7 +175,7 @@ func doForwardTopic(cmd *cobra.Command, args []string, backend backends.TopicBac
 		return err
 	}
 
-	ctx, cancel := streamContext(duration)
+	ctx, cancel := streamContext(duration, cmd.Context())
 	defer cancel()
 	st, stopStats := startForwardStats(statsOn)
 	defer stopStats()

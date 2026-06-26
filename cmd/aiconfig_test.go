@@ -312,6 +312,45 @@ func TestRefreshIntervalYAMLParsing(t *testing.T) {
 	}
 }
 
+func TestRequestTimeoutDuration(t *testing.T) {
+	tests := []struct {
+		input string
+		want  time.Duration
+	}{
+		// Empty → 0 (caller uses defaultRequestTimeout).
+		{"", 0},
+		// Valid durations.
+		{"120s", 120 * time.Second},
+		{"2m", 2 * time.Minute},
+		{"30s", 30 * time.Second},
+		// "off", garbage, "0" → 0 (lenient fallback).
+		{"off", 0},
+		{"garbage", 0},
+		{"0", 0},
+	}
+	for _, tt := range tests {
+		cfg := aiConfig{RequestTimeout: tt.input}
+		got := cfg.requestTimeoutDuration()
+		if got != tt.want {
+			t.Errorf("requestTimeoutDuration(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestResolveProvider_RequestTimeout(t *testing.T) {
+	cfg := &xmcConfig{AI: aiConfig{RequestTimeout: "90s"}}
+	env := map[string]string{"OPENAI_API_KEY": "key"}
+	getenv := func(k string) string { return env[k] }
+
+	spec, err := resolveProvider(cfg, getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.requestTimeout != 90*time.Second {
+		t.Errorf("requestTimeout = %v, want 90s", spec.requestTimeout)
+	}
+}
+
 func TestAutoUpdateYAMLParsing(t *testing.T) {
 	data := []byte(`ai:
   auto-update-objects: false

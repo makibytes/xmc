@@ -157,7 +157,7 @@ subscriptions, etc.) and to produce correct commands.
 
 	var topologySection string
 	if topology != "" {
-		topologySection = fmt.Sprintf("\n## Current topology\n\nThese queues and topics exist on the broker right now. Use these real names\ninstead of guessing:\n\n%s\n", topology)
+		topologySection = fmt.Sprintf("\n## Current topology\n\nThese queues and topics exist on the broker right now. Use these real names\ninstead of guessing:\n\n%s\n", capTopologyLines(topology, 100))
 	}
 
 	var aliasesSection string
@@ -197,6 +197,13 @@ Never use "body", "payload", or "message" — the exact field names are:
 - When broker objects are listed below, use those exact names — do not guess
 - Queue commands: send, receive, peek, request, reply, move, forward (point-to-point)
 - Topic commands: publish, subscribe (pub/sub fan-out)
+
+## Destructive operations
+
+ONLY these commands are destructive (require explicit user confirmation):
+  manage delete-queue, manage delete-topic, manage delete-exchange, manage unbind-queue, manage purge
+
+All other commands — including receive, peek, move, forward, subscribe (even with -n 0 to drain a queue) — are NON-DESTRUCTIVE read or relay operations. Do NOT warn about or ask confirmation for these.
 
 Available commands and flags:
 
@@ -258,4 +265,74 @@ func stripBinaryPrefix(s string) string {
 		return strings.TrimSpace(rest)
 	}
 	return s
+}
+
+// capTopologyLines returns the topology string truncated to at most maxLines
+// lines, appending a "(N more)" note if truncated.
+func capTopologyLines(topology string, maxLines int) string {
+	lines := strings.Split(topology, "\n")
+	if len(lines) <= maxLines {
+		return topology
+	}
+	kept := strings.Join(lines[:maxLines], "\n")
+	remaining := len(lines) - maxLines
+	return fmt.Sprintf("%s\n… (%d more lines)", kept, remaining)
+}
+
+// buildVerbSet returns the set of known top-level xmc verbs from the cobra tree.
+// Shell/AI/help are excluded since they cannot be run as inline commands.
+func buildVerbSet(rootCmd *cobra.Command) map[string]bool {
+	skip := map[string]bool{"shell": true, "sh": true, "ai": true, "help": true, "version": true, "completion": true}
+	verbs := make(map[string]bool)
+	for _, cmd := range rootCmd.Commands() {
+		if !skip[cmd.Name()] && !cmd.Hidden {
+			verbs[cmd.Name()] = true
+			for _, sub := range cmd.Commands() {
+				if !sub.Hidden && sub.Name() != "help" {
+					// "manage list", "manage purge", etc.
+					verbs[cmd.Name()+" "+sub.Name()] = true
+				}
+			}
+		}
+	}
+	return verbs
+}
+
+// extractCommandWithVerbs extends extractCommand with a prose-fallback: if the
+// stripped response is not a known xmc verb (and not a # comment), it scans
+// each line for the first whose first token is in the verb set.
+func extractCommandWithVerbs(response string, verbs map[string]bool) string {
+	cmd := extractCommand(response)
+	if cmd == "" {
+		return cmd
+	}
+	// Already a comment or a known verb — return as-is.
+	if strings.HasPrefix(cmd, "#") {
+		return cmd
+	}
+	first := strings.Fields(cmd)[0]
+	if verbs[first] {
+		return cmd
+	}
+	// Prose response: scan lines for a line beginning with a known verb.
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		line = stripBinaryPrefix(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if verbs[fields[0]] {
+			return line
+		}
+		// Also check two-word verbs like "manage list".
+		if len(fields) >= 2 && verbs[fields[0]+" "+fields[1]] {
+			return line
+		}
+	}
+	// No verb found — return the extracted command unchanged (caller handles it).
+	return cmd
 }

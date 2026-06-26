@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/chzyer/readline"
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -32,6 +34,7 @@ const (
 	tuiIdle      tuiState = iota // waiting for user input
 	tuiThinking                  // AI request in flight, streaming tokens
 	tuiProposing                 // showing proposed command for confirmation
+	tuiEditing                   // editing a proposed command before accepting
 	tuiExecuting                 // running the confirmed command
 	tuiPicking                   // interactive picker overlay (model, effort)
 )
@@ -75,6 +78,8 @@ type objectsMsg struct {                                         // broker objec
 }
 
 type connMsg struct{ err error }              // connection probe result
+type reconnectTickMsg struct{}                // 500ms ticker for reconnect countdown + blink
+type reconnectProbeMsg struct{ err error }    // result of a reconnect probe attempt
 type refreshTickMsg struct{}                  // time for the next periodic sidebar fetch
 type refreshWatchdogMsg struct{ gen int }     // fired after refreshWatchdogTimeout if a fetch is still in-flight
 
@@ -131,6 +136,13 @@ var (
 				Foreground(lipgloss.Color("9")).
 				Background(lipgloss.Color("#1a7f8a"))
 
+	// titleServerBusyStyle: yellow + ANSI blink — shown while auto-reconnect is active.
+	titleServerBusyStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#f5a623")).
+				Blink(true).
+				Background(lipgloss.Color("#1a7f8a"))
+
 	userStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("6")) // cyan
@@ -176,6 +188,28 @@ var (
 	sidebarSelStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("15"))
+
+	// promptRuleStyle draws the horizontal rules that bracket the input area
+	// (same teal as the title-bar background).
+	promptRuleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#1a7f8a"))
+
+	// shimmerHighStyle is the bright "lit" rune style used in the proposal shimmer.
+	shimmerHighStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("15")) // bright white
+
+	// msgBorderStyle colours the left border of message payload blocks.
+	msgBorderStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")) // cyan
+
+	// msgBodyStyle renders message payload text (italic, light cyan).
+	msgBodyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("14")).
+			Italic(true)
+
+	// copyHintStyle renders the ⧉ clipboard marker.
+	copyHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#5fa8d3"))
 )
 
 // ---------- Sidebar object window ----------
@@ -205,7 +239,9 @@ type aiTUIModel struct {
 	state        tuiState
 	transcript   *strings.Builder // full transcript (pointer: Builder must not be copied)
 	streamBuf    *strings.Builder // tokens streamed so far (pointer: Builder must not be copied)
-	proposedCmd  string
+	proposedCmd        string
+	proposedDestructive bool // true when the proposed command is flagged as destructive
+	shimmerPhase       int  // animation frame counter for the proposal shimmer
 	execCancel     context.CancelFunc
 	quitting       bool
 	exitAll        bool // /exit: quit xmc entirely
@@ -228,6 +264,14 @@ type aiTUIModel struct {
 	connChecked bool  // true after the initial probe completes
 	connErr     error // non-nil if the broker is unreachable
 
+	// Auto-reconnect state
+	reconnecting      bool          // true while backoff is ticking or a probe is in-flight
+	reconnectAt       time.Time     // wall-clock time the next probe fires
+	reconnectBackoff  time.Duration // current wait interval (doubles each failure, capped at 3 min)
+	reconnectDisabled bool          // user ran /disconnect — stop auto-retry
+	reconnectBlink    bool          // toggled every 500ms for the title-bar yellow blink
+	reconnectStatus   string        // one-line countdown shown below the viewport
+
 	// Statistics
 	totalIn  int
 	totalOut int
@@ -240,6 +284,17 @@ type aiTUIModel struct {
 
 	// Input area height (grows as the user types, up to maxInputLines).
 	inputLines int
+
+	// Clipboard — copyable items accumulated this session (commands + payloads).
+	// Each item is registered with a ⧉N marker in the transcript; index N refers
+	// back to this slice. wrappedContentLines caches the post-wrap content lines
+	// so that mouse-click copy can resolve which line was clicked.
+	copyItems           []string
+	wrappedContentLines []string
+
+	// Token coalescing: tracks the last time setViewportContent was called
+	// during streaming so we throttle re-renders to ~50ms intervals.
+	lastStreamRender time.Time
 
 	// Periodic sidebar refresh state
 	refreshing      bool          // true while a background fetch is in-flight
@@ -284,7 +339,14 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 	}
 
 	ta := textarea.New()
-	ta.Prompt = "ask> "
+	// Show the prompt label only on the first visual line; wrapped lines get
+	// indent spaces of the same width so all content aligns at one margin.
+	// SetPromptFunc must be called before SetWidth so promptWidth is known.
+	const initPrompt = "ask> "
+	applyPromptFunc(&ta, initPrompt)
+	promptLabelSty := lipgloss.NewStyle().Foreground(lipgloss.Color("#1a7f8a")).Bold(true)
+	ta.FocusedStyle.Prompt = promptLabelSty
+	ta.BlurredStyle.Prompt = promptLabelSty
 	ta.Placeholder = "Ask anything..."
 	ta.Focus()
 	ta.CharLimit = 2000
@@ -298,6 +360,7 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 
 	vp := viewport.New(w-4, h-6)
+	vp.MouseWheelEnabled = true // explicit; it defaults to true but be certain
 
 	// Build sidebar windows from ManageSpec.Objects.
 	var windows []objWindow
@@ -404,6 +467,19 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
+		// Check for left-click on a ⧉ copy marker before passing to viewport.
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			viewportStartY := 2 // title bar (1) + blank line (1)
+			vRow := msg.Y - viewportStartY
+			if vRow >= 0 && vRow < m.viewport.Height {
+				contentLine := m.viewport.YOffset + vRow
+				if idx := m.copyIdxForLine(contentLine); idx >= 0 && idx < len(m.copyItems) {
+					_ = clipboard.WriteAll(m.copyItems[idx])
+					m.appendTranscript(copyHintStyle.Render("(copied to clipboard)") + "\n\n")
+					return m, nil
+				}
+			}
+		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		m.follow = m.viewport.AtBottom()
@@ -413,10 +489,19 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
+		// Advance the shimmer while a proposal is open.
+		if m.state == tuiProposing || m.state == tuiEditing {
+			m.shimmerPhase++
+			m.setViewportContent()
+		}
 
 	case tokenMsg:
 		m.streamBuf.WriteString(msg.text)
-		m.setViewportContent()
+		// Throttle viewport rebuilds to ~50 ms to avoid O(n²) reflow per token.
+		if time.Since(m.lastStreamRender) >= 50*time.Millisecond {
+			m.lastStreamRender = time.Now()
+			m.setViewportContent()
+		}
 		return m, nil
 
 	case aiDoneMsg:
@@ -437,6 +522,12 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case connMsg:
 		return m.handleConnDone(msg)
+
+	case reconnectTickMsg:
+		return m.handleReconnectTick()
+
+	case reconnectProbeMsg:
+		return m.handleReconnectProbe(msg)
 
 	case refreshTickMsg:
 		if !m.refreshing && len(m.objTypes) > 0 && m.autoUpdateEnabled() {
@@ -487,12 +578,16 @@ func (m aiTUIModel) View() string {
 	// ── Status bar ──
 	statusBar := m.renderStatusBar()
 
+	// ── Horizontal rules bracketing the prompt (same teal as title bar) ──
+	rule := promptRuleStyle.Render(strings.Repeat("─", w))
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		titleBar,
 		"",
 		mainContent,
-		"",
+		rule,
 		inputView,
+		rule,
 		statusBar,
 	)
 }
@@ -507,16 +602,23 @@ func (m aiTUIModel) modelInfo() string {
 	return fmt.Sprintf(" %s · %s ", m.ai.modelName, m.ai.providerName)
 }
 
-// serverInfo renders the broker URL for the title bar, coloured by connection state.
+// serverInfo renders the broker URL for the title bar, coloured by connection state:
+//   - yellow blink: reconnecting (probe in-flight or waiting for backoff)
+//   - red: confirmed unreachable and auto-reconnect stopped/failed
+//   - white: connected (or not yet checked)
 func (m aiTUIModel) serverInfo() string {
 	if m.server == "" {
 		return ""
 	}
 	text := " " + m.server + " "
-	if m.connChecked && m.connErr != nil {
+	switch {
+	case m.reconnecting:
+		return titleServerBusyStyle.Render(text)
+	case m.connChecked && m.connErr != nil:
 		return titleServerErrStyle.Render(text)
+	default:
+		return titleServerOKStyle.Render(text)
 	}
-	return titleServerOKStyle.Render(text)
 }
 
 // paneWidths computes the conversation and sidebar widths based on the
@@ -543,23 +645,56 @@ func (m aiTUIModel) renderMainContent() string {
 	_ = convWidth // viewport.Width already set by recalcLayout
 
 	convPane := m.viewport.View()
+
+	// Show reconnect countdown as a one-line status below the transcript.
+	if m.reconnectStatus != "" {
+		convPane = lipgloss.JoinVertical(lipgloss.Left,
+			convPane,
+			infoStyle.Render(m.reconnectStatus),
+		)
+	}
+
 	if sideWidth == 0 {
 		return convPane
 	}
 
-	// Sidebar (N object windows)
-	sidePane := m.renderSidebar(sideWidth, m.viewport.Height)
+	// Sidebar (N object windows) + which rows carry window underlines.
+	sidePane, junctionRows := m.renderSidebar(sideWidth, m.viewport.Height)
+
+	// Build a full-height vertical separator. Use the same grey (dimStyle) as
+	// the sidebar window underlines. On rows that align with a window underline,
+	// emit ├ to visually connect the vertical bar to the horizontal rule.
+	h := m.viewport.Height
+	if h < 1 {
+		h = 1
+	}
+	junctionSet := make(map[int]bool, len(junctionRows))
+	for _, r := range junctionRows {
+		junctionSet[r] = true
+	}
+	sepLines := make([]string, h)
+	for row := 0; row < h; row++ {
+		ch := "│"
+		if junctionSet[row] {
+			ch = "├"
+		}
+		sepLines[row] = " " + dimStyle.Render(ch)
+	}
+	sep := strings.Join(sepLines, "\n")
 
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		convPane,
-		" │",
+		sep,
 		sidePane,
 	)
 }
 
 // renderSidebar renders the right-column sidebar with N object-type windows.
 // The focused window expands; others collapse.
-func (m aiTUIModel) renderSidebar(width, height int) string {
+// It also returns the row indices (0-based from the top of the sidebar) at which
+// each window's horizontal underline is drawn, so the caller can place ├ junction
+// characters on the vertical separator to visually connect the two.
+func (m aiTUIModel) renderSidebar(width, height int) (string, []int) {
 	var b strings.Builder
 	lines := 0
 	n := len(m.objTypes)
@@ -576,7 +711,7 @@ func (m aiTUIModel) renderSidebar(width, height int) string {
 			b.WriteString("\n")
 			lines++
 		}
-		return b.String()
+		return b.String(), nil
 	}
 
 	// Height budget: 2 header lines per section, no footer.
@@ -623,8 +758,11 @@ func (m aiTUIModel) renderSidebar(width, height int) string {
 		}
 	}
 
-	// Render each window.
+	// Render each window. Before each section, record the row index of its
+	// underline (always the second line of the section, i.e. lines+1).
+	junctionRows := make([]int, 0, n)
 	for i := range m.objTypes {
+		junctionRows = append(junctionRows, lines+1)
 		lines += m.writeObjectSection(&b, width, bodyAlloc[i], i)
 	}
 
@@ -634,7 +772,7 @@ func (m aiTUIModel) renderSidebar(width, height int) string {
 		lines++
 	}
 
-	return b.String()
+	return b.String(), junctionRows
 }
 
 // writeObjectSection renders one object-type window and returns lines written.
@@ -867,15 +1005,22 @@ func (m aiTUIModel) renderStatusBar() string {
 				tabHint = statusStyle.Render("  ") +
 					statusKeyStyle.Render("Tab") + statusStyle.Render(" complete")
 			}
-			scrollHint := ""
+			scrollHint := statusStyle.Render("  ") +
+				statusKeyStyle.Render("PgUp/PgDn") + statusStyle.Render(" scroll")
 			if !m.follow {
-				scrollHint = statusStyle.Render("  ") +
+				scrollHint += statusStyle.Render("  ") +
 					statusKeyStyle.Render("End") + statusStyle.Render(" ↓bottom")
+			}
+			copyHint := ""
+			if len(m.copyItems) > 0 {
+				copyHint = statusStyle.Render("  ") +
+					statusKeyStyle.Render("y") + statusStyle.Render(" ⧉copy")
 			}
 			left = statusKeyStyle.Render("Enter") + statusStyle.Render(" send") +
 				tabHint +
 				browseHint +
 				scrollHint +
+				copyHint +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" "+modeHint) +
 				statusStyle.Render("  ") +
@@ -894,6 +1039,10 @@ func (m aiTUIModel) renderStatusBar() string {
 			statusKeyStyle.Render("c") + statusStyle.Render(" chat") +
 			statusStyle.Render("  ") +
 			statusKeyStyle.Render("Esc") + statusStyle.Render(" discard")
+	case tuiEditing:
+		left = statusKeyStyle.Render("Enter") + statusStyle.Render(" accept") +
+			statusStyle.Render("  ") +
+			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
 	case tuiExecuting:
 		left = m.spinner.View() + " " +
 			statusStyle.Render("Running…") +
@@ -937,6 +1086,8 @@ func (m aiTUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleKeyThinking(msg)
 	case tuiProposing:
 		return m.handleKeyProposing(msg)
+	case tuiEditing:
+		return m.handleKeyEditing(msg)
 	case tuiExecuting:
 		return m.handleKeyExecuting(msg)
 	case tuiPicking:
@@ -1073,7 +1224,28 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		return m, m.startAIRequest()
 
+	case tea.KeyRunes:
+		// 'y' copies the most recent copyable item (command or message payload).
+		if msg.String() == "y" && len(m.copyItems) > 0 {
+			last := m.copyItems[len(m.copyItems)-1]
+			_ = clipboard.WriteAll(last)
+			m.appendTranscript(copyHintStyle.Render("(copied to clipboard)") + "\n\n")
+			return m, nil
+		}
+		// Fall through to textarea update.
+		fallthrough
+
 	default:
+		// Pre-size BEFORE forwarding the key: resize the textarea so that
+		// repositionView() inside Update() sees the correct height and doesn't
+		// scroll content out of view when the text wraps to a new visual row.
+		// predictValue avoids calling Update() twice (which caused double-insertion
+		// due to shared backing arrays in the textarea's [][]rune value).
+		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.inputLines {
+			m.inputLines = n
+			m.input.SetHeight(n)
+			m.recalcLayout()
+		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		(&m).updateInputHeight()
@@ -1099,6 +1271,8 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 				"/refresh             reload broker objects now\n"+
 				"/refresh off         disable periodic refresh\n"+
 				"/refresh <dur>       set refresh interval (e.g. 3s, 3m; min 1s)\n"+
+				"/connect             reconnect to the broker (enables auto-reconnect)\n"+
+				"/disconnect          stop auto-reconnect\n"+
 				"/reset               reset conversation history\n"+
 				"/clear               clear the display\n"+
 				"/exit                quit xmc\n"+
@@ -1109,8 +1283,10 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 				"Shift+Tab    browse broker objects in the sidebar (forward)\n"+
 				"Up/Down      recall history\n"+
 				"Space        expand/collapse hierarchical objects\n"+
-				"PgUp/PgDn    scroll conversation · mouse wheel\n"+
-				"Home/End     jump to top/bottom\n") + "\n")
+				"PgUp/PgDn    scroll conversation · mouse wheel also works\n"+
+				"Home/End     jump to top/bottom\n"+
+				"y            copy last command or message payload to clipboard\n"+
+				"             click ⧉ in the transcript to copy any item\n") + "\n")
 
 	case "/exit":
 		m.exitAll = true
@@ -1160,6 +1336,32 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			return m, m.startLoadObjects()
 		}
 		m.appendTranscript(dimStyle.Render("(no management API)") + "\n\n")
+
+	case "/disconnect":
+		if m.reconnecting {
+			m.reconnecting = false
+			m.reconnectDisabled = true
+			m.reconnectStatus = ""
+			m.appendTranscript(dimStyle.Render("Auto-reconnect disabled. Use /connect to reconnect manually.") + "\n\n")
+		} else {
+			m.appendTranscript(dimStyle.Render("Not currently reconnecting.") + "\n\n")
+		}
+
+	case "/connect":
+		if m.session == nil || m.session.spec.Ping == nil {
+			m.appendTranscript(warnStyle.Render("No connection probe available for this broker.") + "\n\n")
+			return m, nil
+		}
+		if m.connErr == nil && !m.reconnecting {
+			m.appendTranscript(dimStyle.Render("Already connected.") + "\n\n")
+			return m, nil
+		}
+		m.reconnectDisabled = false
+		m.reconnecting = true
+		m.reconnectAt = time.Now() // fire probe immediately
+		m.reconnectStatus = "↻ connecting…"
+		m.appendTranscript(dimStyle.Render("Connecting…") + "\n\n")
+		return m, m.startReconnectProbe()
 
 	case "/clear":
 		m.transcript.Reset()
@@ -1277,7 +1479,8 @@ func (m aiTUIModel) handleKeyThinking(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
-		m.appendTranscript(dimStyle.Render("(discarded)") + "\n\n")
+		// Freeze with a grey ✗ marker.
+		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", true, false))
 		m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
 		m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "[user discarded the command]"})
 		m.state = tuiIdle
@@ -1285,20 +1488,24 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
+		// Freeze with a green ✓ marker, then execute.
+		m.appendTranscript(freezeProposal(m.proposedCmd, "✓", false, m.proposedDestructive))
 		return m.startExecution(m.proposedCmd)
 
 	case tea.KeyRunes:
 		switch msg.String() {
 		case "e":
+			// Switch to editing sub-state — shimmer continues while the user types.
 			m.input.SetValue(m.proposedCmd)
-			m.state = tuiIdle
+			m.state = tuiEditing
 			m.input.Focus()
 			(&m).updateInputHeight()
 			return m, nil
 		case "c":
+			// Freeze with a yellow ? marker to mark it as a follow-up topic.
+			m.appendTranscript(freezeProposal(m.proposedCmd, "?", false, m.proposedDestructive))
 			m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
 			m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "[command NOT executed — user wants to discuss or refine it before running]"})
-			m.appendTranscript(dimStyle.Render("(chat about: "+m.proposedCmd+")") + "\n")
 			m.input.SetValue("")
 			m.input.Placeholder = "Chat about the suggestion..."
 			m.state = tuiIdle
@@ -1308,6 +1515,50 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// handleKeyEditing handles keyboard events in tuiEditing state: the user is
+// refining the proposed command. Enter accepts and runs it; Esc cancels.
+// Any other key is forwarded to the textarea so the user can edit freely.
+func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		cmd := strings.TrimSpace(m.input.Value())
+		if cmd == "" {
+			return m, nil
+		}
+		m.proposedCmd = cmd
+		m.proposedDestructive = anyCommand(cmd, isDestructive)
+		// Freeze with a green ✓ and run.
+		m.appendTranscript(freezeProposal(cmd, "✓", false, m.proposedDestructive))
+		m.input.SetValue("")
+		m.inputLines = 1
+		m.input.SetHeight(1)
+		m.recalcLayout()
+		return m.startExecution(cmd)
+
+	case tea.KeyEsc, tea.KeyCtrlC:
+		// Freeze with a grey ✗ marker and return to idle.
+		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", true, false))
+		m.input.SetValue("")
+		m.inputLines = 1
+		m.input.SetHeight(1)
+		m.state = tuiIdle
+		m.input.Focus()
+		m.recalcLayout()
+		return m, nil
+
+	default:
+		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.inputLines {
+			m.inputLines = n
+			m.input.SetHeight(n)
+			m.recalcLayout()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		(&m).updateInputHeight()
+		return m, cmd
+	}
 }
 
 // handleKeyPane processes keys when a sidebar pane has focus.
@@ -1529,7 +1780,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		log.Verbose("AI tokens: %d input, %d output", msg.usage.InputTokens, msg.usage.OutputTokens)
 	}
 
-	command := extractCommand(msg.text)
+	command := extractCommandWithVerbs(msg.text, m.ai.verbSet)
 	if command == "" {
 		raw := strings.TrimSpace(msg.text)
 		if raw != "" {
@@ -1564,15 +1815,22 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.proposedCmd = command
-	proposal := cmdStyle.Render("▶ " + command)
-	if anyCommand(command, isDestructive) {
-		proposal += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
-	}
-	m.appendTranscript(proposal + "\n\n")
+	// Normalize: collapse embedded newlines (xmc commands are single logical lines).
+	command = strings.Join(strings.FieldsFunc(command, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	}), " ")
+	command = strings.TrimSpace(command)
 
+	m.proposedCmd = command
+	m.proposedDestructive = anyCommand(command, isDestructive)
+	m.shimmerPhase = 0
+	// Switch to tuiProposing BEFORE calling setViewportContent so that the
+	// state guard in setViewportContent renders the live proposal overlay.
+	// (The proposal is NOT written to the transcript yet — it is frozen there
+	// only when the user accepts, rejects, edits, or chats.)
 	m.state = tuiProposing
 	m.input.Blur()
+	m.setViewportContent()
 	return m, nil
 }
 
@@ -1624,10 +1882,23 @@ func (m aiTUIModel) startExecution(command string) (tea.Model, tea.Cmd) {
 
 func (m aiTUIModel) handleExecDone(msg execDoneMsg) (tea.Model, tea.Cmd) {
 	var result strings.Builder
-	result.WriteString(histCmdStyle.Render("▶ ran: "+m.proposedCmd) + "\n")
+
+	// Register the executed command as a copyable item.
+	m.copyItems = append(m.copyItems, m.proposedCmd)
+	result.WriteString(histCmdStyle.Render("▶ ran: "+m.proposedCmd) +
+		copyHintStyle.Render(" ⧉") + "\n")
+
 	if msg.stdout != "" {
 		trimmed := strings.TrimRight(msg.stdout, "\n")
-		result.WriteString(dimStyle.Render(trimmed) + "\n")
+		if isMessageReadCommand(m.proposedCmd) {
+			// Style message payloads with a left border and italic text.
+			result.WriteString(renderMessagePayload(trimmed))
+			// Register the payload as a copyable item.
+			m.copyItems = append(m.copyItems, trimmed)
+			result.WriteString(copyHintStyle.Render("  ⧉") + "\n")
+		} else {
+			result.WriteString(dimStyle.Render(trimmed) + "\n")
+		}
 	}
 	if msg.err != nil {
 		result.WriteString(warnStyle.Render("✗ "+msg.err.Error()) + "\n")
@@ -1668,6 +1939,40 @@ func appendShellHistory(command string) {
 	fmt.Fprintln(f, command)
 }
 
+// ---------- Input prompt helpers ----------
+
+// applyPromptFunc configures ta so that only the first visual line shows the
+// prompt label; all wrapped continuation lines receive indent spaces of the
+// same width. Must be called before SetWidth so the textarea can account for
+// promptWidth in its layout.
+func applyPromptFunc(ta *textarea.Model, text string) {
+	w := len([]rune(text))
+	indent := strings.Repeat(" ", w)
+	ta.SetPromptFunc(w, func(lineIdx int) string {
+		if lineIdx == 0 {
+			return text
+		}
+		return indent
+	})
+}
+
+// predictValue estimates the textarea value after applying msg without calling
+// Update() — used for pre-sizing the textarea height before the actual Update
+// so the resize happens in the right order. Cursor position is not modelled
+// precisely; only total length matters for row-count calculation.
+func predictValue(current string, msg tea.KeyMsg) string {
+	switch msg.Type {
+	case tea.KeyRunes:
+		return current + string(msg.Runes)
+	case tea.KeyBackspace, tea.KeyDelete:
+		runes := []rune(current)
+		if len(runes) > 0 {
+			return string(runes[:len(runes)-1])
+		}
+	}
+	return current
+}
+
 // ---------- Layout helpers ----------
 
 func (m *aiTUIModel) recalcLayout() {
@@ -1676,7 +1981,7 @@ func (m *aiTUIModel) recalcLayout() {
 	if inputLines < 1 {
 		inputLines = 1
 	}
-	inputHeight := 1 + inputLines // blank separator + textarea rows
+	inputHeight := 2 + inputLines // top rule + textarea rows + bottom rule
 	statusHeight := 1
 	slack := 1
 	vpHeight := m.height - headerHeight - inputHeight - statusHeight - slack
@@ -1693,16 +1998,19 @@ func (m *aiTUIModel) recalcLayout() {
 // updateInputHeight recomputes how many visual rows the current input text
 // needs (up to maxInputLines), resizes the textarea if needed, and always
 // calls recalcLayout so that viewport height tracks any input-area changes.
-func (m *aiTUIModel) updateInputHeight() {
-	promptLen := len([]rune(m.input.Prompt))
-	textWidth := m.width - 4 - promptLen // matches the SetWidth(m.width-4) in recalcLayout
-	if textWidth < 1 {
-		textWidth = 1
+// computeInputLines returns the number of visual rows needed to display value in
+// the textarea, clamped to [1, maxInputLines]. It uses m.input.Width() which
+// reflects the true inner text width that the textarea computed after SetWidth,
+// so measurements are always in sync with the widget's own layout.
+func (m *aiTUIModel) computeInputLines(value string) int {
+	w := m.input.Width() // inner content width (after prompt and reserved margins)
+	if w < 1 {
+		w = 1
 	}
-	runes := []rune(m.input.Value())
+	runes := []rune(value)
 	n := 1
 	if len(runes) > 0 {
-		n = (len(runes) + textWidth - 1) / textWidth
+		n = (len(runes) + w - 1) / w
 	}
 	if n < 1 {
 		n = 1
@@ -1710,6 +2018,11 @@ func (m *aiTUIModel) updateInputHeight() {
 	if n > maxInputLines {
 		n = maxInputLines
 	}
+	return n
+}
+
+func (m *aiTUIModel) updateInputHeight() {
+	n := m.computeInputLines(m.input.Value())
 	if n != m.inputLines {
 		m.inputLines = n
 		m.input.SetHeight(n)
@@ -1717,8 +2030,24 @@ func (m *aiTUIModel) updateInputHeight() {
 	m.recalcLayout()
 }
 
+// maxTranscriptBytes is the soft cap on transcript memory. When exceeded, the
+// oldest content is dropped and a trim marker is prepended.
+const maxTranscriptBytes = 200 * 1024 // 200 KB
+
 func (m *aiTUIModel) appendTranscript(text string) {
 	m.transcript.WriteString(text)
+	// Transcript cap: drop the oldest content when we exceed the budget.
+	if m.transcript.Len() > maxTranscriptBytes {
+		raw := m.transcript.String()
+		// Keep the last maxTranscriptBytes bytes, aligning to a newline boundary.
+		keep := raw[m.transcript.Len()-maxTranscriptBytes:]
+		if nl := strings.Index(keep, "\n"); nl >= 0 {
+			keep = keep[nl+1:]
+		}
+		m.transcript.Reset()
+		m.transcript.WriteString(dimStyle.Render("… earlier output trimmed …") + "\n\n")
+		m.transcript.WriteString(keep)
+	}
 	m.setViewportContent()
 }
 
@@ -1733,9 +2062,59 @@ func (m *aiTUIModel) setViewportContent() {
 	if m.state == tuiPicking && m.picker != nil {
 		content += m.renderPicker()
 	}
+	if m.state == tuiProposing || m.state == tuiEditing {
+		text := m.proposedCmd
+		if m.state == tuiEditing {
+			text = m.input.Value() // shimmer tracks edits in real time
+		}
+		// Bug A fix: wrap the plain "▶ <cmd>" text first so width measurement is
+		// accurate (no ANSI codes), then apply the shimmer band per rune on the
+		// pre-wrapped lines. This prevents double-wrapping when the sidebar is shown.
+		w := m.viewport.Width
+		if w < 1 {
+			w = 80
+		}
+		plainLine := "▶ " + text
+		wrapped := wordwrap.String(plainLine, w)
+		lines := strings.Split(wrapped, "\n")
+		// Count total runes across all wrapped lines to compute shimmer period.
+		totalRunes := 0
+		for _, l := range lines {
+			totalRunes += len([]rune(l))
+		}
+		period := totalRunes + shimmerBand
+		if period < 1 {
+			period = 1
+		}
+		pos := m.shimmerPhase % period // left edge of the bright band
+		var shimmed strings.Builder
+		globalIdx := 0 // continuous rune index across all wrapped lines
+		for li, line := range lines {
+			for _, r := range []rune(line) {
+				inBand := globalIdx >= pos && globalIdx < pos+shimmerBand
+				ch := string(r)
+				if inBand {
+					shimmed.WriteString(shimmerHighStyle.Render(ch))
+				} else {
+					shimmed.WriteString(cmdStyle.Render(ch))
+				}
+				globalIdx++
+			}
+			if li < len(lines)-1 {
+				shimmed.WriteString("\n")
+			}
+		}
+		content += shimmed.String()
+		if m.proposedDestructive {
+			content += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
+		}
+		content += "\n\n"
+	}
 	if w := m.viewport.Width; w > 0 {
 		content = wrap.String(wordwrap.String(content, w), w)
 	}
+	// Cache the wrapped lines for click-to-copy ⧉ detection.
+	m.wrappedContentLines = strings.Split(content, "\n")
 	m.viewport.SetContent(content)
 	if m.follow {
 		m.viewport.GotoBottom()
@@ -1768,6 +2147,99 @@ func (m *aiTUIModel) renderPicker() string {
 	}
 	b.WriteString(dimStyle.Render("\n↑/↓ select · Enter confirm · Esc cancel") + "\n")
 	return b.String()
+}
+
+// ---------- Proposal shimmer ----------
+
+// shimmerBand is the number of "lit" runes in the shimmer highlight band.
+const shimmerBand = 4
+
+// ---------- Copy-to-clipboard helpers ----------
+
+const copyMarker = "⧉"
+
+// lineHasCopyMarker reports whether the (potentially ANSI-coloured) line
+// contains a ⧉ clipboard marker.
+func lineHasCopyMarker(line string) bool {
+	return strings.Contains(xansi.Strip(line), copyMarker)
+}
+
+// copyIdxForLine returns the 0-based index into m.copyItems for a click on
+// wrappedContentLines[clickedLine].  It counts the number of ⧉ markers that
+// appear at or before clickedLine (the Nth marker → copyItems[N-1]).
+// Returns -1 if the clicked line has no marker.
+func (m aiTUIModel) copyIdxForLine(clickedLine int) int {
+	if clickedLine < 0 || clickedLine >= len(m.wrappedContentLines) {
+		return -1
+	}
+	if !lineHasCopyMarker(m.wrappedContentLines[clickedLine]) {
+		return -1
+	}
+	count := 0
+	for i := 0; i <= clickedLine; i++ {
+		if lineHasCopyMarker(m.wrappedContentLines[i]) {
+			count++
+		}
+	}
+	return count - 1 // 0-based
+}
+
+// isMessageReadCommand reports whether cmd is one that consumes / peeks
+// messages and therefore produces payload output on stdout.
+func isMessageReadCommand(cmd string) bool {
+	verbs := []string{"receive ", "receive\n", "peek ", "peek\n", "subscribe ", "subscribe\n"}
+	cmd = strings.TrimSpace(cmd)
+	for _, v := range verbs {
+		if strings.HasPrefix(cmd, strings.TrimSpace(v)) {
+			return true
+		}
+	}
+	// Also match bare verb (no args).
+	switch cmd {
+	case "receive", "peek", "subscribe":
+		return true
+	}
+	return false
+}
+
+// renderMessagePayload renders a message payload (or multiple NDJSON records)
+// with a left border and italic cyan body, mimicking a blockquote.
+func renderMessagePayload(content string) string {
+	lines := strings.Split(content, "\n")
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString(msgBorderStyle.Render("│") + " " + msgBodyStyle.Render(line) + "\n")
+	}
+	return b.String()
+}
+
+// ---------- Proposal rendering ----------
+
+// freezeProposal builds the static transcript line written when the user
+// resolves a proposed command. The marker (✓, ✗, ?) is appended with the
+// appropriate style. When dim is true the command text is rendered in dimStyle.
+func freezeProposal(cmd, marker string, dim, destructive bool) string {
+	var prefix string
+	if dim {
+		prefix = dimStyle.Render("▶ " + cmd)
+	} else {
+		prefix = cmdStyle.Render("▶ " + cmd)
+	}
+	var result string
+	switch marker {
+	case "✓":
+		result = prefix + " " + cmdStyle.Render("✓")
+	case "✗":
+		result = prefix + " " + warnStyle.Render("✗")
+	case "?":
+		result = prefix + " " + infoStyle.Render("?")
+	default:
+		result = prefix
+	}
+	if destructive && marker != "✗" {
+		result += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
+	}
+	return result + "\n\n"
 }
 
 // ---------- Broker objects ----------
@@ -2033,13 +2505,78 @@ func (m aiTUIModel) startProbeConnection() tea.Cmd {
 	}
 }
 
+const (
+	reconnectInitialBackoff = 2 * time.Second
+	reconnectMaxBackoff     = 3 * time.Minute
+)
+
 func (m aiTUIModel) handleConnDone(msg connMsg) (tea.Model, tea.Cmd) {
 	m.connChecked = true
 	m.connErr = msg.err
-	if msg.err != nil {
-		m.appendTranscript(warnStyle.Render("connection error: "+msg.err.Error()) + "\n\n")
+	if msg.err == nil {
+		return m, nil
 	}
-	return m, nil
+	m.appendTranscript(warnStyle.Render("connection error: "+msg.err.Error()) + "\n\n")
+	if m.reconnectDisabled {
+		return m, nil
+	}
+	// Start auto-reconnect with initial backoff.
+	m.reconnecting = true
+	m.reconnectBackoff = reconnectInitialBackoff
+	m.reconnectAt = time.Now().Add(m.reconnectBackoff)
+	return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
+}
+
+// startReconnectProbe fires the connection probe and returns the result as
+// reconnectProbeMsg (distinct from connMsg so the two paths don't collide).
+func (m aiTUIModel) startReconnectProbe() tea.Cmd {
+	ping := m.session.spec.Ping
+	return func() tea.Msg {
+		conn, err := ping()
+		if err != nil {
+			return reconnectProbeMsg{err: err}
+		}
+		_ = conn.Close()
+		return reconnectProbeMsg{}
+	}
+}
+
+func (m aiTUIModel) handleReconnectTick() (tea.Model, tea.Cmd) {
+	if !m.reconnecting || m.reconnectDisabled {
+		m.reconnectStatus = ""
+		return m, nil
+	}
+	m.reconnectBlink = !m.reconnectBlink
+
+	remaining := time.Until(m.reconnectAt)
+	if remaining > 0 {
+		secs := int(remaining.Seconds()) + 1
+		m.reconnectStatus = fmt.Sprintf("↻ reconnecting in %ds…", secs)
+		return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
+	}
+
+	// Time to probe.
+	m.reconnectStatus = "↻ connecting…"
+	return m, m.startReconnectProbe()
+}
+
+func (m aiTUIModel) handleReconnectProbe(msg reconnectProbeMsg) (tea.Model, tea.Cmd) {
+	if msg.err == nil {
+		// Connected!
+		m.reconnecting = false
+		m.reconnectStatus = ""
+		m.connErr = nil
+		m.connChecked = true
+		m.appendTranscript(infoStyle.Render("✓ connected") + "\n\n")
+		return m, nil
+	}
+	// Still failing — double backoff and keep ticking.
+	m.reconnectBackoff *= 2
+	if m.reconnectBackoff > reconnectMaxBackoff {
+		m.reconnectBackoff = reconnectMaxBackoff
+	}
+	m.reconnectAt = time.Now().Add(m.reconnectBackoff)
+	return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
 }
 
 // ---------- Input mode & history ----------
@@ -2049,13 +2586,15 @@ func (m *aiTUIModel) toggleInputMode() {
 	m.histIdx = -1
 	if m.mode == modeAI {
 		m.mode = modeCmd
-		m.input.Prompt = m.binaryName + "> "
+		applyPromptFunc(&m.input, m.binaryName+"> ")
 		m.input.Placeholder = "Type an xmc command..."
 	} else {
 		m.mode = modeAI
-		m.input.Prompt = "ask> "
+		applyPromptFunc(&m.input, "ask> ")
 		m.input.Placeholder = "Ask anything..."
 	}
+	// Re-layout: prompt width may have changed (e.g. "ask> " vs "awsmc> ").
+	m.recalcLayout()
 }
 
 // historyPrev recalls the previous entry from the active history.

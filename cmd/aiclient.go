@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 // aiMessage is a single turn in a conversation (role = "user" or "assistant").
@@ -25,9 +28,84 @@ type TokenUsage struct {
 	OutputTokens int
 }
 
-// aiRequestTimeout is the maximum time an AI API call may take before being
-// cancelled. The user can still cancel earlier via ESC.
-const aiRequestTimeout = 60 * time.Second
+// defaultRequestTimeout is the maximum time an AI API call may take before
+// being cancelled. The user can still cancel earlier via ESC. Set generously
+// to accommodate slow reasoning models. Configurable via ai.request-timeout.
+const defaultRequestTimeout = 120 * time.Second
+
+// maxRetryAttempts is the total number of attempts (1 initial + N-1 retries).
+const maxRetryAttempts = 4
+
+// retryInitialInterval is the starting backoff interval between retry attempts.
+// It is a var (not a const) so tests can set it to a small value to stay fast.
+var retryInitialInterval = 1 * time.Second
+
+// shouldRetry reports whether the HTTP response or transport error warrants a
+// retry. Context cancellation is never retried — that is deliberate user action.
+func shouldRetry(statusCode int, err error) bool {
+	if err != nil {
+		// Do not retry if the context was cancelled or timed out.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return false
+		}
+		// Retry other transient network errors (DNS, TCP, etc.).
+		return true
+	}
+	return statusCode == http.StatusTooManyRequests || // 429
+		statusCode >= http.StatusInternalServerError // 5xx
+}
+
+// doWithRetry executes buildReq → HTTP round trip with capped exponential
+// backoff. Only 429 and 5xx status codes (and transient transport errors) are
+// retried; context cancellation propagates immediately. The caller must close
+// the response body.
+func doWithRetry(ctx context.Context, buildReq func() (*http.Request, error)) (*http.Response, error) {
+	bo := backoff.WithContext(
+		backoff.WithMaxRetries(
+			backoff.NewExponentialBackOff(
+				backoff.WithInitialInterval(retryInitialInterval),
+				backoff.WithMultiplier(2),
+				backoff.WithMaxInterval(8*time.Second),
+			),
+			uint64(maxRetryAttempts-1),
+		),
+		ctx,
+	)
+
+	var lastResp *http.Response
+	var lastErr error
+	err := backoff.Retry(func() error {
+		req, err := buildReq()
+		if err != nil {
+			return backoff.Permanent(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			if !shouldRetry(0, err) {
+				return backoff.Permanent(err)
+			}
+			lastErr = err
+			return err
+		}
+		if shouldRetry(resp.StatusCode, nil) {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+			lastResp = nil
+			return lastErr
+		}
+		lastResp = resp
+		return nil
+	}, bo)
+
+	if err != nil {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, err
+	}
+	return lastResp, nil
+}
 
 type aiClient interface {
 	// Complete sends a chat completion request. When onToken is non-nil the
@@ -50,13 +128,17 @@ type modelLister interface {
 const aiListTimeout = 15 * time.Second
 
 func newAIClient(spec providerSpec) aiClient {
+	timeout := spec.requestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
 	switch spec.name {
 	case "anthropic":
-		return &anthropicClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens}
+		return &anthropicClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
 	case "gemini":
-		return &geminiClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens}
+		return &geminiClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
 	default:
-		return &openaiClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens}
+		return &openaiClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
 	}
 }
 
@@ -113,11 +195,12 @@ func fetchModelIDs(req *http.Request) ([]string, error) {
 // --- Anthropic (POST /v1/messages) ---
 
 type anthropicClient struct {
-	apiKey      string
-	model       string
-	baseURL     string
-	temperature float64
-	maxTokens   int
+	apiKey         string
+	model          string
+	baseURL        string
+	temperature    float64
+	maxTokens      int
+	requestTimeout time.Duration
 }
 
 func (c *anthropicClient) SetModel(m string)       { c.model = m }
@@ -137,7 +220,11 @@ func (c *anthropicClient) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (c *anthropicClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
-	ctx, cancel := context.WithTimeout(ctx, aiRequestTimeout)
+	timeout := c.requestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	msgs := make([]map[string]string, len(messages))
@@ -161,24 +248,20 @@ func (c *anthropicClient) Complete(ctx context.Context, system string, messages 
 		return "", TokenUsage{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(data))
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		return req, nil
+	})
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("anthropic API: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", TokenUsage{}, fmt.Errorf("anthropic API %d: %s", resp.StatusCode, truncate(string(respBody), 200))
-	}
 
 	if onToken != nil {
 		return c.parseStream(resp.Body, onToken)
@@ -290,11 +373,12 @@ func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string
 // Covers: OpenAI, xAI, DeepSeek, Mistral
 
 type openaiClient struct {
-	apiKey      string
-	model       string
-	baseURL     string
-	temperature float64
-	maxTokens   int
+	apiKey         string
+	model          string
+	baseURL        string
+	temperature    float64
+	maxTokens      int
+	requestTimeout time.Duration
 }
 
 func (c *openaiClient) SetModel(m string)       { c.model = m }
@@ -313,7 +397,11 @@ func (c *openaiClient) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (c *openaiClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
-	ctx, cancel := context.WithTimeout(ctx, aiRequestTimeout)
+	timeout := c.requestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	msgs := []map[string]string{{"role": "system", "content": system}}
@@ -337,23 +425,19 @@ func (c *openaiClient) Complete(ctx context.Context, system string, messages []a
 		return "", TokenUsage{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(data))
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		return req, nil
+	})
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("openai-compatible API (%s): %w", c.baseURL, err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", TokenUsage{}, fmt.Errorf("openai-compatible API %d: %s", resp.StatusCode, truncate(string(respBody), 200))
-	}
 
 	if onToken != nil {
 		return c.parseStream(resp.Body, onToken)
@@ -470,11 +554,12 @@ func (c *openaiClient) parseStream(r io.Reader, onToken func(string)) (string, T
 // --- Google Gemini (POST :generateContent / :streamGenerateContent) ---
 
 type geminiClient struct {
-	apiKey      string
-	model       string
-	baseURL     string
-	temperature float64
-	maxTokens   int
+	apiKey         string
+	model          string
+	baseURL        string
+	temperature    float64
+	maxTokens      int
+	requestTimeout time.Duration
 }
 
 func (c *geminiClient) SetModel(m string)       { c.model = m }
@@ -518,7 +603,11 @@ func (c *geminiClient) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (c *geminiClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
-	ctx, cancel := context.WithTimeout(ctx, aiRequestTimeout)
+	timeout := c.requestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	contents := make([]map[string]any, len(messages))
@@ -550,29 +639,25 @@ func (c *geminiClient) Complete(ctx context.Context, system string, messages []a
 		return "", TokenUsage{}, err
 	}
 
-	var url string
+	var apiURL string
 	if onToken != nil {
-		url = fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s", c.baseURL, c.model, c.apiKey)
+		apiURL = fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s", c.baseURL, c.model, c.apiKey)
 	} else {
-		url = fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", c.baseURL, c.model, c.apiKey)
+		apiURL = fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", c.baseURL, c.model, c.apiKey)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("gemini API: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", TokenUsage{}, fmt.Errorf("gemini API %d: %s", resp.StatusCode, truncate(string(respBody), 200))
-	}
 
 	if onToken != nil {
 		return c.parseStream(resp.Body, onToken)

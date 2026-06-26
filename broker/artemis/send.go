@@ -74,7 +74,13 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 	if err != nil {
 		return err
 	}
-	defer sender.Close(ctx)
+	// Use a fresh context for the close so the DETACH handshake always completes,
+	// even if the operation's own ctx was cancelled.
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sender.Close(closeCtx)
+	}()
 
 	log.Verbose("💌 sending message...")
 	err = sender.Send(ctx, message, nil)

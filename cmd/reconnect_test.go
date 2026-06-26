@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -278,6 +279,126 @@ func TestConditionalReconnectTopic_Nil(t *testing.T) {
 	result := conditionalReconnectTopic(nil, nil)
 	if result != nil {
 		t.Error("expected nil factory for nil input")
+	}
+}
+
+// --- Browse delegation tests ---
+
+// cannedBrowser is a Browser that yields a fixed slice of messages then
+// returns ErrNoMessageAvailable, simulating a bounded browse cursor.
+type cannedBrowser struct {
+	msgs  []*backends.Message
+	index int
+}
+
+func (b *cannedBrowser) Next(_ context.Context) (*backends.Message, error) {
+	if b.index >= len(b.msgs) {
+		return nil, backends.ErrNoMessageAvailable
+	}
+	msg := b.msgs[b.index]
+	b.index++
+	return msg, nil
+}
+
+func (b *cannedBrowser) Close() error { return nil }
+
+// browseableQueueBackend embeds mockQueueBackend and adds BrowseBackend support.
+type browseableQueueBackend struct {
+	mockQueueBackend
+	browseMsgs [][]byte // payloads served via Browse
+}
+
+func (bb *browseableQueueBackend) Browse(_ context.Context, _ backends.ReceiveOptions) (backends.Browser, error) {
+	msgs := make([]*backends.Message, len(bb.browseMsgs))
+	for i, d := range bb.browseMsgs {
+		msgs[i] = &backends.Message{Data: d}
+	}
+	return &cannedBrowser{msgs: msgs}, nil
+}
+
+// TestReconnectingQueue_BrowseDelegatesWhenSupported verifies that Browse is
+// forwarded to the underlying adapter when it implements BrowseBackend, and
+// that the returned cursor advances and terminates correctly.
+func TestReconnectingQueue_BrowseDelegatesWhenSupported(t *testing.T) {
+	underlying := &browseableQueueBackend{
+		browseMsgs: [][]byte{[]byte("a"), []byte("b"), []byte("c")},
+	}
+	factory := func() (backends.QueueBackend, error) { return underlying, nil }
+	rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{}}
+
+	browser, err := rq.Browse(context.Background(), backends.ReceiveOptions{Queue: "q"})
+	if err != nil {
+		t.Fatalf("Browse returned unexpected error: %v", err)
+	}
+	defer browser.Close()
+
+	var got []string
+	for {
+		msg, err := browser.Next(context.Background())
+		if errors.Is(err, backends.ErrNoMessageAvailable) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error: %v", err)
+		}
+		got = append(got, string(msg.Data))
+	}
+
+	want := []string{"a", "b", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v messages, want %v", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+// TestReconnectingQueue_BrowseSentinelWhenUnsupported verifies that Browse
+// returns backends.ErrBrowseUnsupported when the underlying adapter does not implement
+// BrowseBackend, allowing doReceive to fall back to the plain Receive loop.
+func TestReconnectingQueue_BrowseSentinelWhenUnsupported(t *testing.T) {
+	// mockQueueBackend does NOT implement BrowseBackend.
+	mock := &mockQueueBackend{}
+	factory := func() (backends.QueueBackend, error) { return mock, nil }
+	rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{}}
+
+	_, err := rq.Browse(context.Background(), backends.ReceiveOptions{Queue: "q"})
+	if !errors.Is(err, backends.ErrBrowseUnsupported) {
+		t.Errorf("expected backends.ErrBrowseUnsupported, got: %v", err)
+	}
+}
+
+// TestPeekCommand_BrowseFallbackViaWrapper is the end-to-end regression test
+// for the "peek -n 0 loops forever in shell/AI mode" bug. In that mode the
+// backend is always a *reconnectingQueue; if its underlying adapter does NOT
+// implement BrowseBackend the wrapper returns backends.ErrBrowseUnsupported and
+// doReceive must fall back to the plain Receive loop and exit cleanly.
+func TestPeekCommand_BrowseFallbackViaWrapper(t *testing.T) {
+	msgs := []*backends.Message{
+		{Data: []byte("one")},
+		{Data: []byte("two")},
+	}
+	// mockQueueBackend has no BrowseBackend — triggers the backends.ErrBrowseUnsupported path.
+	inner := &mockQueueBackend{receiveMsgs: msgs}
+	factory := func() (backends.QueueBackend, error) { return inner, nil }
+	rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{}}
+
+	cmd := NewPeekCommand(rq)
+	cmd.SetArgs([]string{"q", "-n", "2"})
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(io.Discard)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error (peek via reconnectingQueue wrapper): %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "one") || !strings.Contains(out, "two") {
+		t.Errorf("output missing expected messages: %q", out)
 	}
 }
 

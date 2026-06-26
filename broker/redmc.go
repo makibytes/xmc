@@ -3,11 +3,13 @@
 package broker
 
 import (
+	"context"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
 	redispkg "github.com/makibytes/xmc/broker/redis"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -84,6 +86,43 @@ func GetRootCommand() *cobra.Command {
 			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return redispkg.DeleteQueue(connArgs, prefix, queue) }},
 			CreateTopic: &cmd.ManageAction{Run: func(topic string) error { return redispkg.CreateTopic(connArgs, prefix, topic) }},
 			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return redispkg.DeleteTopic(connArgs, prefix, topic) }},
+		},
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-redis",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return redispkg.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return redispkg.NewTopicAdapter(connArgs, maxLen)
+				},
+				ListQueues: func(_ context.Context) ([]mcp.QueueInfo, error) {
+					queues, err := redispkg.ListQueues(connArgs, prefix)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]mcp.QueueInfo, len(queues))
+					for i, q := range queues {
+						out[i] = mcp.QueueInfo{Name: q.Name, MessageCount: q.MessageCount}
+					}
+					return out, nil
+				},
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
+					return redispkg.PurgeQueue(connArgs, prefix, queue)
+				},
+				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
+					s, err := redispkg.GetQueueStats(connArgs, prefix, queue)
+					if err != nil {
+						return nil, err
+					}
+					return &mcp.QueueStats{
+						Name: s.Name, MessageCount: s.MessageCount, ConsumerCount: int64(s.ConsumerCount),
+						EnqueueCount: s.EnqueueCount, DequeueCount: s.DequeueCount,
+					}, nil
+				},
+			}),
 		},
 	})
 }

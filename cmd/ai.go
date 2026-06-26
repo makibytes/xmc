@@ -32,6 +32,7 @@ type aiSession struct {
 	brokerContext      string
 	topology           string
 	capabilities       string // cached buildCapabilities result (command tree is static)
+	verbSet            map[string]bool // cached verb set for extractCommandWithVerbs
 	aliases            map[string]string
 	session            *shellSession
 	rootCmd            *cobra.Command
@@ -61,6 +62,7 @@ func (a *aiSession) init() error {
 		a.client = newAIClient(spec)
 		a.providerName = spec.name
 		a.modelName = spec.model
+		a.verbSet = buildVerbSet(a.rootCmd)
 		a.rebuildPrompt()
 		log.Verbose("AI provider: %s, model: %s", spec.name, spec.model)
 	})
@@ -146,15 +148,43 @@ func buildFeedback(err error, stdout, stderr string) string {
 	return b.String()
 }
 
-// isDestructive returns true if a single command would modify or destroy broker
-// state (delete queues/topics/exchanges, purge, move messages).
+// isDestructive returns true if a single command would permanently destroy
+// broker objects or purge message storage. Fetching or relaying messages
+// (receive, move, forward, subscribe) is NOT destructive — only deleting
+// broker entities and purging queues is.
 var destructivePrefixes = []string{
 	"manage delete-queue",
 	"manage delete-topic",
 	"manage delete-exchange",
 	"manage unbind-queue",
 	"manage purge",
-	"move ",
+}
+
+// drainVerbs lists verbs that drain when -n 0 / --count 0 is specified.
+var drainVerbs = []string{"receive", "move", "forward", "subscribe"}
+
+// isDrainCommand returns true if the command uses -n 0 or --count 0, which
+// causes receive/move/forward/subscribe to drain all messages from the source.
+func isDrainCommand(command string) bool {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	var matchesVerb bool
+	for _, v := range drainVerbs {
+		if strings.HasPrefix(lower, v+" ") || lower == v {
+			matchesVerb = true
+			break
+		}
+	}
+	if !matchesVerb {
+		return false
+	}
+	// Look for -n 0 or --count 0 anywhere in the command.
+	fields := strings.Fields(lower)
+	for i, f := range fields {
+		if (f == "-n" || f == "--count") && i+1 < len(fields) && fields[i+1] == "0" {
+			return true
+		}
+	}
+	return false
 }
 
 // objectPrefixes lists commands that create, delete, or rebind broker entities

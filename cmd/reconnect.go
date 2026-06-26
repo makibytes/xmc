@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+
 // ReconnectOptions controls the auto-reconnect wrapper behaviour.
 type ReconnectOptions struct {
 	// MaxElapsed caps how long the wrapper will keep retrying before giving up.
@@ -180,6 +181,25 @@ func (r *reconnectingQueue) Close() error {
 		return err
 	}
 	return nil
+}
+
+// Browse implements backends.BrowseBackend by delegating to the underlying
+// adapter if it supports browsing. Returns errBrowseUnsupported if the
+// adapter does not implement BrowseBackend, allowing doReceive to fall back
+// to the normal Receive loop for brokers that don't have a browse cursor.
+func (r *reconnectingQueue) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.ensureConnected(); err != nil {
+		return nil, err
+	}
+
+	bb, ok := r.adapter.(backends.BrowseBackend)
+	if !ok {
+		return nil, backends.ErrBrowseUnsupported
+	}
+	return bb.Browse(ctx, opts)
 }
 
 // retryOp reconnects and retries op with exponential backoff. The caller must

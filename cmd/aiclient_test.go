@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnthropicClient_RequestShape(t *testing.T) {
@@ -583,5 +584,140 @@ func TestAllClients_ImplementModelLister(t *testing.T) {
 		if _, ok := c.(modelLister); !ok {
 			t.Errorf("%T does not implement modelLister", c)
 		}
+	}
+}
+
+// ---------- shouldRetry ----------
+
+func TestShouldRetry(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		err    error
+		want   bool
+	}{
+		{"429 rate-limited", http.StatusTooManyRequests, nil, true},
+		{"500 internal error", http.StatusInternalServerError, nil, true},
+		{"502 bad gateway", 502, nil, true},
+		{"503 unavailable", http.StatusServiceUnavailable, nil, true},
+		{"200 ok", http.StatusOK, nil, false},
+		{"400 bad request", http.StatusBadRequest, nil, false},
+		{"401 unauthorized", http.StatusUnauthorized, nil, false},
+		{"404 not found", http.StatusNotFound, nil, false},
+		{"transport error", 0, fmt.Errorf("dial tcp: connection refused"), true},
+		{"context canceled", 0, context.Canceled, false},
+		{"context deadline exceeded", 0, context.DeadlineExceeded, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldRetry(tt.status, tt.err)
+			if got != tt.want {
+				t.Errorf("shouldRetry(%d, %v) = %v, want %v", tt.status, tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------- doWithRetry ----------
+
+// fastRetry overrides the backoff interval so retry tests don't sleep 1s.
+func fastRetry(t *testing.T) {
+	t.Helper()
+	old := retryInitialInterval
+	retryInitialInterval = time.Millisecond
+	t.Cleanup(func() { retryInitialInterval = old })
+}
+
+func TestDoWithRetry_429ThenOK(t *testing.T) {
+	fastRetry(t)
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"rate limit"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	resp, err := doWithRetry(context.Background(), func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), "GET", srv.URL, nil)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp.Body.Close()
+	if calls != 2 {
+		t.Errorf("handler called %d times, want 2", calls)
+	}
+}
+
+func TestDoWithRetry_ExhaustsOn500(t *testing.T) {
+	fastRetry(t)
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"server error"}`))
+	}))
+	defer srv.Close()
+
+	_, err := doWithRetry(context.Background(), func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), "GET", srv.URL, nil)
+	})
+	if err == nil {
+		t.Fatal("expected error after all retries exhausted")
+	}
+	if calls != maxRetryAttempts {
+		t.Errorf("handler called %d times, want %d", calls, maxRetryAttempts)
+	}
+}
+
+func TestDoWithRetry_NonRetryableStatusImmediate(t *testing.T) {
+	fastRetry(t)
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	// 401 is non-retryable: doWithRetry returns the response for the caller to
+	// inspect; it does NOT return an error itself.
+	resp, err := doWithRetry(context.Background(), func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), "GET", srv.URL, nil)
+	})
+	if err != nil {
+		t.Fatalf("doWithRetry should not error for 401 (let caller decide): %v", err)
+	}
+	resp.Body.Close()
+	// Handler must be called exactly once — no retries.
+	if calls != 1 {
+		t.Errorf("handler called %d times, want 1 (401 is non-retryable)", calls)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestDoWithRetry_ContextCancelImmediate(t *testing.T) {
+	fastRetry(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+
+	_, err := doWithRetry(ctx, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", srv.URL, nil)
+	})
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
 	}
 }

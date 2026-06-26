@@ -2,6 +2,25 @@ package backends
 
 import "context"
 
+// Browser is a non-destructive forward cursor over a queue's messages.
+// Successive Next calls advance through the queue; messages are not removed.
+// Close must be called when the browser is no longer needed.
+type Browser interface {
+	// Next returns the next message. Returns ErrNoMessageAvailable when the
+	// queue is exhausted (or after a timeout with no new messages).
+	Next(ctx context.Context) (*Message, error)
+	// Close releases the underlying resources.
+	Close() error
+}
+
+// BrowseBackend is an optional interface implemented by backends that support
+// true non-destructive, cursor-based queue browsing.  When a QueueBackend also
+// implements BrowseBackend, peek with -n 0 uses Browse so that every message in
+// the queue is shown exactly once instead of the first message repeating forever.
+type BrowseBackend interface {
+	Browse(ctx context.Context, opts ReceiveOptions) (Browser, error)
+}
+
 // Message represents a generic message for queue operations
 type Message struct {
 	Data       []byte

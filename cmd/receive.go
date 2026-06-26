@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
 )
+
 
 // NewReceiveCommand creates a receive command for queue-based brokers.
 // When resolver is non-nil, --exchange and --queue flags are registered
@@ -33,6 +35,7 @@ func NewReceiveCommand(backend backends.QueueBackend, resolver TargetResolver, c
 	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
 	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
+	cmd.Flags().IntP("omit", "o", 0, "Skip (offset past) the first N messages before reading")
 
 	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
 	if hasExchRouting {
@@ -41,8 +44,6 @@ func NewReceiveCommand(backend backends.QueueBackend, resolver TargetResolver, c
 		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
 		cmd.Flags().String("queue-name", "", "Queue to receive from (AMQP 1.0 v2: /queues/<name>)")
 		cmd.Args = cobra.MaximumNArgs(1)
-	} else if resolver != nil {
-		cmd.Args = cobra.MinimumNArgs(1)
 	} else {
 		cmd.Args = cobra.MinimumNArgs(1)
 	}
@@ -61,6 +62,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 	ndjson, _ := cmd.Flags().GetBool("ndjson")
 	forStr, _ := cmd.Flags().GetString("for")
 	stats, _ := cmd.Flags().GetBool("stats")
+	omit, _ := cmd.Flags().GetInt("omit")
 
 	duration, err := parseDurationFlag(forStr)
 	if err != nil {
@@ -88,16 +90,50 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 		Extra:       extra,
 	}
 
-	return runConsume(func(ctx context.Context) (*backends.Message, error) {
-		return backend.Receive(ctx, opts)
-	}, consumeConfig{
+	cfg := consumeConfig{
 		count:      count,
 		jsonOutput: jsonOutput,
 		verbosity:  opts.Verbosity,
 		format:     format,
 		ndjson:     ndjson,
 		follow:     follow,
-	}, duration, stats)
+		omit:       omit,
+		dataOut:    cmd.OutOrStdout(),
+		metaOut:    cmd.ErrOrStderr(),
+	}
+
+	// parentCtx is cmd.Context(), which is cancellable by the AI TUI's Esc
+	// handler (via execCancel → ExecuteContext ctx). In the plain shell it is
+	// context.Background(), so cancellation relies on SIGINT as before.
+	parentCtx := cmd.Context()
+
+	// When peeking (acknowledge=false) and the backend supports stateful
+	// browsing, open a single browse cursor for the whole invocation.  This
+	// fixes "peek -n 0" which would otherwise repeat the first message forever
+	// because each stateless Receive call re-reads the queue head.
+	//
+	// In shell/AI mode the backend is always a *reconnectingQueue wrapper
+	// (cmd/reconnect.go), which itself implements BrowseBackend by delegating
+	// to the underlying adapter. If the adapter does not support browsing the
+	// wrapper returns backends.ErrBrowseUnsupported — treat that as "fall
+	// through" to the normal Receive loop so non-browse brokers are unaffected.
+	if !acknowledge {
+		if bb, ok := backend.(backends.BrowseBackend); ok {
+			browser, err := bb.Browse(parentCtx, opts)
+			switch {
+			case err == nil:
+				defer browser.Close()
+				return runConsume(browser.Next, cfg, duration, stats, parentCtx)
+			case !errors.Is(err, backends.ErrBrowseUnsupported):
+				return err
+			// ErrBrowseUnsupported: fall through to the plain Receive loop below
+			}
+		}
+	}
+
+	return runConsume(func(ctx context.Context) (*backends.Message, error) {
+		return backend.Receive(ctx, opts)
+	}, cfg, duration, stats, parentCtx)
 }
 
 // resolveConsumeTarget parses --exchange/--queue/<to> for receive/subscribe

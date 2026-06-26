@@ -9,6 +9,7 @@ import (
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/broker/amqpcommon"
 	"github.com/makibytes/xmc/broker/backends"
+	"github.com/makibytes/xmc/log"
 )
 
 // queueAddress returns the AMQP 1.0 v2 address for a queue on RabbitMQ 4.x.
@@ -80,6 +81,24 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	}
 
 	return amqpcommon.ConvertAMQPToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil
+}
+
+// Browse implements backends.BrowseBackend using the RabbitMQ Management API.
+// It POSTs to /api/queues/%2F/{queue}/get with ackmode=ack_requeue_true to
+// fetch up to 10 000 messages non-destructively, then returns an in-memory
+// cursor over them. Falls back to backends.ErrBrowseUnsupported if the
+// Management API is unavailable or fails (e.g. management plugin not loaded).
+func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
+	msgs, err := peekQueueMessages(ManagementArgs{
+		Server:   a.connArgs.Server,
+		User:     a.connArgs.User,
+		Password: a.connArgs.Password,
+	}, opts.Queue, 10000)
+	if err != nil {
+		log.Verbose("RabbitMQ browse via management API failed: %s — falling through to receive loop", err)
+		return nil, backends.ErrBrowseUnsupported
+	}
+	return &mgmtBrowser{messages: msgs}, nil
 }
 
 // Close implements backends.QueueBackend

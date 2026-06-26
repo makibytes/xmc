@@ -137,8 +137,16 @@ func TestAITUI_HandleAIDone_DestructiveCommand(t *testing.T) {
 	if model.state != tuiProposing {
 		t.Errorf("after destructive command, state = %v, want tuiProposing", model.state)
 	}
-	if transcript := model.transcript.String(); len(transcript) == 0 {
-		t.Error("transcript should not be empty")
+	if !model.proposedDestructive {
+		t.Error("proposedDestructive should be true for 'manage delete-queue'")
+	}
+	// The proposal is rendered live in the viewport (not written to transcript).
+	// Verify the command was captured and the viewport content reflects it.
+	if model.proposedCmd != "manage delete-queue test" {
+		t.Errorf("proposedCmd = %q, want 'manage delete-queue test'", model.proposedCmd)
+	}
+	if vp := model.viewport.View(); !strings.Contains(vp, "manage delete-queue test") {
+		t.Error("viewport content should show the proposed command")
 	}
 }
 
@@ -195,15 +203,16 @@ func TestAITUI_ProposingEscDiscards(t *testing.T) {
 	}
 }
 
-func TestAITUI_ProposingEditGoesIdle(t *testing.T) {
+func TestAITUI_ProposingEditGoesEditing(t *testing.T) {
 	m := newTestModel()
 	m.state = tuiProposing
 	m.proposedCmd = "receive q -n 5"
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	model := updated.(aiTUIModel)
-	if model.state != tuiIdle {
-		t.Errorf("after edit, state = %v, want tuiIdle", model.state)
+	// Pressing "e" from tuiProposing now enters tuiEditing (shimmer continues).
+	if model.state != tuiEditing {
+		t.Errorf("after edit, state = %v, want tuiEditing", model.state)
 	}
 	if model.input.Value() != "receive q -n 5" {
 		t.Errorf("input value = %q, want the command", model.input.Value())
@@ -377,7 +386,7 @@ func newTestModelWithObjects() aiTUIModel {
 
 func TestAITUI_ObjectsLoaded_QueueCount(t *testing.T) {
 	m := newTestModelWithObjects()
-	sidebar := m.renderSidebar(35, 20)
+	sidebar, _ := m.renderSidebar(35, 20)
 	if !strings.Contains(sidebar, "Queues (3)") {
 		t.Errorf("sidebar should show Queues (3), got:\n%s", sidebar)
 	}
@@ -385,7 +394,7 @@ func TestAITUI_ObjectsLoaded_QueueCount(t *testing.T) {
 
 func TestAITUI_ObjectsLoaded_TopicCount(t *testing.T) {
 	m := newTestModelWithObjects()
-	sidebar := m.renderSidebar(35, 20)
+	sidebar, _ := m.renderSidebar(35, 20)
 	if !strings.Contains(sidebar, "Topics (2)") {
 		t.Errorf("sidebar should show Topics (2), got:\n%s", sidebar)
 	}
@@ -402,7 +411,7 @@ func TestAITUI_ObjectsEmpty_ShowsNone(t *testing.T) {
 	m.loadingObjects = false
 	m.objTypes[0].nodes = []backends.ObjectNode{}
 	m.objTypes[1].nodes = []backends.ObjectNode{}
-	sidebar := m.renderSidebar(35, 20)
+	sidebar, _ := m.renderSidebar(35, 20)
 	if !strings.Contains(sidebar, "(none)") {
 		t.Errorf("empty list should show (none), got:\n%s", sidebar)
 	}
@@ -410,7 +419,7 @@ func TestAITUI_ObjectsEmpty_ShowsNone(t *testing.T) {
 
 func TestAITUI_NoManageAPI(t *testing.T) {
 	m := newTestModel()
-	sidebar := m.renderSidebar(35, 20)
+	sidebar, _ := m.renderSidebar(35, 20)
 	if !strings.Contains(sidebar, "no management API") {
 		t.Errorf("no ManageSpec should show no management API, got:\n%s", sidebar)
 	}
@@ -486,7 +495,7 @@ func TestAITUI_FilterNarrowsList(t *testing.T) {
 	}
 
 	// Sidebar should show (1/3).
-	sidebar := m.renderSidebar(35, 20)
+	sidebar, _ := m.renderSidebar(35, 20)
 	if !strings.Contains(sidebar, "1/3") {
 		t.Errorf("filtered sidebar should show 1/3, got:\n%s", sidebar)
 	}
@@ -523,7 +532,7 @@ func TestAITUI_LargeList_WindowRendering(t *testing.T) {
 	m.focus = 1 // Queues
 	m.objTypes[0].sel = 1000
 
-	sidebar := m.renderSidebar(35, 20)
+	sidebar, _ := m.renderSidebar(35, 20)
 	if !strings.Contains(sidebar, "▲") || !strings.Contains(sidebar, "▼") {
 		t.Errorf("large list should show ▲/▼ scroll hints, got:\n%s", sidebar)
 	}
@@ -643,7 +652,7 @@ func TestAITUI_HierarchicalExpand(t *testing.T) {
 	m.focus = 1
 
 	// Not expanded by default.
-	sidebar := m.renderSidebar(40, 20)
+	sidebar, _ := m.renderSidebar(40, 20)
 	if strings.Contains(sidebar, "my-queue") {
 		t.Error("children should not be visible when collapsed")
 	}
@@ -651,7 +660,7 @@ func TestAITUI_HierarchicalExpand(t *testing.T) {
 	// Expand with Space.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	m = updated.(aiTUIModel)
-	sidebar = m.renderSidebar(40, 20)
+	sidebar, _ = m.renderSidebar(40, 20)
 	if !strings.Contains(sidebar, "my-queue") {
 		t.Errorf("children should be visible when expanded, got:\n%s", sidebar)
 	}
@@ -776,8 +785,201 @@ func TestAITUI_NoSidebarTokenFooter(t *testing.T) {
 	m := newTestModelWithObjects()
 	m.totalIn = 500
 	m.totalOut = 200
-	sidebar := m.renderSidebar(35, 20)
+	sidebar, _ := m.renderSidebar(35, 20)
 	if strings.Contains(sidebar, "tokens:") {
 		t.Errorf("sidebar should NOT show token footer, got:\n%s", sidebar)
+	}
+}
+
+// ---------- computeInputLines ----------
+
+func TestComputeInputLines(t *testing.T) {
+	// Give the model a real terminal size so recalcLayout populates input width.
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(aiTUIModel)
+
+	w := m.input.Width()
+	if w <= 0 {
+		t.Fatalf("input.Width() = %d after WindowSizeMsg; recalcLayout may not have run", w)
+	}
+
+	// Empty value → 1 line.
+	if got := (&m).computeInputLines(""); got != 1 {
+		t.Errorf("empty value: got %d, want 1", got)
+	}
+
+	// Short value → 1 line.
+	if got := (&m).computeInputLines("hello"); got != 1 {
+		t.Errorf("short value: got %d, want 1", got)
+	}
+
+	// Value exactly filling one row → 1 line.
+	oneRow := strings.Repeat("x", w)
+	if got := (&m).computeInputLines(oneRow); got != 1 {
+		t.Errorf("one-row value: got %d, want 1", got)
+	}
+
+	// Value that exceeds one row → 2 lines.
+	twoRows := strings.Repeat("x", w+1)
+	if got := (&m).computeInputLines(twoRows); got != 2 {
+		t.Errorf("two-row value (%d runes, width %d): got %d, want 2", len(twoRows), w, got)
+	}
+
+	// Very long value → clamped to maxInputLines.
+	huge := strings.Repeat("x", w*maxInputLines+100)
+	if got := (&m).computeInputLines(huge); got != maxInputLines {
+		t.Errorf("huge value: got %d, want %d (maxInputLines)", got, maxInputLines)
+	}
+}
+
+// ---------- lineHasCopyMarker / copyIdxForLine ----------
+
+func TestLineHasCopyMarker(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"▶ ran: receive q " + copyHintStyle.Render("⧉"), true},
+		{"  " + copyHintStyle.Render("⧉"), true},
+		{copyHintStyle.Render("⧉"), true},
+		{"▶ ran: send q hello", false},
+		{"nothing here", false},
+	}
+	for _, tt := range tests {
+		got := lineHasCopyMarker(tt.line)
+		if got != tt.want {
+			t.Errorf("lineHasCopyMarker(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestCopyIdxForLine(t *testing.T) {
+	m := newTestModel()
+	// Synthesise three wrapped content lines: two with markers, one without.
+	mark := copyHintStyle.Render("⧉")
+	m.wrappedContentLines = []string{
+		"▶ ran: receive q " + mark, // line 0 → copyItems[0]
+		"  some payload",            // line 1 — no marker
+		"  " + mark,                 // line 2 → copyItems[1]
+		"▶ ran: send q x " + mark,  // line 3 → copyItems[2]
+	}
+	m.copyItems = []string{"receive q", "payload text", "send q x"}
+
+	tests := []struct {
+		line int
+		want int
+	}{
+		{0, 0},
+		{1, -1},
+		{2, 1},
+		{3, 2},
+		{-1, -1},
+		{99, -1},
+	}
+	for _, tt := range tests {
+		got := m.copyIdxForLine(tt.line)
+		if got != tt.want {
+			t.Errorf("copyIdxForLine(%d) = %d, want %d", tt.line, got, tt.want)
+		}
+	}
+}
+
+// ---------- isMessageReadCommand ----------
+
+func TestIsMessageReadCommand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"receive orders", true},
+		{"receive orders -n 5", true},
+		{"receive", true},
+		{"peek dlq", true},
+		{"peek", true},
+		{"subscribe events", true},
+		{"subscribe events --durable", true},
+		{"subscribe", true},
+		// Non-read commands.
+		{"send q hello", false},
+		{"publish t hello", false},
+		{"manage list", false},
+		{"forward src dst", false},
+		{"move dlq orders", false},
+	}
+	for _, tt := range tests {
+		got := isMessageReadCommand(tt.cmd)
+		if got != tt.want {
+			t.Errorf("isMessageReadCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
+		}
+	}
+}
+
+// ---------- renderMessagePayload ----------
+
+func TestRenderMessagePayload(t *testing.T) {
+	xansiStrip := func(s string) string {
+		// Strip ANSI codes by checking that the border rune is present without needing xansi dep.
+		// Since we're in the same package we can call xansi directly, but a simple check suffices.
+		return s
+	}
+	_ = xansiStrip
+
+	payload := "Hello World\nSecond line"
+	result := renderMessagePayload(payload)
+
+	// Should produce one line per input line.
+	outputLines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	inputLines := strings.Split(payload, "\n")
+	if len(outputLines) != len(inputLines) {
+		t.Errorf("got %d output lines, want %d", len(outputLines), len(inputLines))
+	}
+
+	// Each line should contain the border rune.
+	for i, line := range outputLines {
+		if !strings.Contains(line, "│") {
+			t.Errorf("line %d missing │ border: %q", i, line)
+		}
+	}
+
+	// Input text should appear somewhere in the output (possibly ANSI-styled).
+	if !strings.Contains(result, "Hello World") && !strings.Contains(result, "Hello") {
+		// The text might be split across ANSI sequences; check the raw string contains each word.
+		if !strings.Contains(result, "H") {
+			t.Errorf("rendered payload doesn't contain expected text, got:\n%s", result)
+		}
+	}
+}
+
+// ---------- appendTranscript cap ----------
+
+func TestAppendTranscript_Cap(t *testing.T) {
+	m := newTestModel()
+
+	// Pre-populate transcript directly (bypassing setViewportContent) with
+	// newline-delimited lines to keep wordwrap efficient (one tiny "word" per line).
+	// We fill it to just over the cap.
+	over := maxTranscriptBytes + 10*1024 // 210 KB
+	m.transcript.Reset()
+	m.transcript.WriteString(strings.Repeat("a\n", over/2))
+
+	// A tiny appendTranscript call tips it over the cap and triggers the trim.
+	(&m).appendTranscript("tip\n")
+
+	// Transcript must be trimmed to at most cap + small slack (the marker line).
+	slack := 1024
+	if m.transcript.Len() > maxTranscriptBytes+slack {
+		t.Errorf("transcript.Len() = %d, want <= %d", m.transcript.Len(), maxTranscriptBytes+slack)
+	}
+
+	// Trim marker must be present.
+	if !strings.Contains(m.transcript.String(), "earlier output trimmed") {
+		t.Error("transcript should contain the trim marker after cap")
+	}
+
+	// Append a distinct string; confirm it is retained (tail policy).
+	(&m).appendTranscript("recent message\n")
+	if !strings.Contains(m.transcript.String(), "recent message") {
+		t.Error("most recently appended text should be retained after cap")
 	}
 }

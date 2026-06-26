@@ -5,7 +5,7 @@
 [![GoDoc](https://godoc.org/github.com/makibytes/xmc?status.svg)](https://godoc.org/github.com/makibytes/xmc)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makibytes/xmc/blob/main/LICENSE)
 
-Tired of the nitty-gritty differences between message brokers? This project provides a unified command-line interface (CLI) for 11 popular message and streaming brokers. There's a specific binary for each broker, but they all share the same command-line interface. Learn it once, use it with any broker!
+Tired of the nitty-gritty differences between message brokers? This project provides a unified command-line interface (CLI) for 11 popular message and streaming brokers. There's a specific binary for each broker, but they all share the same command-line interface. Learn it once, use it with any broker! And thanks to [AI](#ai-shell) you just can talk to XMC in natural language now.
 
 ## Supported Brokers and Protocols
 
@@ -547,6 +547,9 @@ export OPENCODE_API_KEY="your-key-here"
 xmc auto-detects API keys in the order listed above.
 
 ### Using AI Shell
+
+> Disclaimer: AI Shell is experimental and has not been thoroughly tested with
+> all brokers and AI providers, yet. RabbitMQ should work quite well, already.
 
 Start the AI Shell:
 

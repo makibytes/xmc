@@ -8,6 +8,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	gcppkg "github.com/makibytes/xmc/broker/gcppubsub"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -68,6 +69,19 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 			},
+		},
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-google",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Project,
+				NewQueue: func() (backends.QueueBackend, error) {
+					return gcppkg.NewQueueAdapter(connArgs)
+				},
+				NewTopic: func() (backends.TopicBackend, error) {
+					return gcppkg.NewTopicAdapter(connArgs)
+				},
+			}),
 		},
 	})
 }

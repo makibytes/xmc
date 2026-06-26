@@ -4,11 +4,14 @@ package rabbitmq
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -394,3 +397,89 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 		ConsumerCount: raw.Consumers,
 	}, nil
 }
+
+// ---------- Non-destructive peek via Management API ----------
+
+// mgmtMessage mirrors the JSON shape of one entry returned by
+// POST /api/queues/%2F/{queue}/get.
+type mgmtMessage struct {
+	Payload         string `json:"payload"`
+	PayloadEncoding string `json:"payload_encoding"`
+	Properties      struct {
+		MessageID     string                 `json:"message_id"`
+		CorrelationID string                 `json:"correlation_id"`
+		ReplyTo       string                 `json:"reply_to"`
+		ContentType   string                 `json:"content_type"`
+		Priority      uint8                  `json:"priority"`
+		Headers       map[string]interface{} `json:"headers"`
+	} `json:"properties"`
+}
+
+// peekQueueMessages fetches up to count messages from the named queue using the
+// RabbitMQ Management API with ackmode=ack_requeue_true (non-destructive peek).
+// The queue address may use the AMQP 1.0 v2 prefix "/queues/<name>".
+func peekQueueMessages(args ManagementArgs, queueAddr string, count int) ([]backends.Message, error) {
+	name := strings.TrimPrefix(queueAddr, "/queues/")
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return nil, err
+	}
+	reqBody := []byte(fmt.Sprintf(
+		`{"count":%d,"ackmode":"ack_requeue_true","encoding":"auto","truncate":50000}`, count,
+	))
+	respBody, err := managementPost(base,
+		fmt.Sprintf("/queues/%%2F/%s/get", url.PathEscape(name)),
+		args.User, args.Password, reqBody,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var raw []mgmtMessage
+	if err := json.Unmarshal(respBody, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse messages: %w", err)
+	}
+	msgs := make([]backends.Message, 0, len(raw))
+	for _, m := range raw {
+		data := []byte(m.Payload)
+		if m.PayloadEncoding == "base64" {
+			if dec, err2 := base64.StdEncoding.DecodeString(m.Payload); err2 == nil {
+				data = dec
+			}
+		}
+		props := make(map[string]any, len(m.Properties.Headers))
+		for k, v := range m.Properties.Headers {
+			props[k] = v
+		}
+		msgs = append(msgs, backends.Message{
+			Data:          data,
+			MessageID:     m.Properties.MessageID,
+			CorrelationID: m.Properties.CorrelationID,
+			ReplyTo:       m.Properties.ReplyTo,
+			ContentType:   m.Properties.ContentType,
+			Priority:      int(m.Properties.Priority),
+			Properties:    props,
+		})
+	}
+	return msgs, nil
+}
+
+// mgmtBrowser iterates over a pre-fetched slice of messages in memory.
+// It implements backends.Browser so it can be returned from QueueAdapter.Browse.
+type mgmtBrowser struct {
+	messages []backends.Message
+	idx      int
+}
+
+func (b *mgmtBrowser) Next(ctx context.Context) (*backends.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if b.idx >= len(b.messages) {
+		return nil, backends.ErrNoMessageAvailable
+	}
+	msg := b.messages[b.idx]
+	b.idx++
+	return &msg, nil
+}
+
+func (b *mgmtBrowser) Close() error { return nil }
