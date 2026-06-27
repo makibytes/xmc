@@ -22,17 +22,17 @@ require (
 	github.com/ibm-messaging/mq-golang/v5 v5.7.2
 	github.com/muesli/reflow v0.3.0
 	github.com/nats-io/nats.go v1.52.0
-	github.com/redis/go-redis/v9 v9.20.1
+	github.com/redis/go-redis/v9 v9.21.0
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/testcontainers/testcontainers-go v0.42.0
-	github.com/testcontainers/testcontainers-go/modules/nats v0.42.0
-	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.42.0
+	github.com/testcontainers/testcontainers-go v0.43.0
+	github.com/testcontainers/testcontainers-go/modules/nats v0.43.0
+	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/redpanda v0.42.0
 	golang.org/x/sync v0.21.0
 	golang.org/x/term v0.44.0
-	google.golang.org/api v0.285.0
+	google.golang.org/api v0.286.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -117,7 +117,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
-	github.com/moby/moby/api v1.54.1 // indirect
+	github.com/moby/moby/api v1.54.2 // indirect
 	github.com/moby/moby/client v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
@@ -145,7 +145,7 @@ require (
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/shirou/gopsutil/v4 v4.26.3 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.5 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
