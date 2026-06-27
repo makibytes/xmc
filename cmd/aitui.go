@@ -189,6 +189,11 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("15"))
 
+	// sidebarErrStyle renders fetch errors inside a sidebar window (red, non-bold
+	// to distinguish from the header, no background so it blends with the pane).
+	sidebarErrStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("9")) // bright red
+
 	// promptRuleStyle draws the horizontal rules that bracket the input area
 	// (same teal as the title-bar background).
 	promptRuleStyle = lipgloss.NewStyle().
@@ -1006,6 +1011,21 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 
 	if m.loadingObjects && w.nodes == nil {
 		b.WriteString(dimStyle.Render("  loading…") + "\n")
+		return lines + 1
+	}
+
+	if w.err != nil {
+		// Surface List() errors visibly rather than showing a silent "(none)".
+		// Common for cloud brokers on auth/permission failures.
+		msg := "⚠ " + w.err.Error()
+		maxLen := width - 3
+		if maxLen < 5 {
+			maxLen = 5
+		}
+		if len([]rune(msg)) > maxLen {
+			msg = string([]rune(msg)[:maxLen-1]) + "…"
+		}
+		b.WriteString(sidebarErrStyle.Render(msg) + "\n")
 		return lines + 1
 	}
 

@@ -6,7 +6,7 @@ import (
 	"github.com/makibytes/xmc/broker"
 )
 
-//go:embed docs/*.md
+//go:embed docs/[a-z]*.md
 var aiDocsFS embed.FS
 
 func init() {

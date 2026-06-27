@@ -79,6 +79,126 @@ func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
 	return topics, nil
 }
 
+// ListTopicsWithSubscriptions returns SNS topics as ObjectNodes with their
+// subscriptions as children (for the AI TUI hierarchical sidebar window).
+func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, error) {
+	_, snsc, err := Connect(context.Background(), args)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	out, err := snsc.ListTopics(ctx, &sns.ListTopicsInput{})
+	if err != nil {
+		return nil, fmt.Errorf("listing topics: %w", err)
+	}
+
+	var nodes []backends.ObjectNode
+	for _, t := range out.Topics {
+		if t.TopicArn == nil {
+			continue
+		}
+		parts := strings.Split(*t.TopicArn, ":")
+		name := parts[len(parts)-1]
+		node := backends.ObjectNode{Name: name}
+
+		subOut, subErr := snsc.ListSubscriptionsByTopic(ctx, &sns.ListSubscriptionsByTopicInput{
+			TopicArn: t.TopicArn,
+		})
+		if subErr == nil {
+			for _, s := range subOut.Subscriptions {
+				ep := derefStr(s.Endpoint)
+				proto := derefStr(s.Protocol)
+				// For SQS endpoints show only the queue name (last URL segment).
+				if proto == "sqs" {
+					segs := strings.Split(ep, "/")
+					ep = segs[len(segs)-1]
+				}
+				node.Children = append(node.Children, backends.ObjectNode{
+					Name: ep,
+					Kind: proto,
+				})
+			}
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
+}
+
+// lookupTopicARN resolves a topic name to its SNS ARN by listing all topics.
+func lookupTopicARN(ctx context.Context, snsc *sns.Client, name string) (string, error) {
+	out, err := snsc.ListTopics(ctx, &sns.ListTopicsInput{})
+	if err != nil {
+		return "", fmt.Errorf("listing topics: %w", err)
+	}
+	for _, t := range out.Topics {
+		if t.TopicArn == nil {
+			continue
+		}
+		parts := strings.Split(*t.TopicArn, ":")
+		if parts[len(parts)-1] == name {
+			return *t.TopicArn, nil
+		}
+	}
+	return "", fmt.Errorf("topic %s not found", name)
+}
+
+// CreateQueue creates an SQS queue (FIFO when name ends in ".fifo").
+func CreateQueue(args ConnArguments, name string) error {
+	sqsc, _, err := Connect(context.Background(), args)
+	if err != nil {
+		return err
+	}
+	_, err = ensureQueue(context.Background(), sqsc, name)
+	return err
+}
+
+// DeleteQueue deletes an SQS queue by name.
+func DeleteQueue(args ConnArguments, name string) error {
+	sqsc, _, err := Connect(context.Background(), args)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	urlOut, err := sqsc.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{QueueName: &name})
+	if err != nil {
+		return fmt.Errorf("getting queue URL for %s: %w", name, err)
+	}
+	_, err = sqsc.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: urlOut.QueueUrl})
+	if err != nil {
+		return fmt.Errorf("deleting queue %s: %w", name, err)
+	}
+	return nil
+}
+
+// CreateTopic creates an SNS topic.
+func CreateTopic(args ConnArguments, name string) error {
+	_, snsc, err := Connect(context.Background(), args)
+	if err != nil {
+		return err
+	}
+	_, err = ensureTopic(context.Background(), snsc, name)
+	return err
+}
+
+// DeleteTopic deletes an SNS topic by name (resolved to ARN via list).
+func DeleteTopic(args ConnArguments, name string) error {
+	_, snsc, err := Connect(context.Background(), args)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	arn, err := lookupTopicARN(ctx, snsc, name)
+	if err != nil {
+		return err
+	}
+	_, err = snsc.DeleteTopic(ctx, &sns.DeleteTopicInput{TopicArn: &arn})
+	if err != nil {
+		return fmt.Errorf("deleting topic %s: %w", name, err)
+	}
+	return nil
+}
+
 func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 	sqsc, _, err := Connect(context.Background(), args)
 	if err != nil {

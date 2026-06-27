@@ -549,7 +549,8 @@ xmc auto-detects API keys in the order listed above.
 ### Using AI Shell
 
 > Disclaimer: AI Shell is experimental and has not been thoroughly tested with
-> all brokers and AI providers, yet. RabbitMQ should work quite well, already.
+> all brokers and AI providers, yet. The best results are probably reached when
+> using Artemis or RabbitMQ with OpenCode AI (Zen).
 
 Start the AI Shell:
 

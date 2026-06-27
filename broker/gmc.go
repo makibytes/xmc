@@ -41,34 +41,32 @@ func GetRootCommand() *cobra.Command {
 		ManageSpec: &cmd.ManageSpec{
 			Objects: []cmd.ObjectType{
 				{
-					Label: "Topics",
+					Label: "Queues",
 					List: func() ([]backends.ObjectNode, error) {
-						topics, err := gcppkg.ListTopics(connArgs)
+						queues, err := gcppkg.ListQueues(connArgs)
 						if err != nil {
 							return nil, err
 						}
-						out := make([]backends.ObjectNode, len(topics))
-						for i, t := range topics {
-							out[i] = backends.ObjectNode{Name: t.Name}
+						out := make([]backends.ObjectNode, len(queues))
+						for i, q := range queues {
+							out[i] = backends.ObjectNode{Name: q.Name}
 						}
 						return out, nil
 					},
 				},
 				{
-					Label: "Subscriptions",
+					Label:        "Topics",
+					Hierarchical: true,
 					List: func() ([]backends.ObjectNode, error) {
-						subs, err := gcppkg.ListSubscriptions(connArgs)
-						if err != nil {
-							return nil, err
-						}
-						out := make([]backends.ObjectNode, len(subs))
-						for i, s := range subs {
-							out[i] = backends.ObjectNode{Name: s.Name}
-						}
-						return out, nil
+						return gcppkg.ListTopicsWithSubscriptions(connArgs)
 					},
 				},
 			},
+			Purge:       func(queue string) (int64, error) { return gcppkg.PurgeQueue(connArgs, queue) },
+			CreateQueue: &cmd.ManageAction{Run: func(q string) error { return gcppkg.CreateQueue(connArgs, q) }},
+			DeleteQueue: &cmd.ManageAction{Run: func(q string) error { return gcppkg.DeleteQueue(connArgs, q) }},
+			CreateTopic: &cmd.ManageAction{Run: func(t string) error { return gcppkg.CreateTopic(connArgs, t) }},
+			DeleteTopic: &cmd.ManageAction{Run: func(t string) error { return gcppkg.DeleteTopic(connArgs, t) }},
 		},
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{

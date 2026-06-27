@@ -65,8 +65,12 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 			},
-			Purge: func(queue string) (int64, error) { return azpkg.PurgeQueue(connArgs, queue) },
-			Stats: func(queue string) (*backends.QueueStats, error) { return azpkg.GetQueueStats(connArgs, queue) },
+			Purge:       func(queue string) (int64, error) { return azpkg.PurgeQueue(connArgs, queue) },
+			Stats:       func(queue string) (*backends.QueueStats, error) { return azpkg.GetQueueStats(connArgs, queue) },
+			CreateQueue: &cmd.ManageAction{Run: func(q string) error { return azpkg.CreateQueue(connArgs, q) }},
+			DeleteQueue: &cmd.ManageAction{Run: func(q string) error { return azpkg.DeleteQueue(connArgs, q) }},
+			CreateTopic: &cmd.ManageAction{Run: func(t string) error { return azpkg.CreateTopic(connArgs, t) }},
+			DeleteTopic: &cmd.ManageAction{Run: func(t string) error { return azpkg.DeleteTopic(connArgs, t) }},
 		},
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{

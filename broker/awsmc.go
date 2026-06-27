@@ -83,22 +83,19 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 				{
-					Label: "Topics",
+					Label:        "Topics",
+					Hierarchical: true,
 					List: func() ([]backends.ObjectNode, error) {
-						topics, err := awspkg.ListTopics(connArgs)
-						if err != nil {
-							return nil, err
-						}
-						out := make([]backends.ObjectNode, len(topics))
-						for i, t := range topics {
-							out[i] = backends.ObjectNode{Name: t.Name}
-						}
-						return out, nil
+						return awspkg.ListTopicsWithSubscriptions(connArgs)
 					},
 				},
 			},
-			Purge: func(queue string) (int64, error) { return awspkg.PurgeQueue(connArgs, queue) },
-			Stats: func(queue string) (*backends.QueueStats, error) { return awspkg.GetQueueStats(connArgs, queue) },
+			Purge:       func(queue string) (int64, error) { return awspkg.PurgeQueue(connArgs, queue) },
+			Stats:       func(queue string) (*backends.QueueStats, error) { return awspkg.GetQueueStats(connArgs, queue) },
+			CreateQueue: &cmd.ManageAction{Run: func(q string) error { return awspkg.CreateQueue(connArgs, q) }},
+			DeleteQueue: &cmd.ManageAction{Run: func(q string) error { return awspkg.DeleteQueue(connArgs, q) }},
+			CreateTopic: &cmd.ManageAction{Run: func(t string) error { return awspkg.CreateTopic(connArgs, t) }},
+			DeleteTopic: &cmd.ManageAction{Run: func(t string) error { return awspkg.DeleteTopic(connArgs, t) }},
 		},
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{

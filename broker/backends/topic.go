@@ -42,12 +42,6 @@ type TopicBackend interface {
 	Close() error
 }
 
-// ManageableTopicBackend is an optional interface for brokers that support topic management
-type ManageableTopicBackend interface {
-	// ListTopics lists all topics on the broker
-	ListTopics(ctx context.Context) ([]TopicInfo, error)
-}
-
 // TopicInfo contains basic information about a topic
 type TopicInfo struct {
 	Name           string

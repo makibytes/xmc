@@ -1,41 +1,40 @@
 # Google Cloud Pub/Sub (`gmc`)
 
-Project: `--project` / `-s` or env `GMC_PROJECT`. Auth: Application Default Credentials (`gcloud auth application-default login`) or `--credentials <service-account.json>` (env `GMC_CREDENTIALS`). Emulator: `--endpoint` or env `GMC_SERVER`.
+Project: `--project` / `-s` / `GMC_PROJECT`. Auth: Application Default Credentials (`gcloud auth application-default login`) or `--credentials <svc-account.json>` / `GMC_CREDENTIALS`. Emulator: `--endpoint` / `GMC_SERVER`.
 
 ## Addressing
 
-Topic and queue names are bare strings — used as Pub/Sub topic names directly. Topics and subscriptions are auto-created on first use.
+Bare names — topics and subscriptions auto-created on first use.
 
-- **Queue**: `send`/`receive` use a topic + auto-created subscription `xmc-queue-<name>` for competing consumers.
+- **Queue**: `send`/`receive` use a topic + fixed subscription `xmc-queue-<name>` for competing consumers.
 - **Topic**: `publish`/`subscribe` use the topic directly; subscription derived from `-g`/`-D`.
 
 ```
 send myqueue "msg"
 receive myqueue
 publish events "msg"
-subscribe events -g analytics -n 0     # named subscription "analytics"
-subscribe events -g alerting -n 0      # independent subscription "alerting"
+subscribe events -g analytics -n 0
+subscribe events --subscription existing-sub -n 0   # target pre-existing subscription
 ```
 
 ## Consumer groups
 
-- `-g <group>`: named subscription (competing consumers within group; different groups = fan-out)
-- `-D`: durable subscription (`xmc-durable-<topic>`)
-- No `-g`, no `-D`: ephemeral subscription (auto-deleted on close)
+`-g <group>`: named subscription; same group = competing, different groups = fan-out.
+`-D`: durable (`xmc-durable-<topic>`). No `-g`, no `-D`: ephemeral (deleted on close).
+`--subscription <name>`: override to target a specific pre-existing subscription (overrides `-g`).
 
-## Manage commands
+## Manage
 
-`list` only. Use `gcloud pubsub` or the GCP Console for topic/subscription lifecycle management.
-
-## Supported features
-
-- Application properties (`-P`, carried as Pub/Sub attributes)
-- Correlation-id, reply-to, content-type, message-id
-- Request/reply, move, forward
-- Durable subscriptions
+`list` (topics show subscriptions as children; press `x` in AI shell to expand; Queues window shows `xmc-queue-*` subscriptions by logical name),
+`purge <queue>` (seeks the `xmc-queue-<name>` subscription to now — drops backlog),
+`create-queue <name>` (creates topic + `xmc-queue-<name>` subscription),
+`delete-queue <name>` (deletes subscription and backing topic),
+`create-topic <name>`,
+`delete-topic <name>`.
 
 ## Constraints
 
-- No per-message TTL (retention is subscription-level, set in GCP Console)
-- No selectors, no priority
-- No manage create/delete/purge/stats — use `gcloud`
+- No per-message TTL (retention is subscription-level, set in GCP Console).
+- No selectors, no priority.
+- `manage stats` is not available (backlog count requires the Cloud Monitoring API — use GCP Console).
+- Queue emulation: each queue is a Pub/Sub topic with a single shared pull subscription.

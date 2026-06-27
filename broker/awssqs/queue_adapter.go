@@ -5,6 +5,7 @@ package awssqs
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
@@ -28,6 +29,11 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 }
 
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
+	// --fifo flag: ensure the queue name carries the required .fifo suffix.
+	if opts.Extra["fifo"] == "true" && !strings.HasSuffix(opts.Queue, ".fifo") {
+		opts.Queue += ".fifo"
+	}
+
 	url, err := a.getQueueURL(ctx, opts.Queue)
 	if err != nil {
 		return err
@@ -45,6 +51,10 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 
 	if gid := opts.Extra["message-group-id"]; gid != "" {
 		input.MessageGroupId = &gid
+	} else if strings.HasSuffix(opts.Queue, ".fifo") {
+		// FIFO queues require MessageGroupId; default to "xmc" when not set.
+		defaultGID := "xmc"
+		input.MessageGroupId = &defaultGID
 	}
 	if did := opts.Extra["dedup-id"]; did != "" {
 		input.MessageDeduplicationId = &did

@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
-	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
 
 	"github.com/makibytes/xmc/broker/backends"
 )
@@ -168,5 +167,54 @@ func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 	return purged, nil
 }
 
-// ensure admin import is used
-var _ *admin.Client
+// CreateQueue creates an Azure Service Bus queue.
+func CreateQueue(args ConnArguments, name string) error {
+	adm, err := AdminClient(args)
+	if err != nil {
+		return err
+	}
+	_, err = adm.CreateQueue(context.Background(), name, nil)
+	if err != nil {
+		return fmt.Errorf("creating queue %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteQueue deletes an Azure Service Bus queue.
+func DeleteQueue(args ConnArguments, name string) error {
+	adm, err := AdminClient(args)
+	if err != nil {
+		return err
+	}
+	_, err = adm.DeleteQueue(context.Background(), name, nil)
+	if err != nil {
+		return fmt.Errorf("deleting queue %s: %w", name, err)
+	}
+	return nil
+}
+
+// CreateTopic creates an Azure Service Bus topic.
+func CreateTopic(args ConnArguments, name string) error {
+	adm, err := AdminClient(args)
+	if err != nil {
+		return err
+	}
+	_, err = adm.CreateTopic(context.Background(), name, nil)
+	if err != nil {
+		return fmt.Errorf("creating topic %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteTopic deletes an Azure Service Bus topic and all its subscriptions.
+func DeleteTopic(args ConnArguments, name string) error {
+	adm, err := AdminClient(args)
+	if err != nil {
+		return err
+	}
+	_, err = adm.DeleteTopic(context.Background(), name, nil)
+	if err != nil {
+		return fmt.Errorf("deleting topic %s: %w", name, err)
+	}
+	return nil
+}

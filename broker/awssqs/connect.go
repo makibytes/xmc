@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
@@ -48,9 +49,15 @@ func Connect(ctx context.Context, args ConnArguments) (*sqs.Client, *sns.Client,
 }
 
 func ensureQueue(ctx context.Context, sqsc *sqs.Client, name string) (string, error) {
-	out, err := sqsc.CreateQueue(ctx, &sqs.CreateQueueInput{
-		QueueName: &name,
-	})
+	input := &sqs.CreateQueueInput{QueueName: &name}
+	if strings.HasSuffix(name, ".fifo") {
+		// FIFO queues require these attributes to be set on creation.
+		input.Attributes = map[string]string{
+			string(sqstypes.QueueAttributeNameFifoQueue):                   "true",
+			string(sqstypes.QueueAttributeNameContentBasedDeduplication):  "true",
+		}
+	}
+	out, err := sqsc.CreateQueue(ctx, input)
 	if err != nil {
 		return "", fmt.Errorf("creating/getting queue %s: %w", name, err)
 	}

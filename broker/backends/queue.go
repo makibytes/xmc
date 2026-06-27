@@ -77,18 +77,6 @@ type QueueBackend interface {
 	Close() error
 }
 
-// ManageableBackend is an optional interface for brokers that support management operations
-type ManageableBackend interface {
-	// ListQueues lists all queues on the broker
-	ListQueues(ctx context.Context) ([]QueueInfo, error)
-
-	// PurgeQueue removes all messages from a queue
-	PurgeQueue(ctx context.Context, queue string) (int64, error)
-
-	// GetQueueStats returns statistics for a queue
-	GetQueueStats(ctx context.Context, queue string) (*QueueStats, error)
-}
-
 // QueueInfo contains basic information about a queue
 type QueueInfo struct {
 	Name          string
