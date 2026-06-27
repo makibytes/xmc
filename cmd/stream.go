@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"sync/atomic"
 	"time"
 )
@@ -80,10 +80,11 @@ func (s *streamStats) summary() string {
 		count, elapsed.Round(time.Millisecond), rate, humanBytes(s.bytes.Load()))
 }
 
-// startStatsReporter periodically prints throughput to stderr until the returned
-// stop function is called. Reporting goes to stderr so stdout stays a clean
-// message stream (e.g. for piping NDJSON).
-func startStatsReporter(s *streamStats, interval time.Duration) (stop func()) {
+// startStatsReporter periodically prints throughput to w until the returned
+// stop function is called. Callers pass cmd.ErrOrStderr() (or equivalent) so
+// that the output is captured when running as a background process in the TUI
+// rather than leaking to the raw terminal.
+func startStatsReporter(s *streamStats, interval time.Duration, w io.Writer) (stop func()) {
 	stopCh := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -101,7 +102,7 @@ func startStatsReporter(s *streamStats, interval time.Duration) (stop func()) {
 				if secs > 0 {
 					rate = float64(count-lastCount) / secs
 				}
-				fmt.Fprintf(os.Stderr, "[stats] %d msgs, %.0f msg/s, %s total\n",
+				fmt.Fprintf(w, "[stats] %d msgs, %.0f msg/s, %s total\n",
 					count, rate, humanBytes(s.bytes.Load()))
 				lastCount = count
 				lastTime = now

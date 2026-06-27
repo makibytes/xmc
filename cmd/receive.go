@@ -34,6 +34,7 @@ func NewReceiveCommand(backend backends.QueueBackend, resolver TargetResolver, c
 	cmd.Flags().Bool("ndjson", false, "Output one lossless JSON record per line (overrides --format/--json)")
 	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
 	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
+	cmd.Flags().Bool("forever", false, "Stream until interrupted / until xmc quits (no time bound)")
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
 	cmd.Flags().IntP("omit", "o", 0, "Skip (offset past) the first N messages before reading")
 
@@ -61,6 +62,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 	format, _ := cmd.Flags().GetString("format")
 	ndjson, _ := cmd.Flags().GetBool("ndjson")
 	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
 	stats, _ := cmd.Flags().GetBool("stats")
 	omit, _ := cmd.Flags().GetInt("omit")
 
@@ -68,7 +70,12 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 	if err != nil {
 		return err
 	}
-	follow := duration > 0 || stats
+	follow := duration > 0 || forever || stats
+	// When streaming by time or --forever, treat as "drain all" unless the user
+	// explicitly set -n / --count.
+	if (duration > 0 || forever) && !cmd.Flags().Changed("count") {
+		count = 0
+	}
 
 	queue, err := resolveConsumeTarget(cmd, args, resolver, false)
 	if err != nil {

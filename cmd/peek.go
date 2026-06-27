@@ -27,6 +27,7 @@ func NewPeekCommand(backend backends.QueueBackend) *cobra.Command {
 	cmd.Flags().Bool("ndjson", false, "Output one lossless JSON record per line (overrides --format/--json)")
 	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
 	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
+	cmd.Flags().Bool("forever", false, "Stream until interrupted / until xmc quits (no time bound)")
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
 	cmd.Flags().IntP("omit", "o", 0, "Skip (offset past) the first N messages before reading")
 

@@ -426,26 +426,27 @@ func TestAITUI_NoManageAPI(t *testing.T) {
 }
 
 func TestAITUI_ShiftTabCyclesFocus(t *testing.T) {
+	// Shift+Tab now cycles backward: chat → last window → … → first window → chat.
 	m := newTestModelWithObjects()
 	if m.focus != focusChat {
 		t.Fatalf("initial focus should be focusChat, got %v", m.focus)
 	}
 
-	// Shift+Tab → window 0 (Queues)
+	// Shift+Tab backward from chat → last window (Topics, index 2).
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = updated.(aiTUIModel)
-	if m.focus != 1 {
-		t.Errorf("after 1st Shift+Tab, focus = %v, want 1 (Queues)", m.focus)
+	if m.focus != 2 {
+		t.Errorf("after 1st Shift+Tab, focus = %v, want 2 (Topics)", m.focus)
 	}
 
-	// Shift+Tab → window 1 (Topics)
+	// Shift+Tab → previous window (Queues, index 1).
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = updated.(aiTUIModel)
-	if m.focus != 2 {
-		t.Errorf("after 2nd Shift+Tab, focus = %v, want 2 (Topics)", m.focus)
+	if m.focus != 1 {
+		t.Errorf("after 2nd Shift+Tab, focus = %v, want 1 (Queues)", m.focus)
 	}
 
-	// Shift+Tab → back to focusChat
+	// Shift+Tab → back to focusChat.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = updated.(aiTUIModel)
 	if m.focus != focusChat {
@@ -651,18 +652,26 @@ func TestAITUI_HierarchicalExpand(t *testing.T) {
 	}
 	m.focus = 1
 
-	// Not expanded by default.
+	// Children not visible by default (treeView=false).
 	sidebar, _ := m.renderSidebar(40, 20)
 	if strings.Contains(sidebar, "my-queue") {
-		t.Error("children should not be visible when collapsed")
+		t.Error("children should not be visible when treeView is off")
 	}
 
-	// Expand with Space.
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	// Press 'x' to toggle tree-view → children should appear.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	m = updated.(aiTUIModel)
 	sidebar, _ = m.renderSidebar(40, 20)
 	if !strings.Contains(sidebar, "my-queue") {
-		t.Errorf("children should be visible when expanded, got:\n%s", sidebar)
+		t.Errorf("children should be visible when treeView is on, got:\n%s", sidebar)
+	}
+
+	// Space collapses the window → children hidden again.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	m = updated.(aiTUIModel)
+	sidebar, _ = m.renderSidebar(40, 20)
+	if strings.Contains(sidebar, "my-queue") {
+		t.Error("children should not be visible when window is collapsed")
 	}
 }
 

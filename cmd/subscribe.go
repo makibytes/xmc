@@ -32,6 +32,7 @@ func NewSubscribeCommand(backend backends.TopicBackend, resolver TargetResolver,
 	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
 	cmd.Flags().BoolP("durable", "D", false, "Create a durable subscription that survives disconnection")
 	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
+	cmd.Flags().Bool("forever", false, "Stream until interrupted / until xmc quits (no time bound)")
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
 
 	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
@@ -60,13 +61,17 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	format, _ := cmd.Flags().GetString("format")
 	ndjson, _ := cmd.Flags().GetBool("ndjson")
 	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
 	stats, _ := cmd.Flags().GetBool("stats")
 
 	duration, err := parseDurationFlag(forStr)
 	if err != nil {
 		return err
 	}
-	follow := duration > 0 || stats
+	follow := duration > 0 || forever || stats
+	if (duration > 0 || forever) && !cmd.Flags().Changed("count") {
+		count = 0
+	}
 
 	topic, err := resolveConsumeTarget(cmd, args, resolver, true)
 	if err != nil {

@@ -139,10 +139,11 @@ func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Durati
 	if stats {
 		st := newStreamStats()
 		cfg.stats = st
-		stop := startStatsReporter(st, time.Second)
+		metaW := cfg.metaWriter()
+		stop := startStatsReporter(st, time.Second, metaW)
 		defer func() {
 			stop()
-			fmt.Fprintln(os.Stderr, st.summary())
+			fmt.Fprintln(metaW, st.summary())
 		}()
 	}
 

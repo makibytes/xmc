@@ -216,6 +216,7 @@ var (
 
 // objWindow holds the state for one object-type window in the sidebar.
 type objWindow struct {
+	kind         objWindowKind         // window type (default 0 = broker objects, 1 = processes)
 	label        string                // header title: "Queues", "Exchanges", …
 	hierarchical bool                  // true → expand hotkey reveals Children
 	listFn       func() ([]backends.ObjectNode, error) // data source
@@ -224,7 +225,8 @@ type objWindow struct {
 	sel          int                   // selected index (in filtered+sorted view)
 	filter       string               // active case-insensitive substring filter
 	sortIdx      sortMode             // current sort mode
-	expanded     bool                  // hierarchical tree view shown
+	treeView  bool // hierarchical children shown (x to toggle)
+	collapsed bool // window collapsed to title only (Space to toggle)
 }
 
 // ---------- Model ----------
@@ -307,6 +309,18 @@ type aiTUIModel struct {
 	// Focus (0 = chat, 1..N = objTypes index + 1)
 	focus     focusTarget
 	filtering bool // filter mode active in focused pane
+
+	// Background process management (cmd/aiproc.go).
+	procs      []*bgProcess // active and finished background processes
+	procNextID int          // monotone counter for bgProcess.id
+	procWinIdx int          // index of the Processes window in objTypes (-1 if absent)
+	procSel    int          // selected row in the Processes window
+
+	// Saved prompt state while Processes pane is focused (enterProcessView / exitProcessView).
+	savedMode  inputMode
+	savedInput string
+	savedHist  int
+	inProcView bool // true while the process pane owns prompt save/restore
 
 	// Input mode: AI prompt vs direct xmc command
 	mode       inputMode
@@ -415,6 +429,7 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 		cmdHistory:      loadShellHistory(),
 		askHistory:      loadAskHistory(),
 		histIdx:         -1,
+		procWinIdx:      -1,
 	}
 }
 
@@ -513,6 +528,12 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case setCancelMsg:
 		m.execCancel = msg.cancel
 		return m, nil
+
+	case procCancelMsg:
+		return m.handleProcCancelMsg(msg)
+
+	case procDoneMsg:
+		return m.handleProcDoneMsg(msg)
 
 	case modelsMsg:
 		return m.handleModelsDone(msg)
@@ -714,56 +735,186 @@ func (m aiTUIModel) renderSidebar(width, height int) (string, []int) {
 		return b.String(), nil
 	}
 
-	// Height budget: 2 header lines per section, no footer.
-	headerLines := n * 2
-	bodyBudget := height - headerLines
-	if bodyBudget < 0 {
-		bodyBudget = 0
-	}
-
-	// Determine which window is focused (if any).
+	// Determine which window is focused (if any; -1 when chat is focused).
 	focusedIdx := -1
 	if m.focus > focusChat && int(m.focus)-1 < n {
 		focusedIdx = int(m.focus) - 1
 	}
 
-	// Allocate body lines: focused window gets the lion's share; non-focused
-	// windows collapse to at most 3 body lines each.
-	bodyAlloc := make([]int, n)
-	if focusedIdx >= 0 {
-		nonFocusedTotal := 0
-		for i := 0; i < n; i++ {
-			if i != focusedIdx {
-				alloc := 3
-				if alloc > bodyBudget {
-					alloc = bodyBudget
-				}
-				bodyAlloc[i] = alloc
-				nonFocusedTotal += alloc
-			}
+	// Natural row count per window (body rows only, ignoring header/underline/margin).
+	nat := make([]int, n)
+	for i := range m.objTypes {
+		nat[i] = m.windowNaturalRows(i)
+	}
+
+	// Per-window height cost helpers.
+	// collapsedCost: 1 (title) + 1 if there is a window below (margin).
+	collapsedCost := func(i int) int {
+		if i < n-1 {
+			return 2 // title + margin
 		}
-		bodyAlloc[focusedIdx] = bodyBudget - nonFocusedTotal
-		if bodyAlloc[focusedIdx] < 0 {
-			bodyAlloc[focusedIdx] = 0
+		return 1 // title only (last window, no margin)
+	}
+	// expandedCost: 2 (title+underline) + body + 1 if there is a window below.
+	expandedCost := func(i, body int) int {
+		if i < n-1 {
+			return 3 + body // title + underline + body + margin
+		}
+		return 2 + body // no margin for last window
+	}
+	floor := func(i int) int {
+		if nat[i] < 3 {
+			return nat[i]
+		}
+		return 3
+	}
+
+	// Planner output: per-window body allocation and whether it is collapsed.
+	bodyAlloc := make([]int, n)
+	autoCollapsed := make([]bool, n) // auto-collapsed by the planner (not user-set)
+
+	// Stage 1: check if all non-user-collapsed windows fit at natural height.
+	total := 0
+	for i := range m.objTypes {
+		if m.objTypes[i].collapsed {
+			total += collapsedCost(i)
+		} else {
+			total += expandedCost(i, nat[i])
+		}
+	}
+
+	if total <= height {
+		// Natural fit: assign each window its full content.
+		for i := range m.objTypes {
+			bodyAlloc[i] = nat[i]
 		}
 	} else {
-		// No pane focused — split evenly.
-		each := bodyBudget / n
-		remainder := bodyBudget % n
-		for i := 0; i < n; i++ {
-			bodyAlloc[i] = each
-			if i < remainder {
-				bodyAlloc[i]++
+		// Stage 2: shrink all expanded windows to floor rows.
+		floorTotal := 0
+		for i := range m.objTypes {
+			if m.objTypes[i].collapsed {
+				floorTotal += collapsedCost(i)
+			} else {
+				floorTotal += expandedCost(i, floor(i))
+			}
+		}
+
+		if floorTotal <= height {
+			// Fits at floor. Assign floors, then distribute surplus to windows
+			// starting with the focused window.
+			surplus := height - floorTotal
+			for i := range m.objTypes {
+				bodyAlloc[i] = floor(i)
+			}
+			// Give focused window extra first.
+			if focusedIdx >= 0 && !m.objTypes[focusedIdx].collapsed {
+				add := nat[focusedIdx] - floor(focusedIdx)
+				if add > surplus {
+					add = surplus
+				}
+				bodyAlloc[focusedIdx] += add
+				surplus -= add
+			}
+			// Then distribute to others in index order.
+			for i := range m.objTypes {
+				if i == focusedIdx || m.objTypes[i].collapsed || surplus <= 0 {
+					continue
+				}
+				add := nat[i] - floor(i)
+				if add > surplus {
+					add = surplus
+				}
+				bodyAlloc[i] += add
+				surplus -= add
+			}
+		} else {
+			// Stage 3: auto-collapse non-focused windows until everything fits.
+			// Start from the window farthest from the focused index.
+			order := make([]int, 0, n)
+			if focusedIdx < 0 {
+				// No focused window — collapse from the bottom up.
+				for i := n - 1; i >= 0; i-- {
+					order = append(order, i)
+				}
+			} else {
+				// Interleave outward from focused index: bottom, top, alternating.
+				lo, hi := focusedIdx-1, focusedIdx+1
+				for lo >= 0 || hi < n {
+					if hi < n {
+						order = append(order, hi)
+						hi++
+					}
+					if lo >= 0 {
+						order = append(order, lo)
+						lo--
+					}
+				}
+			}
+
+			// Initialise at floor.
+			for i := range m.objTypes {
+				bodyAlloc[i] = floor(i)
+			}
+			// Auto-collapse in collapse order until we fit.
+			for _, i := range order {
+				if i == focusedIdx || m.objTypes[i].collapsed {
+					continue
+				}
+				autoCollapsed[i] = true
+				bodyAlloc[i] = 0
+
+				// Recalculate total.
+				cur := 0
+				for j := range m.objTypes {
+					if m.objTypes[j].collapsed || autoCollapsed[j] {
+						cur += collapsedCost(j)
+					} else {
+						cur += expandedCost(j, bodyAlloc[j])
+					}
+				}
+				if cur <= height {
+					break
+				}
+			}
+
+			// Distribute remaining surplus to focused window.
+			cur := 0
+			for j := range m.objTypes {
+				if m.objTypes[j].collapsed || autoCollapsed[j] {
+					cur += collapsedCost(j)
+				} else {
+					cur += expandedCost(j, bodyAlloc[j])
+				}
+			}
+			surplus := height - cur
+			if focusedIdx >= 0 && !m.objTypes[focusedIdx].collapsed && surplus > 0 {
+				add := nat[focusedIdx] - bodyAlloc[focusedIdx]
+				if add > surplus {
+					add = surplus
+				}
+				if add > 0 {
+					bodyAlloc[focusedIdx] += add
+				}
 			}
 		}
 	}
 
-	// Render each window. Before each section, record the row index of its
-	// underline (always the second line of the section, i.e. lines+1).
+	// Render each window. Junction rows are only recorded for expanded windows
+	// (collapsed windows have no underline so need no ├ junction).
 	junctionRows := make([]int, 0, n)
 	for i := range m.objTypes {
-		junctionRows = append(junctionRows, lines+1)
-		lines += m.writeObjectSection(&b, width, bodyAlloc[i], i)
+		isCollapsed := m.objTypes[i].collapsed || autoCollapsed[i]
+		if isCollapsed {
+			junctionRows = append(junctionRows, -1) // no junction
+		} else {
+			junctionRows = append(junctionRows, lines+1) // underline is at lines+1
+		}
+		lines += m.writeObjectSection(&b, width, bodyAlloc[i], i, isCollapsed)
+		// Add blank margin row after every window except the last.
+		if i < n-1 {
+			b.WriteString("\n")
+			lines++
+		}
 	}
 
 	// Pad remaining height.
@@ -775,17 +926,58 @@ func (m aiTUIModel) renderSidebar(width, height int) (string, []int) {
 	return b.String(), junctionRows
 }
 
+// windowNaturalRows returns the number of body rows a window would show at full height
+// (not counting the 2-line title+underline header).
+func (m aiTUIModel) windowNaturalRows(idx int) int {
+	w := m.objTypes[idx]
+	if w.kind == objWindowProcs {
+		if len(m.procs) == 0 {
+			return 1 // "(none)" line
+		}
+		return len(m.procs)
+	}
+	// Object window.
+	if m.loadingObjects && w.nodes == nil {
+		return 1 // "loading…" line
+	}
+	items := m.getFilteredSortedNodes(idx)
+	if len(items) == 0 {
+		return 1 // "(none)" line
+	}
+	if w.treeView && w.hierarchical {
+		rows := 0
+		for _, node := range items {
+			rows++ // parent row
+			rows += len(node.Children)
+		}
+		return rows
+	}
+	return len(items)
+}
+
 // writeObjectSection renders one object-type window and returns lines written.
-func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx int) int {
+// collapsed=true renders only the title line (no underline, no body rows).
+func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx int, collapsed bool) int {
+	// Dispatch to the process-window renderer for the dedicated Processes pane.
+	if m.objTypes[idx].kind == objWindowProcs {
+		return m.writeProcessSection(b, width, bodyLines, collapsed)
+	}
+
 	lines := 0
 	w := m.objTypes[idx]
 	focused := int(m.focus)-1 == idx
 	items := m.getFilteredSortedNodes(idx)
 
+	// Disclosure glyph: ▸ when collapsed, ▾ when expanded.
+	glyph := "▾ "
+	if collapsed {
+		glyph = "▸ "
+	}
+
 	// Header.
-	headerText := fmt.Sprintf("%s (%d)", w.label, len(w.nodes))
+	headerText := glyph + fmt.Sprintf("%s (%d)", w.label, len(w.nodes))
 	if w.filter != "" {
-		headerText = fmt.Sprintf("%s (%d/%d)", w.label, len(items), len(w.nodes))
+		headerText = glyph + fmt.Sprintf("%s (%d/%d)", w.label, len(items), len(w.nodes))
 	}
 	if w.sortIdx != sortByName && len(w.nodes) > 0 {
 		metrics := firstMetrics(w.nodes)
@@ -801,9 +993,16 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		b.WriteString(histTitleStyle.Render(headerText))
 	}
 	b.WriteString("\n")
+	lines++
+
+	// When collapsed, stop here — no underline or body rows.
+	if collapsed {
+		return lines
+	}
+
 	b.WriteString(dimStyle.Render(strings.Repeat("─", width-1)))
 	b.WriteString("\n")
-	lines += 2
+	lines++
 
 	if m.loadingObjects && w.nodes == nil {
 		b.WriteString(dimStyle.Render("  loading…") + "\n")
@@ -823,7 +1022,7 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		itemIdx int // index in the items slice (-1 for children)
 	}
 	var rows []displayRow
-	if w.expanded && w.hierarchical {
+	if w.treeView && w.hierarchical {
 		for i, node := range items {
 			rows = append(rows, displayRow{name: node.Name, metric: fmtNodeDetail(node), itemIdx: i})
 			for _, child := range node.Children {
@@ -843,7 +1042,7 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 	// Windowed rendering over rows. Selection applies to items, not rows.
 	// Map selection to row index.
 	selRow := 0
-	if !w.expanded || !w.hierarchical {
+	if !w.treeView || !w.hierarchical {
 		selRow = w.sel
 	} else {
 		for ri, r := range rows {
@@ -966,22 +1165,44 @@ func (m aiTUIModel) renderStatusBar() string {
 				statusKeyStyle.Render("Enter") + statusStyle.Render(" apply") +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" clear")
+		} else if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
+			left = statusKeyStyle.Render("↑↓") + statusStyle.Render(" browse") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("Enter") + statusStyle.Render(" view output") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("d") + statusStyle.Render(" remove") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("k") + statusStyle.Render(" kill") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("p") + statusStyle.Render(" purge done") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("D") + statusStyle.Render(" kill all") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("Space") + statusStyle.Render(" collapse") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("Tab") + statusStyle.Render("/") +
+				statusKeyStyle.Render("Shift+Tab") + statusStyle.Render(" next/prev") +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("Esc") + statusStyle.Render(" chat")
 		} else if m.focus != focusChat {
-			expandHint := ""
+			treeHint := ""
 			if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
-				expandHint = statusStyle.Render("  ") +
-					statusKeyStyle.Render("Space") + statusStyle.Render(" expand")
+				treeHint = statusStyle.Render("  ") +
+					statusKeyStyle.Render("x") + statusStyle.Render(" tree")
 			}
 			left = statusKeyStyle.Render("↑↓") + statusStyle.Render(" move") +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("/") + statusStyle.Render(" filter") +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("s") + statusStyle.Render(" sort") +
-				expandHint +
+				treeHint +
+				statusStyle.Render("  ") +
+				statusKeyStyle.Render("Space") + statusStyle.Render(" collapse") +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Enter") + statusStyle.Render(" use") +
 				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Shift+Tab") + statusStyle.Render(" next") +
+				statusKeyStyle.Render("Tab") + statusStyle.Render("/") +
+				statusKeyStyle.Render("Shift+Tab") + statusStyle.Render(" next/prev") +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" chat")
 		} else {
@@ -1015,16 +1236,10 @@ func (m aiTUIModel) renderStatusBar() string {
 						statusKeyStyle.Render("End") + statusStyle.Render(" ↓bottom")
 				}
 			}
-			copyHint := ""
-			if len(m.copyItems) > 0 {
-				copyHint = statusStyle.Render("  ") +
-					statusKeyStyle.Render("y") + statusStyle.Render(" ⧉copy")
-			}
 			left = statusKeyStyle.Render("Enter") + statusStyle.Render(" send") +
 				tabHint +
 				browseHint +
 				scrollHint +
-				copyHint +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" "+modeHint) +
 				statusStyle.Render("  ") +
@@ -1138,9 +1353,9 @@ func (m aiTUIModel) handleKeyPicking(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Shift+Tab cycles focus between chat and sidebar panes.
+	// Shift+Tab cycles focus backward (chat → last window → … → first window → chat).
 	if msg.Type == tea.KeyShiftTab {
-		m.cycleFocus(true)
+		m.cycleFocus(false)
 		return m, nil
 	}
 
@@ -1149,11 +1364,16 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.filtering {
 			return m.handleKeyFilter(msg)
 		}
+		// Route process pane keys to the dedicated handler.
+		if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
+			return m.handleKeyProcessPane(msg)
+		}
 		return m.handleKeyPane(msg)
 	}
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
+		(&m).killAllProcs()
 		m.quitting = true
 		return m, tea.Quit
 
@@ -1166,8 +1386,8 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.mode == modeCmd {
 			m.doAutocomplete()
 		} else {
-			// Tab in AI mode → cycle sidebar focus backward (reverse of Shift+Tab).
-			m.cycleFocus(false)
+			// Tab in AI mode → cycle sidebar focus forward.
+			m.cycleFocus(true)
 		}
 		return m, nil
 
@@ -1186,13 +1406,20 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if prompt == "" {
 			return m, nil
 		}
+
+		// Well-formedness check: reject a trailing bare '&' (use --for instead).
+		// Check BEFORE resetting the input so the user's text is preserved on rejection.
+		if m.mode == modeCmd && !strings.HasPrefix(prompt, "/") && !commandWellFormed(prompt) {
+			m.appendTranscript(warnStyle.Render("✗ trailing & is not allowed — use --for <duration> to run in the background") + "\n\n")
+			return m, nil
+		}
+
 		m.input.Reset()
 		m.histIdx = -1
-		if m.inputLines != 1 {
-			m.inputLines = 1
-			m.input.SetHeight(1)
-			m.recalcLayout()
-		}
+		// Unconditional height reset (fixes stale inputLines glitch after multi-line input).
+		m.inputLines = 1
+		m.input.SetHeight(1)
+		m.recalcLayout()
 
 		// Slash commands (work in both modes).
 		if strings.HasPrefix(prompt, "/") {
@@ -1202,6 +1429,7 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.mode == modeCmd {
 			// Direct command execution (shell-like).
 			if prompt == "exit" || prompt == "quit" {
+				(&m).killAllProcs()
 				m.exitAll = true
 				m.quitting = true
 				return m, tea.Quit
@@ -1209,6 +1437,10 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cmdHistory = append(m.cmdHistory, prompt)
 			m.appendTranscript(cmdStyle.Render(m.binaryName+"> ") + prompt + "\n\n")
 			m.proposedCmd = prompt
+			// Commands with --for become managed background processes.
+			if commandHasFor(prompt) {
+				return m.startBackgroundProcess(prompt)
+			}
 			return m.startExecution(prompt)
 		}
 
@@ -1229,13 +1461,6 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.startAIRequest()
 
 	case tea.KeyRunes:
-		// 'y' copies the most recent copyable item (command or message payload).
-		if msg.String() == "y" && len(m.copyItems) > 0 {
-			last := m.copyItems[len(m.copyItems)-1]
-			_ = clipboard.WriteAll(last)
-			m.appendTranscript(copyHintStyle.Render("(copied to clipboard)") + "\n\n")
-			return m, nil
-		}
 		// Fall through to textarea update.
 		fallthrough
 
@@ -1283,16 +1508,17 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 				"/help                show this help\n"+
 				"\n"+
 				"Esc          toggle between ask> (AI) and "+m.binaryName+"> (command) mode\n"+
-				"Tab          autocomplete (command mode) · browse sidebar backward (AI mode)\n"+
-				"Shift+Tab    browse broker objects in the sidebar (forward)\n"+
+				"Tab          autocomplete (command mode) · browse sidebar forward (AI mode)\n"+
+				"Shift+Tab    browse sidebar backward\n"+
 				"Up/Down      recall history\n"+
-				"Space        expand/collapse hierarchical objects\n"+
+				"Space        collapse/expand selected sidebar window\n"+
+				"x            toggle hierarchical tree-view for broker objects\n"+
 				"PgUp/PgDn    scroll conversation · mouse wheel also works\n"+
 				"Home/End     jump to top/bottom\n"+
-				"y            copy last command or message payload to clipboard\n"+
 				"             click ⧉ in the transcript to copy any item\n") + "\n")
 
 	case "/exit":
+		(&m).killAllProcs()
 		m.exitAll = true
 		m.quitting = true
 		return m, tea.Quit
@@ -1492,8 +1718,11 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		// Freeze with a green ✓ marker, then execute.
+		// Freeze with a green ✓ marker, then execute (or background if --for).
 		m.appendTranscript(freezeProposal(m.proposedCmd, "✓", false, m.proposedDestructive))
+		if commandHasFor(m.proposedCmd) {
+			return m.startBackgroundProcess(m.proposedCmd)
+		}
 		return m.startExecution(m.proposedCmd)
 
 	case tea.KeyRunes:
@@ -1533,12 +1762,15 @@ func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.proposedCmd = cmd
 		m.proposedDestructive = anyCommand(cmd, isDestructive)
-		// Freeze with a green ✓ and run.
+		// Freeze with a green ✓ and run (or background if --for).
 		m.appendTranscript(freezeProposal(cmd, "✓", false, m.proposedDestructive))
 		m.input.SetValue("")
 		m.inputLines = 1
 		m.input.SetHeight(1)
 		m.recalcLayout()
+		if commandHasFor(cmd) {
+			return m.startBackgroundProcess(cmd)
+		}
 		return m.startExecution(cmd)
 
 	case tea.KeyEsc, tea.KeyCtrlC:
@@ -1593,15 +1825,14 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeySpace:
-		if m.objTypes[wi].hierarchical {
-			m.objTypes[wi].expanded = !m.objTypes[wi].expanded
-		}
+		// Space collapses/expands the whole window (title only vs. full content).
+		m.objTypes[wi].collapsed = !m.objTypes[wi].collapsed
 		return m, nil
 	case tea.KeyTab:
-		m.cycleFocus(false)
+		m.cycleFocus(true)
 		return m, nil
 	case tea.KeyShiftTab:
-		m.cycleFocus(true)
+		m.cycleFocus(false)
 		return m, nil
 	case tea.KeyRunes:
 		switch msg.String() {
@@ -1620,6 +1851,12 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.loadingObjects = true
 			return m, m.startLoadObjects()
+		case "x":
+			// x toggles the hierarchical tree-view (show/hide children).
+			if m.objTypes[wi].hierarchical {
+				m.objTypes[wi].treeView = !m.objTypes[wi].treeView
+			}
+			return m, nil
 		}
 	}
 	return m, nil
@@ -1981,14 +2218,21 @@ func predictValue(current string, msg tea.KeyMsg) string {
 
 func (m *aiTUIModel) recalcLayout() {
 	headerHeight := 2
-	inputLines := m.inputLines
+	// Use the textarea's authoritative height so the budget always matches what
+	// View() actually renders (textarea.View() always emits exactly m.input.Height() lines).
+	inputLines := m.input.Height()
 	if inputLines < 1 {
 		inputLines = 1
 	}
 	inputHeight := 2 + inputLines // top rule + textarea rows + bottom rule
 	statusHeight := 1
 	slack := 1
-	vpHeight := m.height - headerHeight - inputHeight - statusHeight - slack
+	// Account for the extra reconnect-status line that renderMainContent appends.
+	reconnectLine := 0
+	if m.reconnectStatus != "" {
+		reconnectLine = 1
+	}
+	vpHeight := m.height - headerHeight - inputHeight - statusHeight - slack - reconnectLine
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -2298,6 +2542,10 @@ func (m *aiTUIModel) beginRefresh() tea.Cmd {
 func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 	m.loadingObjects = false
 	for i := range m.objTypes {
+		// Never overwrite the Processes window with broker-objects data.
+		if m.objTypes[i].kind == objWindowProcs {
+			continue
+		}
 		if i < len(msg.windows) {
 			m.objTypes[i].nodes = msg.windows[i]
 		}
@@ -2338,6 +2586,7 @@ func (m *aiTUIModel) cycleFocus(forward bool) {
 	if n <= 1 {
 		return
 	}
+	prevFocus := m.focus
 	cur := int(m.focus)
 	if forward {
 		cur = (cur + 1) % n
@@ -2345,10 +2594,22 @@ func (m *aiTUIModel) cycleFocus(forward bool) {
 		cur = (cur - 1 + n) % n
 	}
 	m.focus = focusTarget(cur)
+
+	// Exit process view when leaving the process pane.
+	if prevWi := int(prevFocus) - 1; prevWi >= 0 && prevWi < len(m.objTypes) &&
+		m.objTypes[prevWi].kind == objWindowProcs {
+		m.exitProcessView()
+	}
+
 	if m.focus == focusChat {
 		m.input.Focus()
 	} else {
 		m.input.Blur()
+		// Enter process view when arriving at the process pane.
+		if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) &&
+			m.objTypes[wi].kind == objWindowProcs {
+			m.enterProcessView()
+		}
 	}
 }
 
@@ -2598,7 +2859,8 @@ func (m *aiTUIModel) toggleInputMode() {
 		m.input.Placeholder = "Ask anything..."
 	}
 	// Re-layout: prompt width may have changed (e.g. "ask> " vs "awsmc> ").
-	m.recalcLayout()
+	// updateInputHeight recomputes inputLines for the new prompt width, then calls recalcLayout.
+	m.updateInputHeight()
 }
 
 // historyPrev recalls the previous entry from the active history.
@@ -2774,13 +3036,25 @@ func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, bina
 	model.program = &prog
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	prog = p
-	finalModel, err := p.Run()
+	finalModel, runErr := p.Run()
 	if m, ok := finalModel.(aiTUIModel); ok {
 		totalIn = m.totalIn
 		totalOut = m.totalOut
+		// Cancel any still-running background processes and wait up to 2s for
+		// their goroutines to exit before the shared session adapters are torn down.
+		(&m).killAllProcs()
+		deadline := time.After(2 * time.Second)
+		for _, proc := range m.procs {
+			if proc.doneCh != nil {
+				select {
+				case <-proc.doneCh:
+				case <-deadline:
+				}
+			}
+		}
 		if m.exitAll {
-			return true, totalIn, totalOut, err
+			return true, totalIn, totalOut, runErr
 		}
 	}
-	return false, totalIn, totalOut, err
+	return false, totalIn, totalOut, runErr
 }

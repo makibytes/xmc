@@ -68,19 +68,26 @@ func doBridgeQueue(cmd *cobra.Command, args []string, backend backends.QueueBack
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
 	statsOn, _ := cmd.Flags().GetBool("stats")
 
 	duration, err := parseDurationFlag(forStr)
 	if err != nil {
 		return err
 	}
+	if forever {
+		duration = 0
+	}
+
+	out := cmd.OutOrStdout()
+	errw := cmd.ErrOrStderr()
 
 	ctx, cancel := timedOrInterruptCtx(cmd.Context(), duration)
 	defer cancel()
 
-	st, stopStats := startForwardStats(statsOn)
+	st, stopStats := startForwardStats(statsOn, errw)
 
-	proc, stdinPipe, err := startTargetProcess(ctx, target)
+	proc, stdinPipe, err := startTargetProcess(ctx, target, out, errw)
 	if err != nil {
 		return err
 	}
@@ -91,6 +98,9 @@ func doBridgeQueue(cmd *cobra.Command, args []string, backend backends.QueueBack
 
 	bridged := 0
 	for count == 0 || bridged < count {
+		if ctx.Err() != nil {
+			break
+		}
 		msg, err := backend.Receive(ctx, backends.ReceiveOptions{
 			Queue:       source,
 			Timeout:     timeout,
@@ -99,26 +109,34 @@ func doBridgeQueue(cmd *cobra.Command, args []string, backend backends.QueueBack
 			Selector:    selector,
 		})
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, backends.ErrNoMessageAvailable) {
+			// ctx.Err() catches the outer --for deadline or kill signal.
+			if ctx.Err() != nil {
 				break
+			}
+			// DeadlineExceeded is the AMQP backend's internal poll timeout
+			// (100ms, from its own Background context), not the outer deadline.
+			// ErrNoMessageAvailable is its logical equivalent. Both mean "empty
+			// queue this poll" — keep looping.
+			if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
+				continue
 			}
 			return fmt.Errorf("receive from %s: %w", source, err)
 		}
 
 		if err := displayMessageNDJSON(stdinPipe, msg); err != nil {
-			emitUndelivered(msg.Data)
+			emitUndelivered(out, msg.Data)
 			return fmt.Errorf("write to target: %w", err)
 		}
 
 		bridged++
 		st.record(len(msg.Data))
-		if !quiet {
-			log.Verbose("bridged message %d from %s", bridged, source)
+		if !quiet && log.IsVerbose {
+			fmt.Fprintf(errw, "bridged message %d from %s\n", bridged, source)
 		}
 	}
 
 	stopStats()
-	return summarizeForward(bridged, source, target)
+	return summarizeForward(out, bridged, source, target)
 }
 
 func doBridgeTopic(cmd *cobra.Command, args []string, backend backends.TopicBackend) error {
@@ -130,19 +148,26 @@ func doBridgeTopic(cmd *cobra.Command, args []string, backend backends.TopicBack
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
 	statsOn, _ := cmd.Flags().GetBool("stats")
 
 	duration, err := parseDurationFlag(forStr)
 	if err != nil {
 		return err
 	}
+	if forever {
+		duration = 0
+	}
+
+	out := cmd.OutOrStdout()
+	errw := cmd.ErrOrStderr()
 
 	ctx, cancel := timedOrInterruptCtx(cmd.Context(), duration)
 	defer cancel()
 
-	st, stopStats := startForwardStats(statsOn)
+	st, stopStats := startForwardStats(statsOn, errw)
 
-	proc, stdinPipe, err := startTargetProcess(ctx, target)
+	proc, stdinPipe, err := startTargetProcess(ctx, target, out, errw)
 	if err != nil {
 		return err
 	}
@@ -153,6 +178,9 @@ func doBridgeTopic(cmd *cobra.Command, args []string, backend backends.TopicBack
 
 	bridged := 0
 	for count == 0 || bridged < count {
+		if ctx.Err() != nil {
+			break
+		}
 		msg, err := backend.Subscribe(ctx, backends.SubscribeOptions{
 			Topic:    source,
 			GroupID:  groupID,
@@ -161,29 +189,32 @@ func doBridgeTopic(cmd *cobra.Command, args []string, backend backends.TopicBack
 			Selector: selector,
 		})
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, backends.ErrNoMessageAvailable) {
+			if ctx.Err() != nil {
 				break
+			}
+			if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
+				continue
 			}
 			return fmt.Errorf("subscribe from %s: %w", source, err)
 		}
 
 		if err := displayMessageNDJSON(stdinPipe, msg); err != nil {
-			emitUndelivered(msg.Data)
+			emitUndelivered(out, msg.Data)
 			return fmt.Errorf("write to target: %w", err)
 		}
 
 		bridged++
 		st.record(len(msg.Data))
-		if !quiet {
-			log.Verbose("bridged message %d from %s", bridged, source)
+		if !quiet && log.IsVerbose {
+			fmt.Fprintf(errw, "bridged message %d from %s\n", bridged, source)
 		}
 	}
 
 	stopStats()
-	return summarizeForward(bridged, source, target)
+	return summarizeForward(out, bridged, source, target)
 }
 
-func startTargetProcess(ctx context.Context, target string) (*exec.Cmd, io.WriteCloser, error) {
+func startTargetProcess(ctx context.Context, target string, out, errw io.Writer) (*exec.Cmd, io.WriteCloser, error) {
 	if !strings.Contains(target, "--ndjson") {
 		target = target + " --ndjson"
 	}
@@ -194,8 +225,8 @@ func startTargetProcess(ctx context.Context, target string) (*exec.Cmd, io.Write
 	}
 
 	proc := exec.CommandContext(ctx, shell, "-c", target)
-	proc.Stdout = os.Stdout
-	proc.Stderr = os.Stderr
+	proc.Stdout = out
+	proc.Stderr = errw
 
 	stdinPipe, err := proc.StdinPipe()
 	if err != nil {

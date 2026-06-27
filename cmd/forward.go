@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -74,6 +74,7 @@ func addForwardFlags(cmd *cobra.Command) {
 	cmd.Flags().VarP(newDurationValue(100*time.Millisecond, time.Second), "timeout", "t", "Time to wait for the next source message per poll (e.g. \"100ms\")")
 	cmd.Flags().IntP("count", "n", 0, "Maximum messages to forward (0 = until interrupted)")
 	cmd.Flags().String("for", "", "Relay for a bounded duration then stop (e.g. \"30s\", \"5m\")")
+	cmd.Flags().Bool("forever", false, "Relay until interrupted / until xmc quits (no time bound)")
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr")
 	cmd.Flags().StringP("selector", "S", "", "Only forward messages matching this selector expression")
 	cmd.Flags().BoolP("quiet", "q", false, "Suppress the per-message log; print only the final summary")
@@ -91,16 +92,23 @@ func doForwardQueue(cmd *cobra.Command, args []string, backend backends.QueueBac
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
 	statsOn, _ := cmd.Flags().GetBool("stats")
 
 	duration, err := parseDurationFlag(forStr)
 	if err != nil {
 		return err
 	}
+	if forever {
+		duration = 0
+	}
+
+	out := cmd.OutOrStdout()
+	errw := cmd.ErrOrStderr()
 
 	ctx, cancel := streamContext(duration, cmd.Context())
 	defer cancel()
-	st, stopStats := startForwardStats(statsOn)
+	st, stopStats := startForwardStats(statsOn, errw)
 	defer stopStats()
 
 	forwarded := 0
@@ -118,15 +126,19 @@ func doForwardQueue(cmd *cobra.Command, args []string, backend backends.QueueBac
 			Selector:    selector,
 		})
 		switch {
-		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return summarizeForward(forwarded, source, destination)
-		case errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
+		case errors.Is(err, context.Canceled):
+			return summarizeForward(out, forwarded, source, destination)
+		// DeadlineExceeded here is from the AMQP internal poll timeout (the
+		// backend creates its own context from Background(), not from our ctx),
+		// so it means "no message in this 100ms window" — keep looping.
+		// The outer --for deadline is caught by ctx.Err() at the top of the loop.
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
 			continue
 		case err != nil:
 			return err
 		}
 
-		body, ok := runCommandOrRecover(command, message.Data)
+		body, ok := runCommandOrRecover(command, message.Data, out, errw)
 		if !ok {
 			continue
 		}
@@ -141,18 +153,18 @@ func doForwardQueue(cmd *cobra.Command, args []string, backend backends.QueueBac
 			Priority:      message.Priority,
 			Persistent:    message.Persistent,
 		}); err != nil {
-			emitUndelivered(message.Data)
+			emitUndelivered(out, message.Data)
 			return fmt.Errorf("forward to %s failed: %w", destination, err)
 		}
 
 		forwarded++
 		st.record(len(body))
-		if !quiet {
-			log.Verbose("forwarded message %d to %s", forwarded, destination)
+		if !quiet && log.IsVerbose {
+			fmt.Fprintf(errw, "forwarded message %d to %s\n", forwarded, destination)
 		}
 	}
 
-	return summarizeForward(forwarded, source, destination)
+	return summarizeForward(out, forwarded, source, destination)
 }
 
 func doForwardTopic(cmd *cobra.Command, args []string, backend backends.TopicBackend) error {
@@ -168,16 +180,23 @@ func doForwardTopic(cmd *cobra.Command, args []string, backend backends.TopicBac
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
 	statsOn, _ := cmd.Flags().GetBool("stats")
 
 	duration, err := parseDurationFlag(forStr)
 	if err != nil {
 		return err
 	}
+	if forever {
+		duration = 0
+	}
+
+	out := cmd.OutOrStdout()
+	errw := cmd.ErrOrStderr()
 
 	ctx, cancel := streamContext(duration, cmd.Context())
 	defer cancel()
-	st, stopStats := startForwardStats(statsOn)
+	st, stopStats := startForwardStats(statsOn, errw)
 	defer stopStats()
 
 	forwarded := 0
@@ -195,15 +214,15 @@ func doForwardTopic(cmd *cobra.Command, args []string, backend backends.TopicBac
 			Selector:  selector,
 		})
 		switch {
-		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return summarizeForward(forwarded, source, destination)
-		case errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
+		case errors.Is(err, context.Canceled):
+			return summarizeForward(out, forwarded, source, destination)
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
 			continue
 		case err != nil:
 			return err
 		}
 
-		body, ok := runCommandOrRecover(command, message.Data)
+		body, ok := runCommandOrRecover(command, message.Data, out, errw)
 		if !ok {
 			continue
 		}
@@ -218,62 +237,64 @@ func doForwardTopic(cmd *cobra.Command, args []string, backend backends.TopicBac
 			Priority:      message.Priority,
 			Persistent:    message.Persistent,
 		}); err != nil {
-			emitUndelivered(message.Data)
+			emitUndelivered(out, message.Data)
 			return fmt.Errorf("forward to %s failed: %w", destination, err)
 		}
 
 		forwarded++
 		st.record(len(body))
-		if !quiet {
-			log.Verbose("forwarded message %d to %s", forwarded, destination)
+		if !quiet && log.IsVerbose {
+			fmt.Fprintf(errw, "forwarded message %d to %s\n", forwarded, destination)
 		}
 	}
 
-	return summarizeForward(forwarded, source, destination)
+	return summarizeForward(out, forwarded, source, destination)
 }
 
 // startForwardStats returns a stats accumulator and a stop function. When stats
 // is disabled it returns a non-nil accumulator (whose record is harmless) and a
-// no-op stop, so callers need no nil checks.
-func startForwardStats(enabled bool) (*streamStats, func()) {
+// no-op stop, so callers need no nil checks. w receives live tick lines and the
+// final summary (typically cmd.ErrOrStderr(); falls back to os.Stderr for CLI).
+func startForwardStats(enabled bool, w io.Writer) (*streamStats, func()) {
 	st := newStreamStats()
 	if !enabled {
 		return st, func() {}
 	}
-	stop := startStatsReporter(st, time.Second)
+	stop := startStatsReporter(st, time.Second, w)
 	return st, func() {
 		stop()
-		fmt.Fprintln(os.Stderr, st.summary())
+		fmt.Fprintln(w, st.summary())
 	}
 }
 
 // runCommandOrRecover applies the optional shell command. On success it returns
 // the command's output and true. If the command fails, it logs the error,
-// writes the original (already-consumed) payload to stdout for recovery, and
+// writes the original (already-consumed) payload to out for recovery, and
 // returns false so the caller skips the message instead of losing it.
-func runCommandOrRecover(command string, data []byte) ([]byte, bool) {
+func runCommandOrRecover(command string, data []byte, out, errw io.Writer) ([]byte, bool) {
 	if command == "" {
 		return data, true
 	}
-	out, err := runShellCommand(command, data)
+	result, err := runShellCommand(command, data)
 	if err != nil {
-		log.Error("command failed: %s\n", err)
-		emitUndelivered(data)
+		fmt.Fprintf(errw, "command failed: %s\n", err)
+		emitUndelivered(out, data)
 		return nil, false
 	}
-	return out, true
+	return result, true
 }
 
-// emitUndelivered writes a consumed-but-undelivered payload to stdout so an
-// operator can recover it after a command or send failure.
-func emitUndelivered(data []byte) {
-	fmt.Fprint(os.Stdout, string(data))
-	if log.IsStdout {
-		fmt.Fprintln(os.Stdout)
+// emitUndelivered writes a consumed-but-undelivered payload to w so an
+// operator can recover it after a command or send failure. Callers pass
+// cmd.OutOrStdout() so that the output is captured in background-process mode.
+func emitUndelivered(w io.Writer, data []byte) {
+	fmt.Fprint(w, string(data))
+	if shouldAddNewline(w) {
+		fmt.Fprintln(w)
 	}
 }
 
-func summarizeForward(forwarded int, source, destination string) error {
-	fmt.Printf("Forwarded %d message(s) from %s to %s\n", forwarded, source, destination)
+func summarizeForward(w io.Writer, forwarded int, source, destination string) error {
+	fmt.Fprintf(w, "Forwarded %d message(s) from %s to %s\n", forwarded, source, destination)
 	return nil
 }
