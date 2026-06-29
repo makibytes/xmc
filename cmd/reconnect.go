@@ -105,9 +105,13 @@ type reconnectingQueue struct {
 	factory QueueAdapterFactory
 	opts    ReconnectOptions
 	adapter backends.QueueBackend
+	closed  bool
 }
 
 func (r *reconnectingQueue) ensureConnected() error {
+	if r.closed {
+		return fmt.Errorf("adapter closed")
+	}
 	if r.adapter != nil {
 		return nil
 	}
@@ -181,6 +185,7 @@ func (r *reconnectingQueue) Receive(ctx context.Context, opts backends.ReceiveOp
 func (r *reconnectingQueue) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closed = true
 	if r.adapter != nil {
 		err := r.adapter.Close()
 		r.adapter = nil
@@ -217,6 +222,9 @@ func (r *reconnectingQueue) retryOp(ctx context.Context, desc string, op func() 
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if r.closed {
+			return fmt.Errorf("%s: adapter closed", desc)
 		}
 
 		wait := b.NextBackOff()
@@ -255,9 +263,13 @@ type reconnectingTopic struct {
 	factory TopicAdapterFactory
 	opts    ReconnectOptions
 	adapter backends.TopicBackend
+	closed  bool
 }
 
 func (r *reconnectingTopic) ensureConnected() error {
+	if r.closed {
+		return fmt.Errorf("adapter closed")
+	}
 	if r.adapter != nil {
 		return nil
 	}
@@ -331,6 +343,7 @@ func (r *reconnectingTopic) Subscribe(ctx context.Context, opts backends.Subscri
 func (r *reconnectingTopic) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closed = true
 	if r.adapter != nil {
 		err := r.adapter.Close()
 		r.adapter = nil
@@ -346,6 +359,9 @@ func (r *reconnectingTopic) retryOp(ctx context.Context, desc string, op func() 
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if r.closed {
+			return fmt.Errorf("%s: adapter closed", desc)
 		}
 
 		wait := b.NextBackOff()

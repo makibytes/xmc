@@ -9,10 +9,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 )
+
+var mgmtHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // ManagementArgs holds parameters for Artemis management operations
 type ManagementArgs struct {
@@ -56,7 +59,7 @@ func jolokiaGet(baseURL, path, user, password string) ([]byte, error) {
 	}
 	req.Header.Set("Origin", baseURL)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mgmtHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("management API request failed: %w", err)
 	}

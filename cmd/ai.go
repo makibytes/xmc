@@ -27,6 +27,7 @@ const maxCapture = 2048
 const maxFixAttempts = 2
 
 type aiSession struct {
+	mu                 sync.Mutex
 	client             aiClient
 	sysPrompt          string
 	brokerContext      string
@@ -101,15 +102,22 @@ func (a *aiSession) refreshTopology() {
 	}
 
 	result := strings.TrimSpace(buf.String())
-	if result != "" && result != a.topology {
+	if result == "" {
+		return
+	}
+	a.mu.Lock()
+	if result != a.topology {
 		a.topology = result
 		a.rebuildPrompt()
 	}
+	a.mu.Unlock()
 }
 
 // resetHistory clears the conversation history and refreshes topology.
 func (a *aiSession) resetHistory() {
+	a.mu.Lock()
 	a.history = nil
+	a.mu.Unlock()
 	a.refreshTopology()
 	fmt.Fprintln(os.Stderr, "AI conversation reset")
 }

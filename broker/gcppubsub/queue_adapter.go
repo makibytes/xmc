@@ -87,9 +87,12 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		msg = pubsubToBackendMessage(m)
 		cancel()
 	})
+	mu.Lock()
 	if msg != nil {
+		mu.Unlock()
 		return msg, nil
 	}
+	mu.Unlock()
 	if err != nil && err != context.Canceled {
 		return nil, err
 	}

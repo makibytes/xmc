@@ -45,6 +45,31 @@ type ObjectType struct {
 	List         func() ([]backends.ObjectNode, error)       // returns the current objects
 }
 
+// SidebarActions returns the create and delete ManageAction for a given object
+// label, derived from the ManageSpec. Returns nil for both when the label has no
+// matching action (e.g. "Consumer Groups"). The mapping follows broker conventions:
+//
+//	"Queues" → CreateQueue / DeleteQueue
+//	"Topics" → CreateTopic / DeleteTopic
+//	"Addresses" → CreateAddress / DeleteAddress
+//	"Exchanges" → CreateExchange / DeleteExchange
+//	"Streams" → CreateQueue / DeleteQueue (NATS)
+func (s *ManageSpec) SidebarActions(label string) (create, delete *ManageAction) {
+	switch label {
+	case "Queues":
+		return s.CreateQueue, s.DeleteQueue
+	case "Topics":
+		return s.CreateTopic, s.DeleteTopic
+	case "Addresses":
+		return s.CreateAddress, s.DeleteAddress
+	case "Exchanges":
+		return s.CreateExchange, s.DeleteExchange
+	case "Streams":
+		return s.CreateQueue, s.DeleteQueue
+	}
+	return nil, nil
+}
+
 // ManageSpec describes the management capabilities a broker exposes. Each
 // closure is optional — nil means the broker does not support that operation,
 // and the corresponding subcommand is omitted.

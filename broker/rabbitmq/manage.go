@@ -12,10 +12,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 )
+
+var mgmtHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // ManagementArgs holds parameters for RabbitMQ management operations
 type ManagementArgs struct {
@@ -47,7 +50,7 @@ func managementGet(baseURL, path, user, password string) ([]byte, error) {
 		req.SetBasicAuth(user, password)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mgmtHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("management API request failed: %w", err)
 	}
@@ -77,7 +80,7 @@ func managementDelete(baseURL, path, user, password string) ([]byte, error) {
 		req.SetBasicAuth(user, password)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mgmtHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("management API request failed: %w", err)
 	}
@@ -171,7 +174,7 @@ func managementPut(baseURL, path, user, password string, body []byte) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mgmtHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("management API request failed: %w", err)
 	}
@@ -198,7 +201,7 @@ func managementPost(baseURL, path, user, password string, body []byte) ([]byte, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mgmtHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("management API request failed: %w", err)
 	}

@@ -67,7 +67,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	md, data, msgHandle, err := ReceiveMessage(a.qMgr, args)
 	if err != nil {
 		if strings.Contains(err.Error(), "timeout") {
-			return nil, context.DeadlineExceeded
+			return nil, backends.ErrNoMessageAvailable
 		}
 		return nil, err
 	}
