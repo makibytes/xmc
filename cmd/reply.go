@@ -27,7 +27,7 @@ func NewReplyCommand(backend backends.QueueBackend) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "reply <queue> [response]",
 		Aliases: []string{"respond"},
-		Short:   "Reply to requests on a queue (request-reply responder)",
+		Short:   "Reply to requests on a queue; supports --for/--forever streaming",
 		Long: `Listens on a queue and responds to each incoming request by sending a message
 to the request's reply-to destination.
 
@@ -36,9 +36,9 @@ The response payload can be one of:
   - the request payload itself (--echo), or
   - the standard output of a shell command fed the request on stdin (--command).
 
-The responder runs until interrupted (Ctrl-C) unless --count limits the number
-of requests served. The reply's correlation ID is taken from the request's
-correlation ID, falling back to the request's message ID.`,
+The responder runs until interrupted (Ctrl-C) unless --count, --for, or
+--forever sets a different bound. The reply's correlation ID is taken from the
+request's correlation ID, falling back to the request's message ID.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doReply(cmd, args, backend)
@@ -54,6 +54,8 @@ correlation ID, falling back to the request's message ID.`,
 	cmd.Flags().VarP(newDurationValue(0, time.Second), "timeout", "t", "Time to wait per request (e.g. \"5s\"; 0 = wait indefinitely)")
 	cmd.Flags().BoolP("quiet", "q", false, "Suppress per-request logging")
 	cmd.Flags().StringP("selector", "S", "", "Only handle requests matching this selector expression")
+	cmd.Flags().String("for", "", "Run for a bounded duration then stop (e.g. \"30s\", \"5m\")")
+	cmd.Flags().Bool("forever", false, "Run until interrupted (no time bound)")
 	// Accept legacy concatenated spellings (--contenttype) as aliases of the
 	// kebab-case names (--content-type).
 	cmd.Flags().SetNormalizeFunc(aliasNormalize)
@@ -81,6 +83,20 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	timeout := float32(getDuration(cmd, "timeout").Seconds())
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	selector, _ := cmd.Flags().GetString("selector")
+	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
+
+	duration, err := parseDurationFlag(forStr)
+	if err != nil {
+		return err
+	}
+	if forever {
+		duration = 0
+	}
+	follow := duration > 0 || forever
+	if (duration > 0 || forever) && !cmd.Flags().Changed("count") {
+		count = 0
+	}
 
 	properties, err := parsePropertiesFlag(cmd.Flags())
 	if err != nil {
@@ -109,7 +125,8 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 		cfg.staticBody = body
 	}
 
-	ctx, stop := interruptContext()
+	parentCtx := cmd.Context()
+	ctx, stop := streamContext(duration, parentCtx)
 	defer stop()
 
 	// With no timeout we block until each request arrives; ctx cancellation
@@ -118,6 +135,10 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 
 	served := 0
 	for count == 0 || served < count {
+		if ctx.Err() != nil {
+			return finishReply(served)
+		}
+
 		message, err := backend.Receive(ctx, backends.ReceiveOptions{
 			Queue:       args[0],
 			Timeout:     timeout,
@@ -131,7 +152,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 		case errors.Is(err, context.Canceled):
 			return finishReply(served)
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
-			if count == 0 {
+			if follow || count == 0 {
 				continue // keep waiting for the next request
 			}
 			return finishReply(served)

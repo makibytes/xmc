@@ -116,7 +116,7 @@ Uses `spf13/cobra` for CLI:
 - Management commands: `manage list`, `manage purge`, `manage stats`, `manage create-queue`, `manage delete-queue`, `manage create-topic`, `manage delete-topic`, `manage create-exchange`, `manage delete-exchange`, `manage bind-queue`, `manage unbind-queue`
 - Output: `-J` JSON, `-F`/`--format` template, or `--ndjson` lossless records, shared across read commands
 - Bulk/load: `-l`/`--lines`, `--ndjson` (input), `-n`/`--count` repeat, `--rate` throttle on send/publish; `-n 0` drains on read commands
-- Streaming: `forward` (continuous relay, optional `-x`/`--command` shell command), `bridge` (cross-broker relay via subprocess NDJSON streaming, `--to '<target command>'`), `--for <duration>` (time-bounded), `--stats` (live throughput) on read commands, `forward`, and `bridge`
+- Streaming: `forward` (continuous relay, optional `-x`/`--command` shell command), `bridge` (cross-broker relay via subprocess NDJSON streaming, `--to '<target command>'`), `--for <duration>` (time-bounded), `--stats` (live throughput) on read commands, `forward`, `bridge`, and `reply`
 - Connection parameters apply globally across all commands
 
 ### Message Handling

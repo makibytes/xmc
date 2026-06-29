@@ -134,17 +134,20 @@ func (r *reconnectingQueue) reconnect() error {
 
 func (r *reconnectingQueue) Send(ctx context.Context, opts backends.SendOptions) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
 		return err
 	}
+	adapter := r.adapter
+	r.mu.Unlock()
 
-	err := r.adapter.Send(ctx, opts)
+	err := adapter.Send(ctx, opts)
 	if err == nil || !isConnectionError(err) {
 		return err
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.retryOp(ctx, fmt.Sprintf("send to %s", opts.Queue), func() error {
 		return r.adapter.Send(ctx, opts)
 	})
@@ -152,17 +155,20 @@ func (r *reconnectingQueue) Send(ctx context.Context, opts backends.SendOptions)
 
 func (r *reconnectingQueue) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
 		return nil, err
 	}
+	adapter := r.adapter
+	r.mu.Unlock()
 
-	msg, err := r.adapter.Receive(ctx, opts)
+	msg, err := adapter.Receive(ctx, opts)
 	if err == nil || !isConnectionError(err) {
 		return msg, err
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var result *backends.Message
 	retryErr := r.retryOp(ctx, fmt.Sprintf("receive from %s", opts.Queue), func() error {
 		var innerErr error
@@ -278,17 +284,20 @@ func (r *reconnectingTopic) reconnect() error {
 
 func (r *reconnectingTopic) Publish(ctx context.Context, opts backends.PublishOptions) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
 		return err
 	}
+	adapter := r.adapter
+	r.mu.Unlock()
 
-	err := r.adapter.Publish(ctx, opts)
+	err := adapter.Publish(ctx, opts)
 	if err == nil || !isConnectionError(err) {
 		return err
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.retryOp(ctx, fmt.Sprintf("publish to %s", opts.Topic), func() error {
 		return r.adapter.Publish(ctx, opts)
 	})
@@ -296,17 +305,20 @@ func (r *reconnectingTopic) Publish(ctx context.Context, opts backends.PublishOp
 
 func (r *reconnectingTopic) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
 		return nil, err
 	}
+	adapter := r.adapter
+	r.mu.Unlock()
 
-	msg, err := r.adapter.Subscribe(ctx, opts)
+	msg, err := adapter.Subscribe(ctx, opts)
 	if err == nil || !isConnectionError(err) {
 		return msg, err
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var result *backends.Message
 	retryErr := r.retryOp(ctx, fmt.Sprintf("subscribe on %s", opts.Topic), func() error {
 		var innerErr error

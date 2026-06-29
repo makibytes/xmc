@@ -3,11 +3,15 @@ package amqpcommon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/log"
 )
+
+var nextLinkID atomic.Uint64
 
 // ReceiveOptions configures an AMQP receive operation
 type ReceiveOptions struct {
@@ -22,14 +26,15 @@ type ReceiveOptions struct {
 	SubscriptionName   string   // name for durable subscription
 }
 
-// ReceiveMessage receives a single message from an AMQP 1.0 session
-func ReceiveMessage(session *amqp.Session, opts ReceiveOptions) (*amqp.Message, error) {
-	var ctx context.Context
+// ReceiveMessage receives a single message from an AMQP 1.0 session.
+// The caller's ctx is honoured for cancellation (Ctrl-C / Esc).
+func ReceiveMessage(ctx context.Context, session *amqp.Session, opts ReceiveOptions) (*amqp.Message, error) {
+	var receiveCtx context.Context
 	var cancel context.CancelFunc
 	if opts.Wait {
-		ctx, cancel = context.WithCancel(context.Background())
+		receiveCtx, cancel = context.WithCancel(ctx)
 	} else {
-		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(float64(opts.Timeout)*float64(time.Second)))
+		receiveCtx, cancel = context.WithTimeout(ctx, time.Duration(float64(opts.Timeout)*float64(time.Second)))
 	}
 	defer cancel()
 
@@ -41,7 +46,7 @@ func ReceiveMessage(session *amqp.Session, opts ReceiveOptions) (*amqp.Message, 
 	}
 
 	expiryPolicy := amqp.ExpiryPolicyLinkDetach
-	linkName := "xmc"
+	linkName := fmt.Sprintf("xmc-%d", nextLinkID.Add(1))
 	if opts.DurableSubscription {
 		expiryPolicy = amqp.ExpiryPolicyNever
 		if opts.SubscriptionName != "" {
@@ -67,7 +72,7 @@ func ReceiveMessage(session *amqp.Session, opts ReceiveOptions) (*amqp.Message, 
 	}
 
 	log.Verbose("generating receiver for %s...", opts.Queue)
-	receiver, err := session.NewReceiver(ctx, opts.Queue, receiverOptions)
+	receiver, err := session.NewReceiver(receiveCtx, opts.Queue, receiverOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -80,15 +85,15 @@ func ReceiveMessage(session *amqp.Session, opts ReceiveOptions) (*amqp.Message, 
 	}()
 
 	log.Verbose("calling receive()...")
-	message, err := receiver.Receive(ctx, nil)
+	message, err := receiver.Receive(receiveCtx, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	if opts.Acknowledge {
-		receiver.AcceptMessage(ctx, message)
+		receiver.AcceptMessage(receiveCtx, message)
 	} else {
-		receiver.ReleaseMessage(ctx, message)
+		receiver.ReleaseMessage(receiveCtx, message)
 	}
 
 	return message, nil

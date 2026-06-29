@@ -86,8 +86,11 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 		Timeout:       timeout,
 	}
 
+	ctx, stop := interruptContext(cmd.Context())
+	defer stop()
+
 	log.Verbose("sending request to %s (timeout: %.1fs)...", args[0], timeout)
-	message, err := backends.Request(context.Background(), backend, requestOpts)
+	message, err := backends.Request(ctx, backend, requestOpts)
 	if err != nil {
 		if sendErr, ok := errors.AsType[*backends.RequestSendError](err); ok {
 			return fmt.Errorf("failed to send request: %w", sendErr.Err)

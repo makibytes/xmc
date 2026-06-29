@@ -4,11 +4,15 @@ package rabbitmq
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/log"
 )
+
+var nextLinkID atomic.Uint64
 
 func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments) error {
 	log.Verbose("🏗️  constructing message...")
@@ -48,7 +52,7 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 		Durability:       durability,
 		SourceAddress:    targetAddress,
 		TargetDurability: durability,
-		Name:             "rmc",
+		Name:             fmt.Sprintf("rmc-%d", nextLinkID.Add(1)),
 	}
 
 	log.Verbose("📤 generating sender...")
