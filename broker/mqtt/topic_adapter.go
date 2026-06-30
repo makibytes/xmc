@@ -49,7 +49,7 @@ func (a *TopicAdapter) Publish(_ context.Context, opts backends.PublishOptions) 
 // Subscribe implements backends.TopicBackend.
 // Subscribes to the topic (or a shared subscription when GroupID is set)
 // and returns the first message received.
-func (a *TopicAdapter) Subscribe(_ context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
+func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	topic := opts.Topic
 	if opts.GroupID != "" {
 		topic = "$share/" + opts.GroupID + "/" + opts.Topic
@@ -73,7 +73,7 @@ func (a *TopicAdapter) Subscribe(_ context.Context, opts backends.SubscribeOptio
 	}
 	defer a.client.Unsubscribe(topic) //nolint:errcheck
 
-	return waitForMessage(msgCh, opts.Timeout, opts.Wait)
+	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait)
 }
 
 // Close implements backends.TopicBackend.

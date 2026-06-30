@@ -86,6 +86,7 @@ func doBridgeQueue(cmd *cobra.Command, args []string, backend backends.QueueBack
 	defer cancel()
 
 	st, stopStats := startForwardStats(statsOn, errw)
+	defer stopStats()
 
 	proc, stdinPipe, err := startTargetProcess(ctx, target, out, errw)
 	if err != nil {
@@ -135,7 +136,6 @@ func doBridgeQueue(cmd *cobra.Command, args []string, backend backends.QueueBack
 		}
 	}
 
-	stopStats()
 	return summarizeForward(out, bridged, source, target)
 }
 
@@ -166,6 +166,7 @@ func doBridgeTopic(cmd *cobra.Command, args []string, backend backends.TopicBack
 	defer cancel()
 
 	st, stopStats := startForwardStats(statsOn, errw)
+	defer stopStats()
 
 	proc, stdinPipe, err := startTargetProcess(ctx, target, out, errw)
 	if err != nil {
@@ -210,7 +211,6 @@ func doBridgeTopic(cmd *cobra.Command, args []string, backend backends.TopicBack
 		}
 	}
 
-	stopStats()
 	return summarizeForward(out, bridged, source, target)
 }
 

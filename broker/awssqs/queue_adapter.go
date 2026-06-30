@@ -4,6 +4,7 @@ package awssqs
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -83,6 +84,11 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 }
 
 func (a *QueueAdapter) Close() error {
+	if a.sqsc != nil {
+		if hc, ok := a.sqsc.Options().HTTPClient.(*http.Client); ok && hc != nil {
+			hc.CloseIdleConnections()
+		}
+	}
 	return nil
 }
 

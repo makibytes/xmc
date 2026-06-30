@@ -4,12 +4,16 @@ package artemis
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/go-amqp"
 
 	"github.com/makibytes/xmc/log"
 )
+
+var nextLinkID atomic.Uint64
 
 func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments) error {
 	log.Verbose("🏗️  constructing message...")
@@ -66,7 +70,7 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 		SourceAddress:      args.Address,
 		TargetCapabilities: targetCapabilities,
 		TargetDurability:   durability,
-		Name:               "amc",
+		Name:               fmt.Sprintf("amc-%d", nextLinkID.Add(1)),
 	}
 
 	log.Verbose("📤 generating sender...")

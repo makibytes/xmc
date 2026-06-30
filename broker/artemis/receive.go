@@ -3,13 +3,16 @@
 package artemis
 
 import (
+	"context"
+
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/broker/amqpcommon"
 	"github.com/makibytes/xmc/log"
 )
 
-// ReceiveMessage receives a message from Artemis with routing-specific capabilities
-func ReceiveMessage(session *amqp.Session, args ReceiveArguments) (*amqp.Message, error) {
+// ReceiveMessage receives a message from Artemis with routing-specific capabilities.
+// The caller's ctx is honoured for cancellation (Ctrl-C / Esc).
+func ReceiveMessage(ctx context.Context, session *amqp.Session, args ReceiveArguments) (*amqp.Message, error) {
 	var sourceCapabilities []string
 	if args.Multicast {
 		sourceCapabilities = append(sourceCapabilities, "topic")
@@ -19,7 +22,7 @@ func ReceiveMessage(session *amqp.Session, args ReceiveArguments) (*amqp.Message
 		log.Verbose("with ANYCAST routing")
 	}
 
-	return amqpcommon.ReceiveMessage(session, amqpcommon.ReceiveOptions{
+	return amqpcommon.ReceiveMessage(ctx, session, amqpcommon.ReceiveOptions{
 		Queue:               args.Queue,
 		Timeout:             args.Timeout,
 		Wait:                args.Wait,

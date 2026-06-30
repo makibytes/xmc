@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -83,7 +84,7 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 			errors.Is(err, context.DeadlineExceeded),
 			errors.Is(err, backends.ErrNoMessageAvailable),
 			message == nil && err == nil:
-			return summarizeMove(moved, source, destination)
+			return summarizeMove(cmd.OutOrStdout(), moved, source, destination)
 		case err != nil:
 			return err
 		}
@@ -115,10 +116,10 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 		}
 	}
 
-	return summarizeMove(moved, source, destination)
+	return summarizeMove(cmd.OutOrStdout(), moved, source, destination)
 }
 
-func summarizeMove(moved int, source, destination string) error {
-	fmt.Printf("Moved %d message(s) from %s to %s\n", moved, source, destination)
-	return nil
+func summarizeMove(w io.Writer, moved int, source, destination string) error {
+	_, err := fmt.Fprintf(w, "Moved %d message(s) from %s to %s\n", moved, source, destination)
+	return err
 }

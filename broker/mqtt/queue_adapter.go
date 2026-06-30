@@ -32,14 +32,19 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 
 // Send implements backends.QueueBackend.
 // It publishes the message to topic "queue/{queue-name}" with the configured QoS.
-func (a *QueueAdapter) Send(_ context.Context, opts backends.SendOptions) error {
+func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	topic := queueTopicPrefix + opts.Queue
 	qos := byte(1)
 	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
 		qos = byte(v)
 	}
 	token := a.client.Publish(topic, qos, false, opts.Message)
-	token.Wait()
+	if !token.WaitTimeout(30 * time.Second) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("MQTT publish to %q timed out", topic)
+	}
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("MQTT publish to %q: %w", topic, err)
 	}
@@ -50,7 +55,7 @@ func (a *QueueAdapter) Send(_ context.Context, opts backends.SendOptions) error 
 // It subscribes to "$share/xmc/queue/{queue-name}" (shared subscription) for
 // a destructive read, or to "queue/{queue-name}" with a fresh session for a
 // peek (Acknowledge=false). Returns one message then unsubscribes.
-func (a *QueueAdapter) Receive(_ context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
+func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	var topic string
 	var client pahomqtt.Client
 
@@ -95,7 +100,7 @@ func (a *QueueAdapter) Receive(_ context.Context, opts backends.ReceiveOptions) 
 	}
 	defer client.Unsubscribe(topic) //nolint:errcheck
 
-	return waitForMessage(msgCh, opts.Timeout, opts.Wait)
+	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait)
 }
 
 // Close implements backends.QueueBackend.
@@ -107,12 +112,14 @@ func (a *QueueAdapter) Close() error {
 // waitForMessage waits on msgCh respecting timeout/wait semantics, using the
 // shared TimeoutDuration helper so MQTT follows the same contract as all other
 // brokers.
-func waitForMessage(msgCh <-chan pahomqtt.Message, timeout float32, wait bool) (*backends.Message, error) {
+func waitForMessage(ctx context.Context, msgCh <-chan pahomqtt.Message, timeout float32, wait bool) (*backends.Message, error) {
 	dur := backends.TimeoutDuration(timeout, wait)
 
 	select {
 	case msg := <-msgCh:
 		return convertMessage(msg), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-time.After(dur):
 		return nil, backends.ErrNoMessageAvailable
 	}

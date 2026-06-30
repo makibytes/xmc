@@ -686,21 +686,22 @@ func TestDoWithRetry_NonRetryableStatusImmediate(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// 401 is non-retryable: doWithRetry returns the response for the caller to
-	// inspect; it does NOT return an error itself.
+	// 401 is non-retryable: doWithRetry returns a Permanent error wrapping
+	// the status and body for the caller to inspect.
 	resp, err := doWithRetry(context.Background(), func() (*http.Request, error) {
 		return http.NewRequestWithContext(context.Background(), "GET", srv.URL, nil)
 	})
-	if err != nil {
-		t.Fatalf("doWithRetry should not error for 401 (let caller decide): %v", err)
+	if err == nil {
+		t.Fatal("doWithRetry should error for 401")
+		resp.Body.Close()
+		return
 	}
-	resp.Body.Close()
 	// Handler must be called exactly once — no retries.
 	if calls != 1 {
 		t.Errorf("handler called %d times, want 1 (401 is non-retryable)", calls)
 	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", resp.StatusCode)
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Errorf("error = %v, want HTTP 401", err)
 	}
 }
 

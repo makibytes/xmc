@@ -70,6 +70,7 @@ func sortLabel(s sortMode, metrics []backends.Metric) string {
 type tokenMsg struct{ text string }                              // streamed token from AI
 type aiDoneMsg struct{ text string; usage TokenUsage; err error } // AI request completed
 type execDoneMsg struct{ err error; stdout, stderr string }       // command finished
+type sideActionMsg struct{ action string; err error }             // sidebar create/delete finished
 type setCancelMsg struct{ cancel context.CancelFunc }             // pass cancel from bg goroutine to model
 type modelsMsg struct{ models []string; err error }               // model listing result
 type objectsMsg struct {                                         // broker objects fetch result
@@ -230,8 +231,10 @@ type objWindow struct {
 	sel          int                   // selected index (in filtered+sorted view)
 	filter       string               // active case-insensitive substring filter
 	sortIdx      sortMode             // current sort mode
-	treeView  bool // hierarchical children shown (x to toggle)
-	collapsed bool // window collapsed to title only (Space to toggle)
+	treeView     bool                  // hierarchical children shown (x to toggle)
+	collapsed    bool                  // window collapsed to title only (Space to toggle)
+	createAction *ManageAction         // optional: 'c' hotkey creates this object type
+	deleteAction *ManageAction         // optional: 'd' hotkey deletes selected
 }
 
 // ---------- Model ----------
@@ -338,6 +341,12 @@ type aiTUIModel struct {
 	// Interactive picker state (for /model, /effort)
 	picker *pickerState
 
+	// Sidebar inline prompt for create/delete hotkeys
+	promptActive  bool   // true when awaiting input for create/delete
+	promptKind    string // "create" or "delete"
+	promptObjIdx  int    // index into objTypes
+	promptName    string // typed name (create) or object name (delete)
+
 	// Program reference (double pointer for Bubble Tea value copy)
 	program **tea.Program
 }
@@ -383,15 +392,18 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 
 	// Build sidebar windows from ManageSpec.Objects.
 	var windows []objWindow
-	if session != nil && session.spec.ManageSpec != nil {
-		for _, ot := range session.spec.ManageSpec.Objects {
-			windows = append(windows, objWindow{
-				label:        ot.Label,
-				hierarchical: ot.Hierarchical,
-				listFn:       ot.List,
-			})
+		if session != nil && session.spec.ManageSpec != nil {
+			for _, ot := range session.spec.ManageSpec.Objects {
+				c, d := session.spec.ManageSpec.SidebarActions(ot.Label)
+				windows = append(windows, objWindow{
+					label:        ot.Label,
+					hierarchical: ot.Hierarchical,
+					listFn:       ot.List,
+					createAction: c,
+					deleteAction: d,
+				})
+			}
 		}
-	}
 
 	// Build autocomplete tree (same as the regular shell).
 	var comp *readline.PrefixCompleter
@@ -530,6 +542,22 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case execDoneMsg:
 		return m.handleExecDone(msg)
 
+	case sideActionMsg:
+		if msg.err != nil {
+			m.appendTranscript(warnStyle.Render("✗ "+msg.err.Error()) + "\n\n")
+		} else if msg.action != "" {
+			m.appendTranscript(msg.action + "\n\n")
+		} else {
+			m.appendTranscript(histOkStyle.Render("✓ ok") + "\n\n")
+		}
+		if m.ai != nil && m.ai.autoUpdateObjects {
+			m.loadingObjects = true
+			cmds = append(cmds, m.startLoadObjects())
+		}
+		m.state = tuiIdle
+		m.input.Focus()
+		return m, tea.Batch(cmds...)
+
 	case setCancelMsg:
 		m.execCancel = msg.cancel
 		return m, nil
@@ -601,6 +629,11 @@ func (m aiTUIModel) View() string {
 	// ── Input area ──
 	inputView := m.input.View()
 
+	// ── Sidebar create/delete prompt overlay ──
+	if m.promptActive {
+		inputView = m.renderPromptLine()
+	}
+
 	// ── Status bar ──
 	statusBar := m.renderStatusBar()
 
@@ -664,6 +697,21 @@ func (m aiTUIModel) paneWidths() (convWidth, sideWidth int) {
 		convWidth = m.width - sideWidth - 3
 	}
 	return
+}
+
+// renderPromptLine renders the inline prompt for sidebar create/delete hotkeys.
+func (m aiTUIModel) renderPromptLine() string {
+	wi := m.promptObjIdx
+	if wi < 0 || wi >= len(m.objTypes) {
+		return ""
+	}
+	label := m.objTypes[wi].label
+	if m.promptKind == "create" {
+		prompt := fmt.Sprintf("Enter name for new %s: %s█", singular(label), m.promptName)
+		return infoStyle.Render(prompt)
+	}
+	prompt := fmt.Sprintf("Delete \"%s\"?  (Enter=confirm, Esc=cancel)", m.promptName)
+	return warnStyle.Render(prompt)
 }
 
 func (m aiTUIModel) renderMainContent() string {
@@ -981,8 +1029,15 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 
 	// Header.
 	headerText := glyph + fmt.Sprintf("%s (%d)", w.label, len(w.nodes))
+	if m.loadingObjects && w.nodes == nil {
+		headerText = glyph + w.label + " (…)"
+	}
 	if w.filter != "" {
-		headerText = glyph + fmt.Sprintf("%s (%d/%d)", w.label, len(items), len(w.nodes))
+		if m.loadingObjects && w.nodes == nil {
+			headerText = glyph + w.label + fmt.Sprintf(" (%d/…)", len(items))
+		} else {
+			headerText = glyph + fmt.Sprintf("%s (%d/%d)", w.label, len(items), len(w.nodes))
+		}
 	}
 	if w.sortIdx != sortByName && len(w.nodes) > 0 {
 		metrics := firstMetrics(w.nodes)
@@ -1205,10 +1260,21 @@ func (m aiTUIModel) renderStatusBar() string {
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" chat")
 		} else if m.focus != focusChat {
+			wi := int(m.focus) - 1
 			treeHint := ""
-			if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
+			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
 				treeHint = statusStyle.Render("  ") +
 					statusKeyStyle.Render("x") + statusStyle.Render(" tree")
+			}
+			createHint := ""
+			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].createAction != nil {
+				createHint = statusStyle.Render("  ") +
+					statusKeyStyle.Render("c") + statusStyle.Render(" create")
+			}
+			deleteHint := ""
+			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].deleteAction != nil {
+				deleteHint = statusStyle.Render("  ") +
+					statusKeyStyle.Render("d") + statusStyle.Render(" delete")
 			}
 			left = statusKeyStyle.Render("↑↓") + statusStyle.Render(" move") +
 				statusStyle.Render("  ") +
@@ -1216,6 +1282,8 @@ func (m aiTUIModel) renderStatusBar() string {
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("s") + statusStyle.Render(" sort") +
 				treeHint +
+				createHint +
+				deleteHint +
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Space") + statusStyle.Render(" collapse") +
 				statusStyle.Render("  ") +
@@ -1318,6 +1386,10 @@ func fmtTokens(n int) string {
 // ---------- Key handling ----------
 
 func (m aiTUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.promptActive {
+		return m.handleKeyPrompt(msg)
+	}
+
 	switch m.state {
 	case tuiIdle:
 		return m.handleKeyIdle(msg)
@@ -1760,7 +1832,6 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
 			m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "[command NOT executed — user wants to discuss or refine it before running]"})
 			m.input.SetValue("")
-			m.input.Placeholder = "Chat about the suggestion..."
 			m.state = tuiIdle
 			m.input.Focus()
 			(&m).updateInputHeight()
@@ -1877,6 +1948,54 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.objTypes[wi].treeView = !m.objTypes[wi].treeView
 			}
 			return m, nil
+		case "c":
+			if m.objTypes[wi].createAction != nil {
+				m.startPrompt("create", wi, "")
+			}
+			return m, nil
+		case "d":
+			name := m.selectedName()
+			if name != "" && m.objTypes[wi].deleteAction != nil {
+				m.startPrompt("delete", wi, name)
+			}
+			return m, nil
+		case "p":
+			name := m.selectedName()
+			if name == "" {
+				return m, nil
+			}
+			switch m.objTypes[wi].label {
+			case "Queues", "Streams":
+			default:
+				return m, nil
+			}
+			desc := fmt.Sprintf("▶ peek %s \"%s\"", singular(m.objTypes[wi].label), name)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.state = tuiExecuting
+			// capture by value
+			queue := name
+			return m, func() tea.Msg {
+				qa, err := m.session.getQueueAdapter()
+				if err != nil {
+					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				msg, err := qa.Receive(ctx, backends.ReceiveOptions{
+					Queue:       queue,
+					Acknowledge: false,
+					Timeout:     1,
+					Wait:        false,
+				})
+				if err != nil {
+					if errors.Is(err, backends.ErrNoMessageAvailable) {
+						return sideActionMsg{action: "   └ (no messages available)"}
+					}
+					return sideActionMsg{err: err}
+				}
+				result := formatPeekMessage(msg)
+				return sideActionMsg{action: result}
+			}
 		}
 	}
 	return m, nil
@@ -1910,6 +2029,119 @@ func (m aiTUIModel) handleKeyFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// ---------- Sidebar create/delete prompt ----------
+
+func (m *aiTUIModel) startPrompt(kind string, objIdx int, name string) {
+	m.promptActive = true
+	m.promptKind = kind
+	m.promptObjIdx = objIdx
+	m.promptName = name
+	m.input.Blur()
+}
+
+func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	wi := m.promptObjIdx
+	if wi < 0 || wi >= len(m.objTypes) {
+		m.promptActive = false
+		m.input.Focus()
+		return m, nil
+	}
+	ow := &m.objTypes[wi]
+
+	switch m.promptKind {
+	case "create":
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.promptActive = false
+			m.input.Focus()
+			return m, nil
+		case tea.KeyEnter:
+			name := strings.TrimSpace(m.promptName)
+			if name == "" {
+				return m, nil
+			}
+			action := ow.createAction
+			if action == nil {
+				m.promptActive = false
+				m.input.Focus()
+				return m, nil
+			}
+			desc := fmt.Sprintf("▶ create %s \"%s\"", singular(ow.label), name)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.promptActive = false
+			initManageAction(action)
+			m.state = tuiExecuting
+			return m, func() tea.Msg {
+				err := action.Run(name)
+				return sideActionMsg{err: err}
+			}
+		case tea.KeyBackspace:
+			if len(m.promptName) > 0 {
+				m.promptName = m.promptName[:len(m.promptName)-1]
+			}
+			return m, nil
+		case tea.KeyRunes:
+			m.promptName += msg.String()
+			return m, nil
+		}
+
+	case "delete":
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.promptActive = false
+			m.input.Focus()
+			return m, nil
+		case tea.KeyEnter:
+			action := ow.deleteAction
+			if action == nil {
+				m.promptActive = false
+				m.input.Focus()
+				return m, nil
+			}
+			desc := fmt.Sprintf("▶ delete %s \"%s\"", singular(ow.label), m.promptName)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.promptActive = false
+			initManageAction(action)
+			m.state = tuiExecuting
+			return m, func() tea.Msg {
+				err := action.Run(m.promptName)
+				return sideActionMsg{err: err}
+			}
+		}
+	}
+	return m, nil
+}
+
+// singular strips a trailing "s" from a plural label for display purposes
+// (e.g. "Queues" → "Queue", "Addresses" → "Addresse" — imperfect but good enough).
+func singular(label string) string {
+	if label == "Addresses" {
+		return "Address"
+	}
+	return strings.TrimSuffix(label, "s")
+}
+
+// initManageAction calls SetupFlags on a throwaway command to initialise
+// default flag-bound variables before calling Run.
+func initManageAction(a *ManageAction) {
+	if a == nil || a.SetupFlags == nil {
+		return
+	}
+	a.SetupFlags(&cobra.Command{})
+}
+
+// formatPeekMessage formats a peeked message payload for display in the TUI transcript.
+func formatPeekMessage(msg *backends.Message) string {
+	if len(msg.Data) == 0 {
+		return ""
+	}
+	payload := strings.TrimRight(string(msg.Data), "\n\r\t ")
+	if len(payload) > 255 {
+		payload = payload[:255] + "..."
+	}
+	return payload + "\n"
 }
 
 func (m aiTUIModel) handleKeyExecuting(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

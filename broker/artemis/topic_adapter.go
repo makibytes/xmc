@@ -75,7 +75,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		Wait:                opts.Wait,
 	}
 
-	message, err := ReceiveMessage(a.session, args)
+	message, err := ReceiveMessage(ctx, a.session, args)
 	if err != nil {
 		return nil, err
 	}

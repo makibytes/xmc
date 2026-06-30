@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -164,6 +165,7 @@ func coalesceStages(stages []pipelineStage) []pipelineBlock {
 // verbs in-process.
 type shellSession struct {
 	spec         BrokerSpec
+	mu           sync.Mutex
 	queueAdapter backends.QueueBackend
 	topicAdapter backends.TopicBackend
 	queueFactory QueueAdapterFactory
@@ -172,6 +174,8 @@ type shellSession struct {
 }
 
 func (s *shellSession) getQueueAdapter() (backends.QueueBackend, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.queueAdapter != nil {
 		return s.queueAdapter, nil
 	}
@@ -187,6 +191,8 @@ func (s *shellSession) getQueueAdapter() (backends.QueueBackend, error) {
 }
 
 func (s *shellSession) getTopicAdapter() (backends.TopicBackend, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.topicAdapter != nil {
 		return s.topicAdapter, nil
 	}
@@ -202,6 +208,8 @@ func (s *shellSession) getTopicAdapter() (backends.TopicBackend, error) {
 }
 
 func (s *shellSession) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.queueAdapter != nil {
 		s.queueAdapter.Close()
 		s.queueAdapter = nil
@@ -255,7 +263,7 @@ func (s *shellSession) runOnePipeline(ctx context.Context, line string, rootCmd 
 	}
 
 	// Multi-block pipeline: wire up os.Pipe between blocks.
-	g := new(errgroup.Group)
+	g, ctx := errgroup.WithContext(ctx)
 	var prevReader io.Reader = in
 
 	for i, block := range blocks {

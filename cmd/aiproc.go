@@ -99,6 +99,7 @@ var backgroundVerbs = map[string]bool{
 	"peek":      true,
 	"forward":   true,
 	"bridge":    true,
+	"reply":     true,
 }
 
 // processName returns a short display name: verb + first positional (non-flag) arg.

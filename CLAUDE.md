@@ -93,7 +93,7 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 - `cmd/pipeline.go` - pipeline parser/executor: split, classify verb vs external, coalesce, wire `os.Pipe`, run via `errgroup`; semicolon-separated commands run sequentially (stop on first error)
 - `cmd/reconnect.go` - `reconnectingQueue`/`reconnectingTopic` wrappers with capped exponential backoff (`cenkalti/backoff/v4`); `isConnectionError` classifies errors so only genuine transport failures trigger reconnect
 - `cmd/ai.go` - `aiSession`, conversation history, predicates (`isDestructive`, `mutatesObjects`, `mutatesMessages`, `isManageList`), feedback loop, topology refresh
-- `cmd/aitui.go` - Full-screen Bubble Tea TUI for AI shell: viewport (scrollable transcript), dual-mode input (`ask>` AI / `<binary>>` direct command, toggled with Esc), Tab autocomplete (reuses shell completer), Up/Down history recall (shared shell history file), spinner, streaming tokens, propose/edit/execute flow, auto-fix on error (re-proposes corrected command up to `maxFixAttempts`), N-window sidebar with per-broker object types (Shift+Tab browse, filter/sort/Space expand), inline command cards, connection probe with title-bar URL colouring
+- `cmd/aitui.go` - Full-screen Bubble Tea TUI for AI shell: viewport (scrollable transcript), dual-mode input (`ask>` AI / `<binary>>` direct command, toggled with Esc), Tab autocomplete (reuses shell completer), Up/Down history recall (shared shell history file), spinner, streaming tokens, propose/edit/execute flow, auto-fix on error (re-proposes corrected command up to `maxFixAttempts`), N-window sidebar with per-broker object types (Shift+Tab browse, `c` create, `d` delete, `p` peek, `/` filter, `s` sort, `Space` collapse, `x` tree-toggle, `r` refresh), inline command cards, connection probe with title-bar URL colouring
 - `cmd/aiclient.go` - `aiClient` interface + provider implementations (Anthropic, OpenAI-compatible, Gemini) via stdlib `net/http`
 - `cmd/aiconfig.go` - YAML config loading (`~/.xmc/<binary>.yml`), AI provider resolution with precedence order, `auto-update-objects`/`auto-update-messages` sidebar refresh config
 - `cmd/aiprompt.go` - `buildCapabilities` (walks cobra tree), `systemPrompt` (strict syntax rules for the AI, pipeline framing, NDJSON schema), `extractCommand` (strips binary prefixes like `./rmc`, `rmc`, `xmc` so commands run in-process); broker-specific documentation is embedded from `docs/<broker>.md` via `broker.AIDoc()` into the system prompt — keep these compact (token-efficient reference cards, not tutorials)
@@ -107,7 +107,7 @@ Uses `spf13/cobra` for CLI:
 - Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`, `forward`, `bridge`
 - Topic commands: `publish`, `subscribe` (Kafka also has topic `forward`; topic-capable brokers also have topic `bridge`)
 - Interactive: `shell`/`sh` (REPL with persistent connection, pipelines, auto-reconnect, deep autocomplete)
-- AI shell: `ai` (standalone command — full-screen Bubble Tea TUI with natural-language → xmc command translation via LLM; dual input mode: `ask>` for AI prompts and `<binary>>` for direct xmc commands, toggled with Esc; Tab autocomplete in command mode; Up/Down history recall; connection probe with title-bar URL; N-window broker-object sidebar with Shift+Tab browse; inline command cards; shared shell history; quit via `/exit` or Ctrl+C)
+- AI shell: `ai` (standalone command — full-screen Bubble Tea TUI with natural-language → xmc command translation via LLM; dual input mode: `ask>` for AI prompts and `<binary>>` for direct xmc commands, toggled with Esc; Tab autocomplete in command mode; Up/Down history recall; connection probe with title-bar URL; N-window broker-object sidebar with Shift+Tab browse, `c`/`d`/`p` hotkeys (`p` peeks selected queue without confirmation); inline command cards; shared shell history; quit via `/exit` or Ctrl+C)
 - Configuration: `~/.xmc/<binary>.yml` YAML config for AI settings, broker-auth fallback (flag > env > YAML > default), sidebar auto-refresh (`auto-update-objects`, `auto-update-messages` — both default true), and command aliases (`aliases:` map with `$1`/`$2`/`$@` substitution)
 - History: shared readline history per binary (`<binary>-sh.log` in `~/.xmc/`; AI-executed commands are appended to the same file)
 - Connectivity: `ping` (all brokers; connects and reports reachability)
@@ -116,7 +116,7 @@ Uses `spf13/cobra` for CLI:
 - Management commands: `manage list`, `manage purge`, `manage stats`, `manage create-queue`, `manage delete-queue`, `manage create-topic`, `manage delete-topic`, `manage create-exchange`, `manage delete-exchange`, `manage bind-queue`, `manage unbind-queue`
 - Output: `-J` JSON, `-F`/`--format` template, or `--ndjson` lossless records, shared across read commands
 - Bulk/load: `-l`/`--lines`, `--ndjson` (input), `-n`/`--count` repeat, `--rate` throttle on send/publish; `-n 0` drains on read commands
-- Streaming: `forward` (continuous relay, optional `-x`/`--command` shell command), `bridge` (cross-broker relay via subprocess NDJSON streaming, `--to '<target command>'`), `--for <duration>` (time-bounded), `--stats` (live throughput) on read commands, `forward`, and `bridge`
+- Streaming: `forward` (continuous relay, optional `-x`/`--command` shell command), `bridge` (cross-broker relay via subprocess NDJSON streaming, `--to '<target command>'`), `--for <duration>` (time-bounded), `--stats` (live throughput) on read commands, `forward`, `bridge`, and `reply`
 - Connection parameters apply globally across all commands
 
 ### Message Handling
@@ -142,7 +142,7 @@ All brokers support TLS via persistent flags (`--tls`, `--ca-cert`, `--cert`, `-
 
 ### Management APIs
 
-Each broker uses its native management API. Object types listed via `ManageSpec.Objects` appear as sidebar windows in AI shell:
+Each broker uses its native management API. Object types listed via `ManageSpec.Objects` appear as sidebar windows in AI shell (sidebar hotkeys: `c` create, `d` delete, `p` peek, `/` filter, `s` sort, `x` tree-toggle, `Space` collapse, `r` refresh):
 - **Artemis**: Jolokia REST API (HTTP port 8161) — queues, addresses; purge, stats, create/delete queue, create/delete topic
 - **RabbitMQ**: RabbitMQ Management API (HTTP port 15672) — queues, exchanges (hierarchical: exchange→binding→queue); purge, stats, create/delete queue, create/delete exchange, bind/unbind queue
 - **Kafka**: Admin client via `segmentio/kafka-go` — topics (partitions), consumer groups; create/delete topic (with `--partitions`, `--replication-factor`, `--config`)

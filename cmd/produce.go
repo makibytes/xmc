@@ -119,6 +119,9 @@ func runProduce(ctx context.Context, input io.Reader, args []string, pf produceF
 	}
 
 	for i := 0; i < pf.count; i++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		pf.limiter.wait()
 		if err := emit(ctx, data); err != nil {
 			return err
