@@ -21,7 +21,6 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 	"github.com/muesli/reflow/wordwrap"
-	"github.com/muesli/reflow/wrap"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -2611,7 +2610,7 @@ func (m *aiTUIModel) setViewportContent() {
 		content += "\n\n"
 	}
 	if w := m.viewport.Width; w > 0 {
-		content = wrap.String(wordwrap.String(content, w), w)
+		content = wordwrap.String(content, w)
 	}
 	// Cache the wrapped lines for click-to-copy ⧉ detection.
 	m.wrappedContentLines = strings.Split(content, "\n")

@@ -80,7 +80,7 @@ xmc send -n 100000 --rate 5000 <queue> hi     # load test: 100k messages at 5000
 
 Flags:
 
-```
+```text
   -T, --content-type string    MIME type (default "text/plain")
   -C, --correlation-id string  correlation ID
   -I, --message-id string      message ID
@@ -115,7 +115,7 @@ xmc receive -S "color='red'" <queue>  # filter by selector
 
 Flags:
 
-```
+```text
   -t, --timeout duration   time to wait, e.g. "100ms" (default 100ms)
   -w, --wait               wait endlessly for a message
   -q, --quiet              show data only, suppress properties
@@ -151,7 +151,7 @@ xmc request -J <queue> <message>   # output reply as JSON
 
 Flags:
 
-```
+```text
   -R, --reply-to string    reply queue (default "xmc.reply")
   -t, --timeout duration   time to wait for the reply, e.g. "30s" (default 30s)
   -J, --json               output reply as JSON
@@ -173,7 +173,7 @@ xmc reply -n 1 <queue> "pong"           # serve a single request, then exit
 
 Flags:
 
-```
+```text
   -e, --echo                 echo the request payload back as the response
   -x, --command string       run a shell command per request; its stdout is the reply
   -R, --reply-to string      fallback reply destination if a request carries no reply-to
@@ -202,7 +202,7 @@ xmc move -S "attempts > 3" dlq orders     # move only matching messages
 
 Flags:
 
-```
+```text
   -n, --count int          maximum messages to move (0 = all available)
   -S, --selector string    only move messages matching the selector
   -t, --timeout duration   time to wait for the next source message (default 100ms)
@@ -232,7 +232,7 @@ xmc forward --stats orders mirror               # show live throughput on stderr
 
 Flags:
 
-```
+```text
   -x, --command string     pipe each message through a shell command; its stdout is forwarded
   -n, --count int          maximum messages to forward (0 = until interrupted)
   -t, --timeout duration   time to wait for the next source message per poll (default 100ms)
@@ -260,7 +260,7 @@ xmc publish -n 100 <topic> <message>   # publish 100 times
 
 Same flags as `send`, plus:
 
-```
+```text
   -K, --key string         message key for partitioning (Kafka)
 ```
 
@@ -277,7 +277,7 @@ xmc subscribe -S "type='order'" <topic>  # with selector
 
 Same flags as `receive`, plus:
 
-```
+```text
   -g, --group string       consumer group ID (default "xmc-consumer-group")
   -D, --durable            create a durable subscription
 ```
@@ -388,7 +388,7 @@ xmc subscribe -F "tenant=%p{tenant} body=%s\n" events
 
 Format tokens:
 
-```
+```text
   %s        message payload (data)
   %S        payload length in bytes
   %i        message ID
@@ -456,7 +456,7 @@ xmc ping -n 5             # five attempts, one per second
 xmc ping -n 0 -i 2        # keep pinging every 2s until interrupted
 ```
 
-```
+```text
   -n, --count int          number of attempts (0 = until interrupted, default 1)
   -i, --interval duration  time between attempts, e.g. "500ms" (default 1s)
 ```
@@ -569,21 +569,30 @@ The AI Shell has two input modes, toggled with **Esc**:
   **Tab** autocomplete. Useful when you already know the command and want to
   stay in the same TUI.
 
+In `xmc>` mode, destructive commands are guarded by default: instead of running
+immediately, they first open the same proposal/confirm step used by AI output.
+Use `/guard off` to bypass this safety gate and `/guard on` to re-enable it.
+
 The right side of the screen shows a sidebar with your broker's objects (queues,
 topics, exchanges) and their message counts, refreshed automatically in the
 background.
 
 Key bindings:
 
-```
+```text
 Esc          toggle between ask> (AI) and xmc> (command) mode
 Enter        execute the proposed command
 Ctrl+C       discard the proposal / cancel thinking
-Tab          autocomplete (command mode)
-Shift+Tab    browse broker objects in the sidebar
-Up/Down      recall command history
+Tab          autocomplete (command mode) · browse sidebar forward (AI mode)
+Shift+Tab    browse sidebar backward
+Up/Down      recall mode-specific history
 PgUp/PgDn    scroll conversation
 ```
+
+History behavior is shared and persistent:
+
+- Commands executed in shell and AI command mode are written to `~/.xmc/<binary>-sh.log`.
+- AI asks entered in `ask>` mode are stored separately (`~/.xmc/<binary>-ask.log`).
 
 ### Slash Commands
 
@@ -594,12 +603,27 @@ Inside AI Shell, these slash commands are available:
 | `/model` | Pick a model interactively from the provider's model list |
 | `/model <name>` | Switch to a specific model directly (persisted to config) |
 | `/effort low\|med\|high` | Set reasoning effort (temperature) |
+| `/guard` | Show command-mode destructive guard state |
+| `/guard on\|off` | Enable/disable destructive guard in command mode |
 | `/refresh` | Reload broker objects now (one-shot) |
 | `/refresh <dur>` | Set the periodic refresh interval (e.g. `3s`, `3m`; minimum `1s`; persisted to config) |
 | `/refresh off` | Disable periodic sidebar refresh |
 | `/reset` | Clear conversation history |
 | `/clear` | Clear the display |
 | `/exit` | Quit |
+
+Effort to temperature mapping:
+
+- `low` → `0.0`
+- `medium` → `0.3`
+- `high` → `0.7`
+
+Refresh behavior combines periodic and event-driven updates:
+
+- Periodic: controlled by `/refresh` and `ai.refresh-interval`.
+- Event-driven: object/message windows refresh after successful mutation commands
+  when `ai.auto-update-objects` and/or `ai.auto-update-messages` are enabled.
+  Both flags default to `true`.
 
 ## Config File
 
@@ -622,6 +646,20 @@ select the specific provider and model xmc should use:
 ai:
   provider: opencode
   model: mimo-v2.5-free
+```
+
+Provider selection precedence is:
+
+1. If `ai.provider` is set in YAML, that provider is required.
+2. Otherwise, xmc picks the first provider with a present API key in this order:
+   Anthropic, OpenAI, Gemini, xAI, DeepSeek, Mistral, OpenCode.
+
+AI shell aliases are also supported via YAML and are available in both shell and AI command mode:
+
+```yaml
+aliases:
+  qstat: manage stats $1
+  resend: receive $1 -n $2 --ndjson | send $1 --ndjson
 ```
 
 ### Version
