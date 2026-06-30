@@ -7,6 +7,8 @@
 
 Tired of the nitty-gritty differences between message brokers? This project provides a unified command-line interface (CLI) for 11 popular message and streaming brokers. There's a specific binary for each broker, but they all share the same command-line interface. Learn it once, use it with any broker! And thanks to [AI](#ai-shell) you just can talk to XMC in natural language now.
 
+[![asciicast](https://asciinema.org/a/X8fB1iVDKeuDmC1l.svg)](https://asciinema.org/a/X8fB1iVDKeuDmC1l)
+
 ## Supported Brokers and Protocols
 
 | Guide | Binary | Broker | Protocol |
