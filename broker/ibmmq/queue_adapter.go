@@ -93,12 +93,12 @@ func convertMQMDToBackendMessage(md *ibmmq.MQMD, data []byte, msgHandle ibmmq.MQ
 	// Extract message metadata
 	msgId := strings.TrimRight(string(md.MsgId[:]), "\x00")
 	if msgId != "" {
-		result.MessageID = fmt.Sprintf("%x", md.MsgId)
+		result.MessageID = msgId
 	}
 
 	correlId := strings.TrimRight(string(md.CorrelId[:]), "\x00")
 	if correlId != "" {
-		result.CorrelationID = fmt.Sprintf("%x", md.CorrelId)
+		result.CorrelationID = correlId
 	}
 
 	if md.ReplyToQ != "" {

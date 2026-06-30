@@ -5,17 +5,11 @@ package artemis
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
-	"github.com/makibytes/xmc/log"
 )
-
-var mgmtHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // ManagementArgs holds parameters for Artemis management operations
 type ManagementArgs struct {
@@ -46,37 +40,6 @@ func jolokiaURL(amqpServer string) (string, error) {
 	return fmt.Sprintf("http://%s:8161/console/jolokia", host), nil
 }
 
-func jolokiaGet(baseURL, path, user, password string) ([]byte, error) {
-	fullURL := baseURL + path
-	log.Verbose("requesting %s", fullURL)
-
-	req, err := http.NewRequest("GET", fullURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	if user != "" {
-		req.SetBasicAuth(user, password)
-	}
-	req.Header.Set("Origin", baseURL)
-
-	resp, err := mgmtHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("management API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("management API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return body, nil
-}
-
 // ListQueues lists all queues via Jolokia
 func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
 	base, err := jolokiaURL(args.Server)
@@ -86,11 +49,11 @@ func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
 
 	// Query for all queue MBeans (broker=* matches any broker name)
 	path := "/read/org.apache.activemq.artemis:broker=*,component=addresses,address=*,subcomponent=queues,routing-type=%22anycast%22,queue=*"
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		// Try alternative: search for queue names
 		path = "/search/org.apache.activemq.artemis:broker=*,component=addresses,address=*,subcomponent=queues,routing-type=*,queue=*"
-		body, err = jolokiaGet(base, path, args.User, args.Password)
+		body, err = backends.MgmtGet(base+path, args.User, args.Password)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +108,7 @@ func PurgeQueue(args ManagementArgs, queue string) (int64, error) {
 
 	// Exec removeAllMessages operation
 	path := fmt.Sprintf("/exec/org.apache.activemq.artemis:broker=%s,component=addresses,address=%%22%s%%22,subcomponent=queues,routing-type=%%22anycast%%22,queue=%%22%s%%22/removeAllMessages()", args.brokerMBean(), queue, queue)
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		return 0, err
 	}
@@ -168,7 +131,7 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 	}
 
 	path := fmt.Sprintf("/read/org.apache.activemq.artemis:broker=%s,component=addresses,address=%%22%s%%22,subcomponent=queues,routing-type=%%22anycast%%22,queue=%%22%s%%22", args.brokerMBean(), queue, queue)
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +171,7 @@ func CreateQueue(args ManagementArgs, queue string) error {
 	path := fmt.Sprintf(
 		"/exec/org.apache.activemq.artemis:broker=%s/createQueue(java.lang.String,java.lang.String,java.lang.String)/%s/%s/ANYCAST",
 		args.brokerMBean(), url.PathEscape(queue), url.PathEscape(queue))
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		return err
 	}
@@ -227,7 +190,7 @@ func DeleteQueue(args ManagementArgs, queue string) error {
 	path := fmt.Sprintf(
 		"/exec/org.apache.activemq.artemis:broker=%s/destroyQueue(java.lang.String,boolean,boolean)/%s/true/true",
 		args.brokerMBean(), url.PathEscape(queue))
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		return err
 	}
@@ -258,7 +221,7 @@ func CreateAddress(args ManagementArgs, name, routingType string) error {
 	path := fmt.Sprintf(
 		"/exec/org.apache.activemq.artemis:broker=%s/createAddress(java.lang.String,java.lang.String)/%s/%s",
 		args.brokerMBean(), url.PathEscape(name), url.PathEscape(routingType))
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		return err
 	}
@@ -274,7 +237,7 @@ func DeleteAddress(args ManagementArgs, name string) error {
 	path := fmt.Sprintf(
 		"/exec/org.apache.activemq.artemis:broker=%s/deleteAddress(java.lang.String,boolean)/%s/true",
 		args.brokerMBean(), url.PathEscape(name))
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		return err
 	}
@@ -290,11 +253,11 @@ func ListAddresses(args ManagementArgs) ([]backends.ObjectNode, error) {
 
 	// Search for all address MBeans.
 	path := "/read/org.apache.activemq.artemis:broker=*,component=addresses,address=*"
-	body, err := jolokiaGet(base, path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+path, args.User, args.Password)
 	if err != nil {
 		// Fall back to search.
 		path = "/search/org.apache.activemq.artemis:broker=*,component=addresses,address=*"
-		body, err = jolokiaGet(base, path, args.User, args.Password)
+		body, err = backends.MgmtGet(base+path, args.User, args.Password)
 		if err != nil {
 			return nil, err
 		}

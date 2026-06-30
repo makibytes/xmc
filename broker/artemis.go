@@ -52,11 +52,7 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("AMC_USER"), "Username for SASL PLAIN login")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("AMC_PASSWORD"), "Password for SASL PLAIN login")
 			c.PersistentFlags().StringVar(&brokerName, "broker-name", "", "Artemis broker name for Jolokia management")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Queue: func() (backends.QueueBackend, error) { return artemis.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return artemis.NewTopicAdapter(connArgs) },

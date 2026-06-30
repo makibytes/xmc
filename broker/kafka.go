@@ -51,11 +51,7 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL (kafka://broker1:9092 or kafka://broker1:9092,broker2:9092)")
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("KMC_USER"), "Username for SASL authentication")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("KMC_PASSWORD"), "Password for SASL authentication")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Topic: topicFactory,
 		Ping:  func() (cmd.Closeable, error) { return kafka.NewTopicAdapter(connArgs) },

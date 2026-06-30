@@ -7,20 +7,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/tlsutil"
 	natsclient "github.com/nats-io/nats.go"
 )
 
-// ConnArguments holds parameters for establishing a NATS connection.
-type ConnArguments struct {
-	Server   string
-	User     string
-	Password string
-	TLS      TLSConfig
-}
-
-// TLSConfig is an alias for the shared TLS configuration.
-type TLSConfig = tlsutil.TLSConfig
+type ConnArguments = backends.CommonConnArgs
 
 // Connect creates and returns a NATS connection with automatic reconnect
 // enabled. The client library will transparently re-establish the connection

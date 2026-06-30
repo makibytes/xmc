@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -509,11 +510,7 @@ func expandAlias(line string, aliases map[string]string) string {
 				j++
 			}
 			if j > i+1 {
-				idx, _ := strings.CutPrefix(tmpl[i+1:j], "")
-				n := 0
-				for _, ch := range idx {
-					n = n*10 + int(ch-'0')
-				}
+				n, _ := strconv.Atoi(tmpl[i+1:j])
 				if n >= 1 && n <= len(args) {
 					result.WriteString(args[n-1])
 				}

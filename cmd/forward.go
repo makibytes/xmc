@@ -91,24 +91,18 @@ func doForwardQueue(cmd *cobra.Command, args []string, backend backends.QueueBac
 	count, _ := cmd.Flags().GetInt("count")
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
-	statsOn, _ := cmd.Flags().GetBool("stats")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
-	}
-	if forever {
-		duration = 0
 	}
 
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := streamContext(duration, cmd.Context())
+	ctx, cancel := streamContext(sf.Duration, cmd.Context())
 	defer cancel()
-	st, stopStats := startForwardStats(statsOn, errw)
+	st, stopStats := startForwardStats(sf.Stats, errw)
 	defer stopStats()
 
 	forwarded := 0
@@ -179,24 +173,18 @@ func doForwardTopic(cmd *cobra.Command, args []string, backend backends.TopicBac
 	count, _ := cmd.Flags().GetInt("count")
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
-	statsOn, _ := cmd.Flags().GetBool("stats")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
-	}
-	if forever {
-		duration = 0
 	}
 
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := streamContext(duration, cmd.Context())
+	ctx, cancel := streamContext(sf.Duration, cmd.Context())
 	defer cancel()
-	st, stopStats := startForwardStats(statsOn, errw)
+	st, stopStats := startForwardStats(sf.Stats, errw)
 	defer stopStats()
 
 	forwarded := 0

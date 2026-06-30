@@ -185,9 +185,12 @@ func isDrainCommand(command string) bool {
 	if !matchesVerb {
 		return false
 	}
-	// Look for -n 0 or --count 0 anywhere in the command.
+	// Look for -n 0, -n0, --count 0, or --count=0 anywhere in the command.
 	fields := strings.Fields(lower)
 	for i, f := range fields {
+		if f == "--count=0" || f == "-n0" {
+			return true
+		}
 		if (f == "-n" || f == "--count") && i+1 < len(fields) && fields[i+1] == "0" {
 			return true
 		}

@@ -252,7 +252,7 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 	m.input.Focus()
 
 	// Write to shell history so the command is available via Up/Down recall.
-	appendShellHistory(command)
+	shellHistory.Append(command)
 
 	// Append a dim note below the echo line (echo written by caller).
 	m.appendTranscript(dimStyle.Render("↳ started background process: "+p.name) + "\n\n")

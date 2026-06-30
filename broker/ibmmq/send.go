@@ -34,9 +34,15 @@ func SendMessage(qMgr ibmmq.MQQueueManager, args SendArguments) error {
 
 	// Set message properties
 	if args.MessageID != "" {
+		if len(args.MessageID) > 24 {
+			return fmt.Errorf("message ID must be at most 24 bytes, got %d", len(args.MessageID))
+		}
 		copy(md.MsgId[:], []byte(args.MessageID))
 	}
 	if args.CorrelationID != "" {
+		if len(args.CorrelationID) > 24 {
+			return fmt.Errorf("correlation ID must be at most 24 bytes, got %d", len(args.CorrelationID))
+		}
 		copy(md.CorrelId[:], []byte(args.CorrelationID))
 	}
 	if args.ReplyTo != "" {

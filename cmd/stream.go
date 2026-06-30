@@ -6,6 +6,8 @@ import (
 	"io"
 	"sync/atomic"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // streamContext returns a context that is cancelled on interrupt (Ctrl-C) and,
@@ -32,6 +34,39 @@ func streamContext(duration time.Duration, parents ...context.Context) (context.
 		cancelTimed()
 		stop()
 	}
+}
+
+// StreamingFlags holds the parsed values of the --for, --forever, and
+// --stats flags, plus a convenience Follow field.
+type StreamingFlags struct {
+	Duration time.Duration
+	Forever  bool
+	Stats    bool
+	Follow   bool
+}
+
+// ParseStreamingFlags reads the --for, --forever, and --stats flags from cmd
+// and returns a StreamingFlags value. When --forever is set, Duration is
+// forced to 0 regardless of --for.
+func ParseStreamingFlags(cmd *cobra.Command) (StreamingFlags, error) {
+	forStr, _ := cmd.Flags().GetString("for")
+	forever, _ := cmd.Flags().GetBool("forever")
+	stats, _ := cmd.Flags().GetBool("stats")
+
+	duration, err := parseDurationFlag(forStr)
+	if err != nil {
+		return StreamingFlags{}, err
+	}
+	if forever {
+		duration = 0
+	}
+	follow := duration > 0 || forever || stats
+	return StreamingFlags{
+		Duration: duration,
+		Forever:  forever,
+		Stats:    stats,
+		Follow:   follow,
+	}, nil
 }
 
 // parseDurationFlag parses a --for value. An empty string means "no limit".

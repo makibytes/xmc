@@ -109,12 +109,18 @@ func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
 	for k, v := range rawProps {
 		props[k] = v
 	}
+	corrID, _ := props[backends.PropCorrelationID].(string)
+	delete(props, backends.PropCorrelationID)
+	replyTo, _ := props[backends.PropReplyTo].(string)
+	delete(props, backends.PropReplyTo)
+	contentType, _ := props[backends.PropContentType].(string)
+	delete(props, backends.PropContentType)
 	return &backends.Message{
 		Data:          msg.Payload(),
 		Properties:    props,
 		MessageID:     msg.Key(),
-		CorrelationID: rawProps[backends.PropCorrelationID],
-		ReplyTo:       rawProps[backends.PropReplyTo],
-		ContentType:   rawProps[backends.PropContentType],
+		CorrelationID: corrID,
+		ReplyTo:       replyTo,
+		ContentType:   contentType,
 	}
 }

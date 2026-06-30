@@ -9,20 +9,15 @@ import (
 	"time"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
 // ConnArguments holds MQTT connection parameters.
 type ConnArguments struct {
-	Server   string // e.g. "tcp://localhost:1883" or "ssl://localhost:8883"
-	User     string
-	Password string
-	TLS      TLSConfig
+	backends.CommonConnArgs
 	ClientID string // auto-generated if empty
 }
-
-// TLSConfig is an alias for the shared TLS configuration.
-type TLSConfig = tlsutil.TLSConfig
 
 // Connect creates and connects a new MQTT client using the provided arguments.
 func Connect(args ConnArguments) (pahomqtt.Client, error) {

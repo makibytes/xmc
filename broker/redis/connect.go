@@ -8,17 +8,11 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
-type ConnArguments struct {
-	Server   string
-	User     string
-	Password string
-	TLS      TLSConfig
-}
-
-type TLSConfig = tlsutil.TLSConfig
+type ConnArguments = backends.CommonConnArgs
 
 func Connect(args ConnArguments) (*redis.Client, error) {
 	opt, err := redis.ParseURL(args.Server)

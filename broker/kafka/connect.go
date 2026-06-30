@@ -8,24 +8,17 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/tlsutil"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
 )
 
-// TLSConfig is an alias for the shared TLS configuration.
-type TLSConfig = tlsutil.TLSConfig
-
-type ConnArguments struct {
-	Server   string
-	User     string
-	Password string
-	TLS      TLSConfig
-}
+type ConnArguments = backends.CommonConnArgs
 
 // parseKafkaURL parses the server URL and returns brokers and TLS config
-func parseKafkaURL(serverURL string, tlsCfg TLSConfig) ([]string, *tls.Config, error) {
+func parseKafkaURL(serverURL string, tlsCfg tlsutil.TLSConfig) ([]string, *tls.Config, error) {
 	// Ensure the URL has a scheme so url.Parse treats "host:port" as a host,
 	// not as "scheme:opaque".
 	rawURL := serverURL

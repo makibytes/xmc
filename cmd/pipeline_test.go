@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -280,6 +281,134 @@ func TestSplitCommands_WithPipeline(t *testing.T) {
 	}
 	if cmds[0] != "receive q -n 5 | jq ." {
 		t.Errorf("cmds[0] = %q", cmds[0])
+	}
+}
+
+func TestSplitOnDelim_BackslashEscape(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		delim rune
+		want  []string
+	}{
+		{name: "escaped pipe", input: "a \\| b", delim: '|', want: []string{"a \\| b"}},
+		{name: "trailing backslash", input: "a \\", delim: '|', want: []string{"a \\"}},
+		{name: "double backslash then pipe", input: "a \\\\| b", delim: '|', want: []string{"a \\\\", "b"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitOnDelim(tc.input, tc.delim)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("splitOnDelim(%q, %c) = %v, want %v", tc.input, tc.delim, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExpandAlias_NoAliases(t *testing.T) {
+	got := expandAlias("send q hello", nil)
+	if got != "send q hello" {
+		t.Errorf("without aliases: got %q, want %q", got, "send q hello")
+	}
+}
+
+func TestExpandAlias_NoMatch(t *testing.T) {
+	aliases := map[string]string{"hi": "send $1"}
+	got := expandAlias("send q hello", aliases)
+	if got != "send q hello" {
+		t.Errorf("no match: got %q, want %q", got, "send q hello")
+	}
+}
+
+func TestExpandAlias_SimpleSubstitution(t *testing.T) {
+	aliases := map[string]string{"hi": "send $1"}
+	got := expandAlias("hi my-queue", aliases)
+	if got != "send my-queue" {
+		t.Errorf("simple substitution: got %q, want %q", got, "send my-queue")
+	}
+}
+
+func TestExpandAlias_MultipleArgs(t *testing.T) {
+	aliases := map[string]string{"hi2": "send $2 $1"}
+	got := expandAlias("hi2 hello world", aliases)
+	if got != "send world hello" {
+		t.Errorf("multiple args: got %q, want %q", got, "send world hello")
+	}
+}
+
+func TestExpandAlias_AtStarAll(t *testing.T) {
+	aliases := map[string]string{"hiAll": "send $@"}
+	got := expandAlias("hiAll a b c", aliases)
+	if got != "send a b c" {
+		t.Errorf("$@: got %q, want %q", got, "send a b c")
+	}
+}
+
+func TestExpandAlias_AtStarAllAsterisk(t *testing.T) {
+	aliases := map[string]string{"hiAll": "send $*"}
+	got := expandAlias("hiAll a b c", aliases)
+	if got != "send a b c" {
+		t.Errorf("$*: got %q, want %q", got, "send a b c")
+	}
+}
+
+func TestExpandAlias_MixedLiteralAndSubstitution(t *testing.T) {
+	aliases := map[string]string{"peek1": "peek $1 -n 1"}
+	got := expandAlias("peek1 my-queue", aliases)
+	want := "peek my-queue -n 1"
+	if got != want {
+		t.Errorf("mixed: got %q, want %q", got, want)
+	}
+}
+
+func TestExpandAlias_DollarWithoutNumber(t *testing.T) {
+	aliases := map[string]string{"sendRaw": "send -P format=raw $@"}
+	got := expandAlias("sendRaw my-queue hello", aliases)
+	if got != "send -P format=raw my-queue hello" {
+		t.Errorf("dollar without number: got %q", got)
+	}
+}
+
+func TestExpandAlias_EmptyArgs(t *testing.T) {
+	aliases := map[string]string{"hi": "send $1 $2"}
+	got := expandAlias("hi", aliases)
+	want := "send  "
+	if got != want {
+		t.Errorf("empty args: got %q, want %q", got, want)
+	}
+}
+
+func TestExpandAlias_EmptyLine(t *testing.T) {
+	aliases := map[string]string{"hi": "send $1"}
+	got := expandAlias("", aliases)
+	if got != "" {
+		t.Errorf("empty line: got %q, want %q", got, "")
+	}
+}
+
+func TestPrevBlockIsVerb(t *testing.T) {
+	blocks := []pipelineBlock{
+		{isVerb: false},
+		{isVerb: true},
+		{isVerb: false},
+	}
+	if prevBlockIsVerb(blocks, 1) {
+		t.Error("prevBlockIsVerb(blocks, 1) should be false (prev is external)")
+	}
+	if !prevBlockIsVerb(blocks, 2) {
+		t.Error("prevBlockIsVerb(blocks, 2) should be true (prev is verb)")
+	}
+	if prevBlockIsVerb(blocks, 0) {
+		t.Error("prevBlockIsVerb(blocks, 0) should be false (no prev)")
+	}
+}
+
+func TestExpandAlias_NoArgsButTemplateUsesAt(t *testing.T) {
+	aliases := map[string]string{"cmd": "build $@"}
+	got := expandAlias("cmd", aliases)
+	want := "build "
+	if got != want {
+		t.Errorf("$@ no args: got %q, want %q", got, want)
 	}
 }
 

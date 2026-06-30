@@ -3,22 +3,15 @@
 package rabbitmq
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
-	"github.com/makibytes/xmc/log"
 )
-
-var mgmtHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // ManagementArgs holds parameters for RabbitMQ management operations
 type ManagementArgs struct {
@@ -36,66 +29,6 @@ func managementURL(amqpServer string) (string, error) {
 	host := u.Hostname()
 	// RabbitMQ management API defaults to port 15672
 	return fmt.Sprintf("http://%s:15672/api", host), nil
-}
-
-func managementGet(baseURL, path, user, password string) ([]byte, error) {
-	fullURL := baseURL + path
-	log.Verbose("requesting %s", fullURL)
-
-	req, err := http.NewRequest("GET", fullURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	if user != "" {
-		req.SetBasicAuth(user, password)
-	}
-
-	resp, err := mgmtHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("management API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("management API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return body, nil
-}
-
-func managementDelete(baseURL, path, user, password string) ([]byte, error) {
-	fullURL := baseURL + path
-	log.Verbose("requesting DELETE %s", fullURL)
-
-	req, err := http.NewRequest("DELETE", fullURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	if user != "" {
-		req.SetBasicAuth(user, password)
-	}
-
-	resp, err := mgmtHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("management API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("management API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return body, nil
 }
 
 // QueueInfo holds queue information from the RabbitMQ management API
@@ -122,7 +55,7 @@ func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
 		return nil, err
 	}
 
-	body, err := managementGet(base, "/queues", args.User, args.Password)
+	body, err := backends.MgmtGet(base+"/queues", args.User, args.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -157,66 +90,8 @@ func PurgeQueue(args ManagementArgs, queue string) error {
 		return err
 	}
 
-	_, err = managementDelete(base, fmt.Sprintf("/queues/%%2F/%s/contents", url.PathEscape(queue)), args.User, args.Password)
+	_, err = backends.MgmtDelete(base+fmt.Sprintf("/queues/%%2F/%s/contents", url.PathEscape(queue)), args.User, args.Password)
 	return err
-}
-
-func managementPut(baseURL, path, user, password string, body []byte) error {
-	fullURL := baseURL + path
-	log.Verbose("requesting PUT %s", fullURL)
-
-	req, err := http.NewRequest("PUT", fullURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	if user != "" {
-		req.SetBasicAuth(user, password)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := mgmtHTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("management API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("management API returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
-}
-
-func managementPost(baseURL, path, user, password string, body []byte) ([]byte, error) {
-	fullURL := baseURL + path
-	log.Verbose("requesting POST %s", fullURL)
-
-	req, err := http.NewRequest("POST", fullURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	if user != "" {
-		req.SetBasicAuth(user, password)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := mgmtHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("management API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("management API returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return respBody, nil
 }
 
 // CreateQueue creates a queue via the RabbitMQ Management API.
@@ -227,7 +102,7 @@ func CreateQueue(args ManagementArgs, queue string) error {
 	}
 
 	body, _ := json.Marshal(map[string]any{"durable": true})
-	return managementPut(base, fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), args.User, args.Password, body)
+	return backends.MgmtPut(base+fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), body, args.User, args.Password)
 }
 
 // DeleteQueue deletes a queue via the RabbitMQ Management API.
@@ -237,7 +112,7 @@ func DeleteQueue(args ManagementArgs, queue string) error {
 		return err
 	}
 
-	_, err = managementDelete(base, fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), args.User, args.Password)
+	_, err = backends.MgmtDelete(base+fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), args.User, args.Password)
 	return err
 }
 
@@ -252,7 +127,7 @@ func CreateExchange(args ManagementArgs, exchange, exchangeType string) error {
 		"type":    exchangeType,
 		"durable": true,
 	})
-	return managementPut(base, fmt.Sprintf("/exchanges/%%2F/%s", url.PathEscape(exchange)), args.User, args.Password, body)
+	return backends.MgmtPut(base+fmt.Sprintf("/exchanges/%%2F/%s", url.PathEscape(exchange)), body, args.User, args.Password)
 }
 
 // DeleteExchange deletes an exchange via the RabbitMQ Management API.
@@ -262,7 +137,7 @@ func DeleteExchange(args ManagementArgs, exchange string) error {
 		return err
 	}
 
-	_, err = managementDelete(base, fmt.Sprintf("/exchanges/%%2F/%s", url.PathEscape(exchange)), args.User, args.Password)
+	_, err = backends.MgmtDelete(base+fmt.Sprintf("/exchanges/%%2F/%s", url.PathEscape(exchange)), args.User, args.Password)
 	return err
 }
 
@@ -276,7 +151,7 @@ func BindQueue(args ManagementArgs, queue, exchange, routingKey string) error {
 	body, _ := json.Marshal(map[string]any{
 		"routing_key": routingKey,
 	})
-	_, err = managementPost(base, fmt.Sprintf("/bindings/%%2F/e/%s/q/%s", url.PathEscape(exchange), url.PathEscape(queue)), args.User, args.Password, body)
+	_, err = backends.MgmtPost(base+fmt.Sprintf("/bindings/%%2F/e/%s/q/%s", url.PathEscape(exchange), url.PathEscape(queue)), body, args.User, args.Password)
 	return err
 }
 
@@ -292,7 +167,7 @@ func UnbindQueue(args ManagementArgs, queue, exchange, routingKey string) error 
 	if propKey == "" {
 		propKey = "~"
 	}
-	_, err = managementDelete(base, fmt.Sprintf("/bindings/%%2F/e/%s/q/%s/%s", url.PathEscape(exchange), url.PathEscape(queue), url.PathEscape(propKey)), args.User, args.Password)
+	_, err = backends.MgmtDelete(base+fmt.Sprintf("/bindings/%%2F/e/%s/q/%s/%s", url.PathEscape(exchange), url.PathEscape(queue), url.PathEscape(propKey)), args.User, args.Password)
 	return err
 }
 
@@ -307,7 +182,7 @@ func ListExchanges(args ManagementArgs) ([]backends.ObjectNode, error) {
 	}
 
 	// Fetch exchanges.
-	body, err := managementGet(base, "/exchanges/%2F", args.User, args.Password)
+	body, err := backends.MgmtGet(base+"/exchanges/%2F", args.User, args.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +196,7 @@ func ListExchanges(args ManagementArgs) ([]backends.ObjectNode, error) {
 	}
 
 	// Fetch all bindings (source → destination).
-	bindBody, err := managementGet(base, "/bindings/%2F", args.User, args.Password)
+	bindBody, err := backends.MgmtGet(base+"/bindings/%2F", args.User, args.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -375,19 +250,18 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 		return nil, err
 	}
 
-	body, err := managementGet(base, fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), args.User, args.Password)
+	body, err := backends.MgmtGet(base+fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), args.User, args.Password)
 	if err != nil {
 		return nil, err
 	}
 
 	var raw struct {
-		Name                string `json:"name"`
-		Messages            int64  `json:"messages"`
-		Consumers           int    `json:"consumers"`
-		MessagesPublished   int64  `json:"message_stats.publish"`
-		MessagesDelivered   int64  `json:"message_stats.deliver_get"`
-		MessageStatsPublish struct {
-			Total int64 `json:"total"`
+		Name        string `json:"name"`
+		Messages    int64  `json:"messages"`
+		Consumers   int    `json:"consumers"`
+		MessageStat struct {
+			Publish     int64 `json:"publish"`
+			DeliverGet  int64 `json:"deliver_get"`
 		} `json:"message_stats"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -398,6 +272,8 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 		Name:          raw.Name,
 		MessageCount:  raw.Messages,
 		ConsumerCount: raw.Consumers,
+		EnqueueCount:  raw.MessageStat.Publish,
+		DequeueCount:  raw.MessageStat.DeliverGet,
 	}, nil
 }
 
@@ -430,10 +306,7 @@ func peekQueueMessages(args ManagementArgs, queueAddr string, count int) ([]back
 	reqBody := []byte(fmt.Sprintf(
 		`{"count":%d,"ackmode":"ack_requeue_true","encoding":"auto","truncate":50000}`, count,
 	))
-	respBody, err := managementPost(base,
-		fmt.Sprintf("/queues/%%2F/%s/get", url.PathEscape(name)),
-		args.User, args.Password, reqBody,
-	)
+	respBody, err := backends.MgmtPost(base+fmt.Sprintf("/queues/%%2F/%s/get", url.PathEscape(name)), reqBody, args.User, args.Password)
 	if err != nil {
 		return nil, err
 	}

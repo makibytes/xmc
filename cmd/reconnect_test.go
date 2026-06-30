@@ -52,10 +52,10 @@ func TestReconnectingQueue_RetriesOnError(t *testing.T) {
 		return mock, nil
 	}
 
-	rq := &reconnectingQueue{
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{
 		factory: factory,
 		opts:    ReconnectOptions{MaxElapsed: 10 * time.Second},
-	}
+	}}
 
 	err := rq.Send(context.Background(), backends.SendOptions{
 		Queue:   "q",
@@ -78,10 +78,10 @@ func TestReconnectingQueue_SentinelNotRetried(t *testing.T) {
 		return mock, nil
 	}
 
-	rq := &reconnectingQueue{
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{
 		factory: factory,
 		opts:    ReconnectOptions{MaxElapsed: 5 * time.Second},
-	}
+	}}
 
 	_, err := rq.Receive(context.Background(), backends.ReceiveOptions{Queue: "q"})
 	if err != backends.ErrNoMessageAvailable {
@@ -99,10 +99,10 @@ func TestReconnectingQueue_ExhaustsBackoff(t *testing.T) {
 		return alwaysFail, nil
 	}
 
-	rq := &reconnectingQueue{
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{
 		factory: factory,
 		opts:    ReconnectOptions{MaxElapsed: 1 * time.Second}, // short window
-	}
+	}}
 
 	err := rq.Send(context.Background(), backends.SendOptions{
 		Queue:   "q",
@@ -121,10 +121,10 @@ func TestReconnectingQueue_FactoryError(t *testing.T) {
 		return nil, fmt.Errorf("auth failed")
 	}
 
-	rq := &reconnectingQueue{
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{
 		factory: factory,
 		opts:    ReconnectOptions{MaxElapsed: 1 * time.Second},
-	}
+	}}
 
 	err := rq.Send(context.Background(), backends.SendOptions{Queue: "q"})
 	if err == nil {
@@ -138,7 +138,7 @@ func TestReconnectingQueue_Close(t *testing.T) {
 		return mock, nil
 	}
 
-	rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{}}
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{}}}
 
 	// Use it to establish the connection.
 	_, _ = rq.Receive(context.Background(), backends.ReceiveOptions{Queue: "q"})
@@ -185,7 +185,7 @@ func TestReconnectingTopic_RetriesOnError(t *testing.T) {
 		return mock, nil
 	}
 
-	rt := &reconnectingTopic{factory: factory, opts: ReconnectOptions{MaxElapsed: 10 * time.Second}}
+	rt := &reconnectingTopic{reconnectingAdapter: reconnectingAdapter[backends.TopicBackend]{factory: factory, opts: ReconnectOptions{MaxElapsed: 10 * time.Second}}}
 
 	msg, err := rt.Subscribe(context.Background(), backends.SubscribeOptions{Topic: "t"})
 	if err != nil {
@@ -250,10 +250,10 @@ func TestReconnectingQueue_AppErrorNotRetried(t *testing.T) {
 		return mock, nil
 	}
 
-	rq := &reconnectingQueue{
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{
 		factory: factory,
 		opts:    ReconnectOptions{MaxElapsed: 5 * time.Second},
-	}
+	}}
 
 	err := rq.Send(context.Background(), backends.SendOptions{Queue: "bad", Message: []byte("x")})
 	if err == nil {
@@ -324,7 +324,7 @@ func TestReconnectingQueue_BrowseDelegatesWhenSupported(t *testing.T) {
 		browseMsgs: [][]byte{[]byte("a"), []byte("b"), []byte("c")},
 	}
 	factory := func() (backends.QueueBackend, error) { return underlying, nil }
-	rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{}}
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{}}}
 
 	browser, err := rq.Browse(context.Background(), backends.ReceiveOptions{Queue: "q"})
 	if err != nil {
@@ -362,7 +362,7 @@ func TestReconnectingQueue_BrowseSentinelWhenUnsupported(t *testing.T) {
 	// mockQueueBackend does NOT implement BrowseBackend.
 	mock := &mockQueueBackend{}
 	factory := func() (backends.QueueBackend, error) { return mock, nil }
-	rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{}}
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{}}}
 
 	_, err := rq.Browse(context.Background(), backends.ReceiveOptions{Queue: "q"})
 	if !errors.Is(err, backends.ErrBrowseUnsupported) {
@@ -383,7 +383,7 @@ func TestPeekCommand_BrowseFallbackViaWrapper(t *testing.T) {
 	// mockQueueBackend has no BrowseBackend — triggers the backends.ErrBrowseUnsupported path.
 	inner := &mockQueueBackend{receiveMsgs: msgs}
 	factory := func() (backends.QueueBackend, error) { return inner, nil }
-	rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{}}
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{}}}
 
 	cmd := NewPeekCommand(rq)
 	cmd.SetArgs([]string{"q", "-n", "2"})

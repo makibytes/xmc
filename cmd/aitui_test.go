@@ -692,11 +692,11 @@ func TestAITUI_ConnMsg_Error(t *testing.T) {
 	m := newTestModel()
 	updated, _ := m.Update(connMsg{err: fmt.Errorf("connection refused")})
 	model := updated.(aiTUIModel)
-	if !model.connChecked {
-		t.Error("connChecked should be true after connMsg")
+	if !model.conn.checked {
+		t.Error("conn.checked should be true after connMsg")
 	}
-	if model.connErr == nil {
-		t.Error("connErr should be set on failure")
+	if model.conn.err == nil {
+		t.Error("conn.err should be set on failure")
 	}
 	if !strings.Contains(model.transcript.String(), "connection error") {
 		t.Error("transcript should contain connection error")
@@ -707,18 +707,18 @@ func TestAITUI_ConnMsg_OK(t *testing.T) {
 	m := newTestModel()
 	updated, _ := m.Update(connMsg{})
 	model := updated.(aiTUIModel)
-	if !model.connChecked {
-		t.Error("connChecked should be true after connMsg")
+	if !model.conn.checked {
+		t.Error("conn.checked should be true after connMsg")
 	}
-	if model.connErr != nil {
-		t.Error("connErr should be nil on success")
+	if model.conn.err != nil {
+		t.Error("conn.err should be nil on success")
 	}
 }
 
 func TestAITUI_ServerInfo_Connected(t *testing.T) {
 	m := newTestModel()
-	m.connChecked = true
-	m.connErr = nil
+	m.conn.checked = true
+	m.conn.err = nil
 	info := m.serverInfo()
 	if !strings.Contains(info, "localhost:5672") {
 		t.Errorf("serverInfo should contain the server URL, got %q", info)
@@ -727,8 +727,8 @@ func TestAITUI_ServerInfo_Connected(t *testing.T) {
 
 func TestAITUI_ServerInfo_Error(t *testing.T) {
 	m := newTestModel()
-	m.connChecked = true
-	m.connErr = fmt.Errorf("refused")
+	m.	conn.checked = true
+	m.conn.err = fmt.Errorf("refused")
 	info := m.serverInfo()
 	if !strings.Contains(info, "localhost:5672") {
 		t.Errorf("serverInfo should still show URL on error, got %q", info)

@@ -67,25 +67,19 @@ func doBridgeQueue(cmd *cobra.Command, args []string, backend backends.QueueBack
 	count, _ := cmd.Flags().GetInt("count")
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
-	statsOn, _ := cmd.Flags().GetBool("stats")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
-	}
-	if forever {
-		duration = 0
 	}
 
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := timedOrInterruptCtx(cmd.Context(), duration)
+	ctx, cancel := timedOrInterruptCtx(cmd.Context(), sf.Duration)
 	defer cancel()
 
-	st, stopStats := startForwardStats(statsOn, errw)
+	st, stopStats := startForwardStats(sf.Stats, errw)
 	defer stopStats()
 
 	proc, stdinPipe, err := startTargetProcess(ctx, target, out, errw)
@@ -147,25 +141,19 @@ func doBridgeTopic(cmd *cobra.Command, args []string, backend backends.TopicBack
 	count, _ := cmd.Flags().GetInt("count")
 	selector, _ := cmd.Flags().GetString("selector")
 	quiet, _ := cmd.Flags().GetBool("quiet")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
-	statsOn, _ := cmd.Flags().GetBool("stats")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
-	}
-	if forever {
-		duration = 0
 	}
 
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := timedOrInterruptCtx(cmd.Context(), duration)
+	ctx, cancel := timedOrInterruptCtx(cmd.Context(), sf.Duration)
 	defer cancel()
 
-	st, stopStats := startForwardStats(statsOn, errw)
+	st, stopStats := startForwardStats(sf.Stats, errw)
 	defer stopStats()
 
 	proc, stdinPipe, err := startTargetProcess(ctx, target, out, errw)

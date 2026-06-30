@@ -59,11 +59,7 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("MMC_PASSWORD"), "Password")
 			c.PersistentFlags().StringVar(&connArgs.ClientID, "client-id", "", "MQTT client ID (auto-generated if empty)")
 			c.PersistentFlags().StringVar(&group, "group", "xmc", "Queue shared subscription group name")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Queue: func() (backends.QueueBackend, error) { return mqtt.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return mqtt.NewTopicAdapter(connArgs) },

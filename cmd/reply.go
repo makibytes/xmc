@@ -83,18 +83,14 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	timeout := float32(getDuration(cmd, "timeout").Seconds())
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	selector, _ := cmd.Flags().GetString("selector")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
 	}
-	if forever {
-		duration = 0
-	}
-	follow := duration > 0 || forever
-	if (duration > 0 || forever) && !cmd.Flags().Changed("count") {
+	duration := sf.Duration
+	follow := sf.Follow
+	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
 		count = 0
 	}
 

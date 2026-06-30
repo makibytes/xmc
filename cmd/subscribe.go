@@ -60,16 +60,15 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	durable, _ := cmd.Flags().GetBool("durable")
 	format, _ := cmd.Flags().GetString("format")
 	ndjson, _ := cmd.Flags().GetBool("ndjson")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
 	stats, _ := cmd.Flags().GetBool("stats")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
 	}
-	follow := duration > 0 || forever || stats
-	if (duration > 0 || forever) && !cmd.Flags().Changed("count") {
+	duration := sf.Duration
+	follow := sf.Follow
+	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
 		count = 0
 	}
 
