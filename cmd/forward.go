@@ -49,8 +49,10 @@ throughput to stderr.`,
 }
 
 // NewForwardTopicCommand creates the topic variant of forward (subscribe on the
-// source topic, publish to the destination topic). It is registered for
-// topic-only brokers such as Kafka so that every broker offers forward.
+// source topic, publish to the destination topic). Only wired for topic-only
+// brokers (currently Kafka): dual queue+topic brokers already have a
+// queue-named "forward" command, and a topic variant under the same name
+// would collide with it.
 func NewForwardTopicCommand(backend backends.TopicBackend) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "forward <source-topic> <destination-topic>",

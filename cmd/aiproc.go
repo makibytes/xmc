@@ -265,18 +265,33 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 	}
 
 	pptr := m.program
-	sess := m.session
 	rootCmd := m.rootCmd
 	id := p.id
 	pw := procWriter{p: p}
 
+	// Background processes get their own broker connection rather than
+	// sharing m.session's cached adapter. A long-running stream (receive
+	// --for 1h, forward --for, ...) would otherwise run concurrently with
+	// foreground send/peek/manage commands (and other background processes)
+	// on the exact same connection/session — most broker client libraries
+	// are not safe for concurrent use of one connection this way. Wrapping
+	// with wrapReconnectQueue/Topic mirrors the wrapping runAI gives the
+	// foreground session, so the process still gets auto-reconnect.
+	procSess := &shellSession{
+		spec:         m.session.spec,
+		queueFactory: wrapReconnectQueue(m.session.spec.Queue, ReconnectOptions{}),
+		topicFactory: wrapReconnectTopic(m.session.spec.Topic, ReconnectOptions{}),
+		aliases:      m.session.aliases,
+	}
+
 	return m, func() tea.Msg {
 		defer close(p.doneCh)
+		defer procSess.close()
 		ctx, cancel := context.WithCancel(context.Background())
 		if prog := derefProgram(pptr); prog != nil {
 			prog.Send(procCancelMsg{id: id, cancel: cancel})
 		}
-		err := sess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), pw, pw)
+		err := procSess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), pw, pw)
 		cancel()
 		return procDoneMsg{id: id, err: err}
 	}

@@ -205,6 +205,8 @@ ONLY these commands are destructive (require explicit user confirmation):
 
 All other commands — including receive, peek, move, forward, subscribe (even with -n 0 to drain a queue) — are NON-DESTRUCTIVE read or relay operations. Do NOT warn about or ask confirmation for these.
 
+The xmc shell itself always shows the user a confirmation prompt before running any destructive command — you must NOT ask for confirmation yourself, and must NOT restate or summarize what a command will do. Just output the command(s); the app handles confirmation. For a request that spans multiple objects (e.g. "delete all X"), chain every command on one line with ';' — do not ask which ones, or emit only one and stop, unless the target set is genuinely ambiguous (see below).
+
 Available commands and flags:
 
 %s
@@ -214,6 +216,7 @@ Available commands and flags:
 - Output ONLY the command. Nothing else.
 - If impossible: # cannot: <brief reason>
 - If ambiguous: # ask: <clarifying question>
+- No other "#" comment, confirmation question, or explanation is allowed — "# cannot:" and "# ask:" are the only two.
 `, caps, brokerSection, connectionSection, topologySection, aliasesSection)
 }
 
@@ -306,8 +309,11 @@ func extractCommandWithVerbs(response string, verbs map[string]bool) string {
 	if cmd == "" {
 		return cmd
 	}
-	// Already a comment or a known verb — return as-is.
-	if strings.HasPrefix(cmd, "#") {
+	// A canonical "# ask:"/"# cannot:" reply — return as-is without scanning
+	// for a verb line. Any other "#"-led text (e.g. a stray explanatory
+	// comment) falls through to the prose scan below, since it may be
+	// followed by a real command on a later line.
+	if strings.HasPrefix(cmd, "# ask:") || strings.HasPrefix(cmd, "# cannot:") {
 		return cmd
 	}
 	first := strings.Fields(cmd)[0]

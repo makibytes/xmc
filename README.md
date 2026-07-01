@@ -529,7 +529,7 @@ xmc supports these AI providers:
 
 | Provider | Environment variable | Default model |
 | --- | --- | --- |
-| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-6 |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-5 |
 | OpenAI | `OPENAI_API_KEY` | gpt-4o |
 | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-2.0-flash |
 | xAI | `XAI_API_KEY` | grok-2-latest |
@@ -569,9 +569,10 @@ The AI Shell has two input modes, toggled with **Esc**:
   **Tab** autocomplete. Useful when you already know the command and want to
   stay in the same TUI.
 
-In `xmc>` mode, destructive commands are guarded by default: instead of running
-immediately, they first open the same proposal/confirm step used by AI output.
-Use `/guard off` to bypass this safety gate and `/guard on` to re-enable it.
+Commands typed in `xmc>` mode run immediately, with no confirmation step —
+unlike `ask>` mode, where every AI-generated command (destructive or not) is
+shown as a proposal you must accept, edit, or discard first. Use `xmc>` mode
+only when you're confident in the command you're typing.
 
 The right side of the screen shows a sidebar with your broker's objects (queues,
 topics, exchanges) and their message counts, refreshed automatically in the
@@ -602,14 +603,16 @@ Inside AI Shell, these slash commands are available:
 | --- | --- |
 | `/model` | Pick a model interactively from the provider's model list |
 | `/model <name>` | Switch to a specific model directly (persisted to config) |
-| `/effort low\|med\|high` | Set reasoning effort (temperature) |
-| `/guard` | Show command-mode destructive guard state |
-| `/guard on\|off` | Enable/disable destructive guard in command mode |
+| `/effort` | Pick reasoning effort interactively |
+| `/effort low\|med\|high` | Set reasoning effort (temperature) directly |
 | `/refresh` | Reload broker objects now (one-shot) |
 | `/refresh <dur>` | Set the periodic refresh interval (e.g. `3s`, `3m`; minimum `1s`; persisted to config) |
 | `/refresh off` | Disable periodic sidebar refresh |
+| `/connect` | Reconnect to the broker (enables auto-reconnect) |
+| `/disconnect` | Stop auto-reconnect |
 | `/reset` | Clear conversation history |
 | `/clear` | Clear the display |
+| `/help` | Show available slash commands and keybindings |
 | `/exit` | Quit |
 
 Effort to temperature mapping:
@@ -685,3 +688,5 @@ Please open an issue or submit a pull request. Use the latest version of Go and 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
+
+![Xenomorph working](.github/assets/xenomorph-working.jpg)

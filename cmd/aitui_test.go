@@ -108,6 +108,29 @@ func TestAITUI_HandleAIDone_Cannot(t *testing.T) {
 	}
 }
 
+func TestAITUI_HandleAIDone_StrayCommentNotProposed(t *testing.T) {
+	// Regression: the model must not be able to invent its own confirmation
+	// question as a bare "#" comment (any form other than "# ask:"/"# cannot:")
+	// and have it shown as a runnable proposal. Previously such a comment fell
+	// through to the proposal flow and, if accepted, silently no-op'd as a
+	// shell comment via executeExternal — misleadingly reporting "ok" while
+	// never running the actual (possibly destructive) command.
+	m := newTestModel()
+	m.state = tuiThinking
+	m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "test"})
+
+	updated, _ := m.Update(aiDoneMsg{
+		text: "# This will permanently delete: 5 queues. Proceed? (yes/no)",
+	})
+	model := updated.(aiTUIModel)
+	if model.state != tuiIdle {
+		t.Errorf("stray comment should not be proposed, state = %v, want tuiIdle", model.state)
+	}
+	if model.proposedCmd != "" {
+		t.Errorf("proposedCmd = %q, want empty", model.proposedCmd)
+	}
+}
+
 func TestAITUI_HandleAIDone_Command(t *testing.T) {
 	m := newTestModel()
 	m.state = tuiThinking

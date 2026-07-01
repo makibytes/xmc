@@ -39,6 +39,10 @@ Example: bridge orders --to 'kmc send orders-mirror'`,
 	return cmd
 }
 
+// NewBridgeTopicCommand creates the topic variant of bridge (subscribe on the
+// source topic, stream to an external command). Only wired for topic-only
+// brokers (currently Kafka) — see NewForwardTopicCommand for why dual
+// queue+topic brokers don't get this under the same name.
 func NewBridgeTopicCommand(backend backends.TopicBackend) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bridge <source-topic> --to '<target command>'",

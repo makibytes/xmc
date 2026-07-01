@@ -410,8 +410,8 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		if maxName < 5 {
 			maxName = 5
 		}
-		if len(name) > maxName {
-			name = name[:maxName-1] + "…"
+		if nameRunes := []rune(name); len(nameRunes) > maxName {
+			name = string(nameRunes[:maxName-1]) + "…"
 		}
 
 		if focused && !r.indent && r.itemIdx == w.sel {

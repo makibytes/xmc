@@ -93,8 +93,13 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 - `cmd/pipeline.go` - pipeline parser/executor: split, classify verb vs external, coalesce, wire `os.Pipe`, run via `errgroup`; semicolon-separated commands run sequentially (stop on first error)
 - `cmd/reconnect.go` - `reconnectingQueue`/`reconnectingTopic` wrappers with capped exponential backoff (`cenkalti/backoff/v4`); `isConnectionError` classifies errors so only genuine transport failures trigger reconnect
 - `cmd/ai.go` - `aiSession`, conversation history, predicates (`isDestructive`, `mutatesObjects`, `mutatesMessages`, `isManageList`), feedback loop, topology refresh
-- `cmd/aitui.go` - Full-screen Bubble Tea TUI for AI shell: viewport (scrollable transcript), dual-mode input (`ask>` AI / `<binary>>` direct command, toggled with Esc), Tab autocomplete (reuses shell completer), Up/Down history recall (shared shell history file), spinner, streaming tokens, propose/edit/execute flow, auto-fix on error (re-proposes corrected command up to `maxFixAttempts`), N-window sidebar with per-broker object types (Shift+Tab browse, `c` create, `d` delete, `p` peek, `/` filter, `s` sort, `Space` collapse, `x` tree-toggle, `r` refresh), inline command cards, connection probe with title-bar URL colouring
-- `cmd/aiclient.go` - `aiClient` interface + provider implementations (Anthropic, OpenAI-compatible, Gemini) via stdlib `net/http`
+- `cmd/aitui.go` - Full-screen Bubble Tea TUI for AI shell: model struct, `Update()`/`View()`, layout math, styles, status bar, transcript rendering. Dual-mode input (`ask>` AI / `<binary>>` direct command, toggled with Esc), Tab autocomplete (reuses shell completer), Up/Down history recall (shared shell history file), spinner, streaming tokens, propose/edit/execute flow, auto-fix on error (re-proposes corrected command up to `maxFixAttempts`), N-window sidebar with per-broker object types (Shift+Tab browse, `c` create, `d` delete, `p` peek, `/` filter, `s` sort, `Space` collapse, `x` tree-toggle, `r` refresh), inline command cards, connection probe with title-bar URL colouring
+- `cmd/aikeys.go` - Key-event routing: `handleKey`/`handleKey*` per-state dispatch, slash commands, sidebar create/delete prompts, broker-objects loading/refresh, autocomplete, copy-to-clipboard, proposal freezing/rendering
+- `cmd/aiconn.go` - `connState`, broker connection probe, and auto-reconnect with capped exponential backoff (title-bar blink, `/connect`/`/disconnect`)
+- `cmd/airun.go` - AI request/execution lifecycle: `startAIRequest`/`handleAIDone` (LLM round-trip), `startExecution`/`handleExecDone` (run the proposed command, feed results back into history), `/model`/`/effort` handlers
+- `cmd/aiproc.go` - Background process management for `--for`-bounded commands started from the AI TUI: each gets its own dedicated broker adapter (never shares the foreground session's), tracked for cancellation and `Processes` sidebar display
+- `cmd/aituisidebar.go` - Sidebar `View()`-side rendering: per-window layout/collapse planner, object list rendering with filter/sort/tree-view, byte-count formatting
+- `cmd/aiclient.go` - `aiClient` interface + provider implementations (Anthropic, OpenAI-compatible, Gemini) via stdlib `net/http`; `isReasoningModel` detects OpenAI's o1/o3/o4/gpt-5/codex family to swap `max_tokens`→`max_completion_tokens` and omit `temperature` (both required by those models, which otherwise reject the standard chat-completion shape with HTTP 400)
 - `cmd/aiconfig.go` - YAML config loading (`~/.xmc/<binary>.yml`), AI provider resolution with precedence order, `auto-update-objects`/`auto-update-messages` sidebar refresh config
 - `cmd/aiprompt.go` - `buildCapabilities` (walks cobra tree), `systemPrompt` (strict syntax rules for the AI, pipeline framing, NDJSON schema), `extractCommand` (strips binary prefixes like `./rmc`, `rmc`, `xmc` so commands run in-process); broker-specific documentation is embedded from `docs/<broker>.md` via `broker.AIDoc()` into the system prompt — keep these compact (token-efficient reference cards, not tutorials)
 - `cmd/aipaths.go` - config dir paths (`~/.xmc/` / `%LOCALAPPDATA%\xmc\`), per-binary file naming
@@ -105,7 +110,7 @@ Uses `spf13/cobra` for CLI:
 - Root command provides persistent flags (`--server`, `--user`, `--password`, `--verbose`, TLS flags)
 - Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ), `REDMC_` (Redis), `GMC_` (Google Pub/Sub), `AWSMC_` (AWS SQS+SNS), `AZMC_` (Azure Service Bus)
 - Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`, `forward`, `bridge`
-- Topic commands: `publish`, `subscribe` (Kafka also has topic `forward`; topic-capable brokers also have topic `bridge`)
+- Topic commands: `publish`, `subscribe` (Kafka is topic-only and additionally has topic `forward` and topic `bridge`; other brokers are dual queue+topic and expose `forward`/`bridge` only on the queue side, since a same-named topic variant would collide with it)
 - Interactive: `shell`/`sh` (REPL with persistent connection, pipelines, auto-reconnect, deep autocomplete)
 - AI shell: `ai` (standalone command — full-screen Bubble Tea TUI with natural-language → xmc command translation via LLM; dual input mode: `ask>` for AI prompts and `<binary>>` for direct xmc commands, toggled with Esc; Tab autocomplete in command mode; Up/Down history recall; connection probe with title-bar URL; N-window broker-object sidebar with Shift+Tab browse, `c`/`d`/`p` hotkeys (`p` peeks selected queue without confirmation); inline command cards; shared shell history; quit via `/exit` or Ctrl+C)
 - Configuration: `~/.xmc/<binary>.yml` YAML config for AI settings, broker-auth fallback (flag > env > YAML > default), sidebar auto-refresh (`auto-update-objects`, `auto-update-messages` — both default true), and command aliases (`aliases:` map with `$1`/`$2`/`$@` substitution)
@@ -208,6 +213,13 @@ Brokers with address conventions use `BrokerSpec.ResolveTarget` to map bare name
   - `pipeline.go` - pipeline parser/executor: split, classify, coalesce, wire, execute; alias expansion (`expandAlias`)
   - `reconnect.go` - `reconnectingQueue`/`reconnectingTopic` with exponential backoff
   - `ai.go` - AI shell session: spinner, API call, confirm-to-run, auto-fix on error (up to `maxFixAttempts`)
+  - `aicmd.go` - standalone `ai` command entrypoint; captures `log` output during the TUI session and flushes it after exit
+  - `aitui.go` - Bubble Tea model, `Update()`/`View()`, layout, styles
+  - `aikeys.go` - key-event routing and UI-only concerns (autocomplete, copy, proposal rendering)
+  - `aiconn.go` - connection probe and auto-reconnect state machine
+  - `airun.go` - AI request/execution lifecycle (`startAIRequest`, `startExecution`, `/model`, `/effort`)
+  - `aiproc.go` - background `--for` process management (dedicated adapter per process)
+  - `aituisidebar.go` - sidebar rendering (layout planner, filter/sort/tree-view)
   - `aiclient.go` - `aiClient` interface + Anthropic/OpenAI-compat/Gemini implementations
   - `aiconfig.go` - YAML config loading (`xmcConfig` with `aliases` map), AI provider resolution
   - `aiprompt.go` - system prompt from cobra tree, command extraction

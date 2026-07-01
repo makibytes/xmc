@@ -473,7 +473,10 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			viewportStartY := 2 // title bar (1) + blank line (1)
 			vRow := msg.Y - viewportStartY
-			if vRow >= 0 && vRow < m.viewport.Height {
+			// Guard on X too: with the sidebar shown, a click there can land on a
+			// row that happens to align with a marked transcript line — without
+			// the X check it would copy that unrelated transcript item.
+			if vRow >= 0 && vRow < m.viewport.Height && msg.X >= 0 && msg.X < m.viewport.Width {
 				contentLine := m.viewport.YOffset + vRow
 				if idx := m.copyIdxForLine(contentLine); idx >= 0 && idx < len(m.copyItems) {
 					_ = clipboard.WriteAll(m.copyItems[idx])

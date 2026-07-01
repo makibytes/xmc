@@ -149,7 +149,7 @@ type providerDef struct {
 }
 
 var providerOrder = []providerDef{
-	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "https://api.anthropic.com", "claude-sonnet-4-6"},
+	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "https://api.anthropic.com", "claude-sonnet-5"},
 	{"openai", []string{"OPENAI_API_KEY"}, "https://api.openai.com", "gpt-4o"},
 	{"gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}, "https://generativelanguage.googleapis.com", "gemini-2.0-flash"},
 	{"xai", []string{"XAI_API_KEY"}, "https://api.x.ai", "grok-2-latest"},

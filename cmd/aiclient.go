@@ -208,7 +208,7 @@ type anthropicClient struct {
 	requestTimeout time.Duration
 }
 
-func (c *anthropicClient) SetModel(m string)       { c.model = m }
+func (c *anthropicClient) SetModel(m string)        { c.model = m }
 func (c *anthropicClient) SetTemperature(t float64) { c.temperature = t }
 func (c *anthropicClient) Temperature() float64     { return c.temperature }
 
@@ -386,9 +386,35 @@ type openaiClient struct {
 	requestTimeout time.Duration
 }
 
-func (c *openaiClient) SetModel(m string)       { c.model = m }
+func (c *openaiClient) SetModel(m string)        { c.model = m }
 func (c *openaiClient) SetTemperature(t float64) { c.temperature = t }
 func (c *openaiClient) Temperature() float64     { return c.temperature }
+
+// reasoningModelPrefixes are OpenAI model names/prefixes for the o-series and
+// gpt-5/codex reasoning models. These reject the standard chat-completion
+// request shape with HTTP 400: max_tokens must be sent as
+// max_completion_tokens, and temperature must be omitted (they only accept
+// the fixed default of 1). Entries ending in "-" match by prefix (dated and
+// sized variants like o1-mini, o3-mini, gpt-5-thinking); others match exactly.
+var reasoningModelPrefixes = []string{"o1", "o1-", "o3", "o3-", "o4-", "gpt-5", "gpt-5-", "codex-"}
+
+// isReasoningModel reports whether model belongs to an OpenAI reasoning-model
+// family (see reasoningModelPrefixes). It only recognizes OpenAI's own naming
+// scheme — OpenAI-compatible providers (xAI, DeepSeek, Mistral) that reuse
+// this client accept the standard max_tokens/temperature shape.
+func isReasoningModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, p := range reasoningModelPrefixes {
+		if strings.HasSuffix(p, "-") {
+			if strings.HasPrefix(m, p) {
+				return true
+			}
+		} else if m == p {
+			return true
+		}
+	}
+	return false
+}
 
 func (c *openaiClient) ListModels(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
@@ -415,10 +441,16 @@ func (c *openaiClient) Complete(ctx context.Context, system string, messages []a
 	}
 
 	body := map[string]any{
-		"model":       c.model,
-		"messages":    msgs,
-		"max_tokens":  c.maxTokens,
-		"temperature": c.temperature,
+		"model":    c.model,
+		"messages": msgs,
+	}
+	if isReasoningModel(c.model) {
+		// o1/o3/o4/gpt-5/codex reject "max_tokens" (must be
+		// "max_completion_tokens") and reject any non-default temperature.
+		body["max_completion_tokens"] = c.maxTokens
+	} else {
+		body["max_tokens"] = c.maxTokens
+		body["temperature"] = c.temperature
 	}
 	if onToken != nil {
 		body["stream"] = true
@@ -567,7 +599,7 @@ type geminiClient struct {
 	requestTimeout time.Duration
 }
 
-func (c *geminiClient) SetModel(m string)       { c.model = m }
+func (c *geminiClient) SetModel(m string)        { c.model = m }
 func (c *geminiClient) SetTemperature(t float64) { c.temperature = t }
 func (c *geminiClient) Temperature() float64     { return c.temperature }
 
@@ -761,8 +793,9 @@ func (c *geminiClient) parseStream(r io.Reader, onToken func(string)) (string, T
 
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(runes[:n]) + "..."
 }

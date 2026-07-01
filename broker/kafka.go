@@ -103,6 +103,7 @@ func GetRootCommand() *cobra.Command {
 		},
 		Extra: []*cobra.Command{
 			cmd.WrapTopicCommand(cmd.NewForwardTopicCommand, topicFactory),
+			cmd.WrapTopicCommand(cmd.NewBridgeTopicCommand, topicFactory),
 		},
 	})
 }
