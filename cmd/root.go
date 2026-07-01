@@ -155,8 +155,6 @@ func NewRootCommand(spec BrokerSpec) *cobra.Command {
 			NewRequestCommand,
 			NewReplyCommand,
 			NewMoveCommand,
-			NewForwardCommand,
-			NewBridgeCommand,
 		} {
 			rootCmd.AddCommand(WrapQueueCommand(newCmd, queueFactory))
 		}
@@ -184,6 +182,16 @@ func NewRootCommand(spec BrokerSpec) *cobra.Command {
 			}
 			return c
 		}, topicFactory))
+	}
+
+	// forward/bridge can relay queue<->queue, queue<->topic, or topic<->topic
+	// (topology chosen via flags), so each is registered once here rather than
+	// once per messaging model — a queue-named and topic-named command sharing
+	// the same name would silently shadow one another (see
+	// project-topic-queue-command-naming memory / NewRootCommand callers).
+	if spec.Queue != nil || spec.Topic != nil {
+		rootCmd.AddCommand(WrapForwardCommand(queueFactory, topicFactory))
+		rootCmd.AddCommand(WrapBridgeCommand(queueFactory, topicFactory))
 	}
 
 	// Management — prefer ManageSpec (fresh command per invocation in the shell)

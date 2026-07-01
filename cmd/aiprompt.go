@@ -195,8 +195,9 @@ Never use "body", "payload", or "message" — the exact field names are:
 - Use ONLY the exact flags listed below — do not invent flags
 - Destination names and address formats are broker-specific — see broker docs below
 - When broker objects are listed below, use those exact names — do not guess
-- Queue commands: send, receive, peek, request, reply, move, forward (point-to-point)
+- Queue commands: send, receive, peek, request, reply, move (point-to-point)
 - Topic commands: publish, subscribe (pub/sub fan-out)
+- Cross-topology relays: forward, bridge — default to a queue on both ends; when this broker also supports topics, forward's --from-topic/--to-topic and bridge's --topic select a topic endpoint instead (see the flag list below for exact availability)
 
 ## Destructive operations
 

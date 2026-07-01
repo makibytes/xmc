@@ -17,7 +17,7 @@ import (
 func TestForwardCommand_RelaysAll(t *testing.T) {
 	msgs := []*backends.Message{{Data: []byte("a")}, {Data: []byte("b")}, {Data: []byte("c")}}
 	mock := &mockQueueBackend{receiveMsgs: msgs, receiveErr: context.Canceled}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"src", "dst"})
 
 	captureStdout(t, func() {
@@ -39,7 +39,7 @@ func TestForwardCommand_RelaysAll(t *testing.T) {
 func TestForwardCommand_CountLimit(t *testing.T) {
 	msgs := []*backends.Message{{Data: []byte("a")}, {Data: []byte("b")}, {Data: []byte("c")}}
 	mock := &mockQueueBackend{receiveMsgs: msgs, receiveErr: context.Canceled}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"src", "dst", "-n", "2"})
 
 	captureStdout(t, func() {
@@ -64,7 +64,7 @@ func TestForwardCommand_PreservesMetadata(t *testing.T) {
 		Properties:    map[string]any{"env": "prod"},
 	}
 	mock := &mockQueueBackend{receiveMsgs: []*backends.Message{msg}, receiveErr: context.Canceled}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"src", "dst"})
 
 	captureStdout(t, func() {
@@ -84,7 +84,7 @@ func TestForwardCommand_PreservesMetadata(t *testing.T) {
 
 func TestForwardCommand_SameSourceAndDestination(t *testing.T) {
 	mock := &mockQueueBackend{}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"same", "same"})
 
 	if err := cmd.Execute(); err == nil {
@@ -103,7 +103,7 @@ func TestForwardCommand_Transform(t *testing.T) {
 		receiveMsgs: []*backends.Message{{Data: []byte("hello")}},
 		receiveErr:  context.Canceled,
 	}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"src", "dst", "-x", "tr a-z A-Z"})
 
 	captureStdout(t, func() {
@@ -124,7 +124,7 @@ func TestForwardCommand_TransformFailureRecovers(t *testing.T) {
 		receiveMsgs: []*backends.Message{{Data: []byte("lost")}},
 		receiveErr:  context.Canceled,
 	}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"src", "dst", "-x", "exit 1"})
 
 	out := captureStdout(t, func() {
@@ -146,7 +146,7 @@ func TestForwardCommand_SendFailureRecovers(t *testing.T) {
 		receiveErr:  context.Canceled,
 		sendErr:     fmt.Errorf("broker down"),
 	}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"src", "dst"})
 
 	out := captureStdout(t, func() {
@@ -162,7 +162,7 @@ func TestForwardCommand_SendFailureRecovers(t *testing.T) {
 func TestForwardTopicCommand_RelaysAll(t *testing.T) {
 	msgs := []*backends.Message{{Data: []byte("e1")}, {Data: []byte("e2")}}
 	mock := &mockTopicBackend{subscribeMsgs: msgs, subscribeErr: context.Canceled}
-	cmd := NewForwardTopicCommand(mock)
+	cmd := NewForwardCommand(nil, mock, false, true)
 	cmd.SetArgs([]string{"src", "dst"})
 
 	captureStdout(t, func() {
@@ -175,5 +175,107 @@ func TestForwardTopicCommand_RelaysAll(t *testing.T) {
 	}
 	if mock.lastPublishOpts.Topic != "dst" {
 		t.Errorf("destination topic = %q, want dst", mock.lastPublishOpts.Topic)
+	}
+}
+
+func TestForwardCommand_FlagPresence(t *testing.T) {
+	dual := NewForwardCommand(nil, nil, true, true)
+	if dual.Flags().Lookup("from-topic") == nil {
+		t.Error("expected --from-topic flag on a dual-capable broker")
+	}
+	if dual.Flags().Lookup("to-topic") == nil {
+		t.Error("expected --to-topic flag on a dual-capable broker")
+	}
+	if dual.Flags().Lookup("group") == nil {
+		t.Error("expected --group flag when topic-capable")
+	}
+
+	queueOnly := NewForwardCommand(nil, nil, true, false)
+	if queueOnly.Flags().Lookup("from-topic") != nil {
+		t.Error("did not expect --from-topic flag on a queue-only broker")
+	}
+	if queueOnly.Flags().Lookup("group") != nil {
+		t.Error("did not expect --group flag on a queue-only broker")
+	}
+
+	topicOnly := NewForwardCommand(nil, nil, false, true)
+	if topicOnly.Flags().Lookup("from-topic") != nil {
+		t.Error("did not expect --from-topic flag on a topic-only broker (topology is forced)")
+	}
+	if topicOnly.Flags().Lookup("group") == nil {
+		t.Error("expected --group flag on a topic-only broker")
+	}
+}
+
+func TestForwardCommand_QueueToTopic(t *testing.T) {
+	msgs := []*backends.Message{{Data: []byte("a")}}
+	qMock := &mockQueueBackend{receiveMsgs: msgs, receiveErr: context.Canceled}
+	tMock := &mockTopicBackend{}
+	cmd := NewForwardCommand(qMock, tMock, true, true)
+	cmd.SetArgs([]string{"src", "dst", "--to-topic"})
+
+	captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if tMock.publishCount != 1 {
+		t.Errorf("publishCount = %d, want 1", tMock.publishCount)
+	}
+	if qMock.sendCount != 0 {
+		t.Errorf("sendCount = %d, want 0 (destination should be the topic, not the queue)", qMock.sendCount)
+	}
+	if tMock.lastPublishOpts.Topic != "dst" {
+		t.Errorf("destination = %q, want dst", tMock.lastPublishOpts.Topic)
+	}
+}
+
+func TestForwardCommand_TopicToQueue(t *testing.T) {
+	msgs := []*backends.Message{{Data: []byte("e1")}}
+	qMock := &mockQueueBackend{}
+	tMock := &mockTopicBackend{subscribeMsgs: msgs, subscribeErr: context.Canceled}
+	cmd := NewForwardCommand(qMock, tMock, true, true)
+	cmd.SetArgs([]string{"src", "dst", "--from-topic"})
+
+	captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if qMock.sendCount != 1 {
+		t.Errorf("sendCount = %d, want 1", qMock.sendCount)
+	}
+	if qMock.lastSendOpts.Queue != "dst" {
+		t.Errorf("destination = %q, want dst", qMock.lastSendOpts.Queue)
+	}
+}
+
+func TestForwardCommand_CrossTopology_SameNameAllowed(t *testing.T) {
+	// A queue and a topic with the same name are distinct entities, so
+	// crossing topologies must not trip the "source and destination must
+	// differ" guard the way same-topology same-name does.
+	qMock := &mockQueueBackend{receiveErr: context.Canceled}
+	tMock := &mockTopicBackend{}
+	cmd := NewForwardCommand(qMock, tMock, true, true)
+	cmd.SetArgs([]string{"same", "same", "--to-topic"})
+
+	captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cross-topology same name should not error: %v", err)
+		}
+	})
+}
+
+func TestForwardCommand_SameTopologySameName_StillErrors(t *testing.T) {
+	qMock := &mockQueueBackend{}
+	tMock := &mockTopicBackend{}
+	cmd := NewForwardCommand(qMock, tMock, true, true)
+	cmd.SetArgs([]string{"same", "same"}) // both default to queue
+
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when source == destination on the same topology")
+	}
+	if qMock.receiveCount != 0 {
+		t.Errorf("receiveCount = %d, want 0 (should fail before consuming)", qMock.receiveCount)
 	}
 }

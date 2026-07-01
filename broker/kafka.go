@@ -101,9 +101,5 @@ func GetRootCommand() *cobra.Command {
 			},
 			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return kafka.DeleteTopic(connArgs, topic) }},
 		},
-		Extra: []*cobra.Command{
-			cmd.WrapTopicCommand(cmd.NewForwardTopicCommand, topicFactory),
-			cmd.WrapTopicCommand(cmd.NewBridgeTopicCommand, topicFactory),
-		},
 	})
 }

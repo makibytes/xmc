@@ -10,13 +10,16 @@ xmc offers three ways to relay messages. Pick the one that fits your scenario:
 | **Liveness** | Continuous (polls for new messages) | Continuous | Depends on flags (`-w`, `-n 0`) |
 | **Transform** | `-x 'jq …'` per message, metadata kept | — | `\| jq \|` in pipeline (loses metadata) |
 | **Recovery** | Consumed-but-unsent payload written to stdout | Consumed-but-unsent payload written to stdout | — |
-| **Topic-only brokers** | Topic variant (e.g. Kafka) | Topic variant | Yes |
+| **Topic-only brokers** | Forced topic↔topic (e.g. Kafka) | Forced topic source | Yes |
+| **Cross-topology** (dual brokers) | `--from-topic`/`--to-topic` | `--topic` (source only; target follows `--to`) | Yes (mix flags freely) |
 
 ## When to Use What
 
 ### `forward` — same-broker relay
 
 Continuously stream messages from one queue (or topic) to another on the **same broker**. Metadata is preserved by default — no `--ndjson` needed. Keeps polling as new messages arrive until interrupted, a `--for` window expires, or `--count` is reached.
+
+Source and destination each default to a **queue**. On brokers that support both queues and topics, `--from-topic` and `--to-topic` select a topic endpoint instead — independently — so a relay can cross topologies (e.g. mirror a queue onto a topic) as well as stay within one. Topic-only brokers (Kafka) force both ends to topics and omit these flags.
 
 ```bash
 # Mirror a queue (same broker)
@@ -25,13 +28,21 @@ forward orders orders-archive
 # Redrive a DLQ with a transform
 forward dlq orders -x 'jq ".status = \"retry\""'
 
-# Kafka topic-to-topic
+# Kafka topic-to-topic (forced; no flags needed)
 forward raw-events clean-events -x 'jq "del(.debug)"' --for 1h --stats
+
+# Dual broker: mirror a queue onto a topic
+amc forward orders orders-feed --to-topic
+
+# Dual broker: drain a topic into a queue for durable processing
+amc forward events events-queue --from-topic
 ```
 
 ### `bridge` — cross-broker relay
 
 Stream messages to a **different broker** by spawning the target binary as a subprocess and piping NDJSON to its stdin. `--ndjson` is auto-appended to the target command. Works in the regular shell and AI Shell's command mode.
+
+The source defaults to a **queue**; on brokers that also support topics, `--topic` reads it as a topic (subscribe) instead. The target's topology is simply whichever verb the `--to` command uses (`send` for a queue, `publish` for a topic) — so bridge already covers queue→topic and topic→queue, `--topic` only disambiguates the *source*.
 
 ```bash
 # Artemis → Kafka
@@ -42,6 +53,12 @@ kmc bridge events --to 'rmc send events-archive' --for 1h --stats
 
 # Redis → AWS SQS
 redmc bridge tasks --to 'awsmc send tasks'
+
+# Dual broker: topic source, cross-broker to a queue target
+amc bridge events --topic --to 'kmc send events-archive'
+
+# Dual broker: queue source, cross-broker to a topic target
+amc bridge orders --to 'kmc publish orders-mirror'
 ```
 
 ### `receive | send --ndjson` — manual pipeline

@@ -109,8 +109,9 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 Uses `spf13/cobra` for CLI:
 - Root command provides persistent flags (`--server`, `--user`, `--password`, `--verbose`, TLS flags)
 - Environment variables prefixed per flavor: `AMC_` (Artemis), `IMC_` (IBM MQ), `KMC_` (Kafka), `MMC_` (MQTT), `NMC_` (NATS), `PMC_` (Pulsar), `RMC_` (RabbitMQ), `REDMC_` (Redis), `GMC_` (Google Pub/Sub), `AWSMC_` (AWS SQS+SNS), `AZMC_` (Azure Service Bus)
-- Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`, `forward`, `bridge`
-- Topic commands: `publish`, `subscribe` (Kafka is topic-only and additionally has topic `forward` and topic `bridge`; other brokers are dual queue+topic and expose `forward`/`bridge` only on the queue side, since a same-named topic variant would collide with it)
+- Queue commands: `send`, `receive`, `peek`, `request`, `reply`, `move`
+- Topic commands: `publish`, `subscribe`
+- Cross-topology relays: `forward`, `bridge` — registered once per broker (a queue-named and topic-named command sharing one name would silently shadow each other in cobra) and default to a queue; on brokers with both models, `forward` takes `--from-topic`/`--to-topic` and `bridge` takes `--topic` to select a topic endpoint instead, so a relay can cross topologies (e.g. queue → topic) or stay within one. Topic-only (Kafka) and queue-only (IBM MQ) brokers force their sole topology and omit these flags.
 - Interactive: `shell`/`sh` (REPL with persistent connection, pipelines, auto-reconnect, deep autocomplete)
 - AI shell: `ai` (standalone command — full-screen Bubble Tea TUI with natural-language → xmc command translation via LLM; dual input mode: `ask>` for AI prompts and `<binary>>` for direct xmc commands, toggled with Esc; Tab autocomplete in command mode; Up/Down history recall; connection probe with title-bar URL; N-window broker-object sidebar with Shift+Tab browse, `c`/`d`/`p` hotkeys (`p` peeks selected queue without confirmation); inline command cards; shared shell history; quit via `/exit` or Ctrl+C)
 - Configuration: `~/.xmc/<binary>.yml` YAML config for AI settings, broker-auth fallback (flag > env > YAML > default), sidebar auto-refresh (`auto-update-objects`, `auto-update-messages` — both default true), and command aliases (`aliases:` map with `$1`/`$2`/`$@` substitution)
@@ -200,8 +201,8 @@ Brokers with address conventions use `BrokerSpec.ResolveTarget` to map bare name
   - `request.go` - Request-reply command (send + wait for reply)
   - `reply.go` - Request-reply responder (consume requests, reply to each reply-to)
   - `move.go` - Move/redrive messages between queues on the same broker
-  - `forward.go` - Continuous streaming relay between queues/topics (optional `-x`/`--command` shell command)
-  - `bridge.go` - Cross-broker relay via subprocess NDJSON streaming (`--to '<target command>'`)
+  - `forward.go` - Continuous streaming relay on the same broker; defaults to queue↔queue, `--from-topic`/`--to-topic` cross into topics on dual-capable brokers (optional `-x`/`--command` shell command)
+  - `bridge.go` - Cross-broker relay via subprocess NDJSON streaming (`--to '<target command>'`); defaults to a queue source, `--topic` selects a topic source on dual-capable brokers
   - `publish.go`, `subscribe.go` - Topic commands
   - `format.go` - `-F`/`--format` output templating shared by the read commands
   - `signal.go` - interrupt-aware context for long-running commands (reply, move, ping)

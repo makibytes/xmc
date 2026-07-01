@@ -217,10 +217,13 @@ stdout so it can be recovered, and the command stops.
 
 #### forward
 
-Continuously relay messages from one queue to another on the same broker. Unlike
+Continuously relay messages from one source to another on the same broker. Unlike
 `move`, which drains what is present and stops, `forward` keeps streaming as new
 messages arrive — useful for live bridging, mirroring traffic while debugging, or
-continuously redriving a dead-letter queue:
+continuously redriving a dead-letter queue. Source and destination each default
+to a queue; on brokers that also support topics, `--from-topic`/`--to-topic`
+select a topic endpoint instead, so a relay can cross topologies as well as stay
+within one:
 
 ```sh
 xmc forward <source> <destination>             # relay until interrupted (Ctrl-C)
@@ -228,6 +231,8 @@ xmc forward --for 5m orders orders-backup       # relay for five minutes
 xmc forward -n 100 orders orders-backup         # relay 100 messages then stop
 xmc forward -x "jq -c ." raw normalized         # transform each message in flight
 xmc forward --stats orders mirror               # show live throughput on stderr
+xmc forward orders orders-feed --to-topic       # mirror a queue onto a topic
+xmc forward events events-queue --from-topic    # drain a topic into a queue
 ```
 
 Flags:
@@ -240,12 +245,15 @@ Flags:
       --stats              print live throughput statistics to stderr
   -S, --selector string    only forward messages matching the selector
   -q, --quiet              print only the final summary
+      --from-topic         read the source as a topic instead of a queue (dual-capable brokers only)
+      --to-topic           write the destination as a topic instead of a queue (dual-capable brokers only)
 ```
 
 Like `move`, the relay is destructive on the source and preserves message
 metadata (the destination assigns a fresh message ID). If a transform or send
-fails, the consumed message is written to stdout so it can be recovered. On
-topic-only brokers (Kafka) `forward` relays between topics instead of queues.
+fails, the consumed message is written to stdout so it can be recovered.
+Topic-only brokers (Kafka) force both ends to topics and don't show the
+`--from-topic`/`--to-topic` flags.
 
 ### Topic Commands
 

@@ -384,14 +384,59 @@ func (s *shellSession) buildVerbCommand(verb string, rootCmd *cobra.Command) (*c
 		"peek":    func(b backends.QueueBackend) *cobra.Command { return applyConsume(NewPeekCommand(b)) },
 		"request": NewRequestCommand,
 		"reply":   NewReplyCommand, "respond": NewReplyCommand,
-		"move": NewMoveCommand, "forward": NewForwardCommand,
-		"bridge": NewBridgeCommand,
+		"move": NewMoveCommand,
 	}
 
 	// Topic verbs — publish and subscribe get the target resolver.
 	topicVerbBuilders := map[string]func(backends.TopicBackend) *cobra.Command{
 		"publish":   func(b backends.TopicBackend) *cobra.Command { return applyProduce(NewPublishCommand(b, resolver, produceExtra, exchRouting)) },
 		"subscribe": func(b backends.TopicBackend) *cobra.Command { return applyConsume(NewSubscribeCommand(b, resolver, consumeExtra, exchRouting)) },
+	}
+
+	// forward/bridge may need a queue adapter, a topic adapter, or both,
+	// depending on flags that are only parsed once the command executes — so,
+	// unlike the verbs above, the adapter(s) are fetched lazily inside RunE
+	// (from the session's cache, reusing the persistent connection like every
+	// other verb here) rather than eagerly before the topology is known.
+	if verb == "forward" || verb == "bridge" {
+		queueCapable, topicCapable := s.queueFactory != nil, s.topicFactory != nil
+		if verb == "forward" {
+			cmd := NewForwardCommand(nil, nil, queueCapable, topicCapable)
+			cmd.RunE = func(c *cobra.Command, args []string) error {
+				fromTopic, toTopic := resolveForwardTopology(c, queueCapable, topicCapable)
+				var qb backends.QueueBackend
+				var tb backends.TopicBackend
+				var err error
+				if !fromTopic || !toTopic {
+					if qb, err = s.getQueueAdapter(); err != nil {
+						return err
+					}
+				}
+				if fromTopic || toTopic {
+					if tb, err = s.getTopicAdapter(); err != nil {
+						return err
+					}
+				}
+				return doForward(c, args, qb, tb)
+			}
+			return cmd, nil
+		}
+		cmd := NewBridgeCommand(nil, nil, queueCapable, topicCapable)
+		cmd.RunE = func(c *cobra.Command, args []string) error {
+			if resolveBridgeTopology(c, queueCapable, topicCapable) {
+				tb, err := s.getTopicAdapter()
+				if err != nil {
+					return err
+				}
+				return doBridge(c, args, nil, tb)
+			}
+			qb, err := s.getQueueAdapter()
+			if err != nil {
+				return err
+			}
+			return doBridge(c, args, qb, nil)
+		}
+		return cmd, nil
 	}
 
 	if newCmd, ok := queueVerbBuilders[verb]; ok {
