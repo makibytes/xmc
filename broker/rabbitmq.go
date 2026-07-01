@@ -105,7 +105,9 @@ func GetRootCommand() *cobra.Command {
 				SetupFlags: func(c *cobra.Command) {
 					c.Flags().StringVar(&routingKey, "routing-key", "#", "Routing key for the binding to remove")
 				},
-				Run: func(queue, exchange string) error { return rabbitmq.UnbindQueue(mgmtArgs(), queue, exchange, routingKey) },
+				Run: func(queue, exchange string) error {
+					return rabbitmq.UnbindQueue(mgmtArgs(), queue, exchange, routingKey)
+				},
 			},
 		},
 		Extra: []*cobra.Command{

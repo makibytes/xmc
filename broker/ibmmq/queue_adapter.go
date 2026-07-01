@@ -4,7 +4,6 @@ package ibmmq
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/ibm-messaging/mq-golang/v5/ibmmq"
@@ -90,14 +89,13 @@ func convertMQMDToBackendMessage(md *ibmmq.MQMD, data []byte, msgHandle ibmmq.MQ
 		InternalMetadata: make(map[string]any),
 	}
 
-	// Extract message metadata
-	msgId := strings.TrimRight(string(md.MsgId[:]), "\x00")
-	if msgId != "" {
+	// Extract message metadata (printable IDs round-trip as-is, binary
+	// broker-generated IDs are hex-encoded — see mqIDToString).
+	if msgId := mqIDToString(md.MsgId[:]); msgId != "" {
 		result.MessageID = msgId
 	}
 
-	correlId := strings.TrimRight(string(md.CorrelId[:]), "\x00")
-	if correlId != "" {
+	if correlId := mqIDToString(md.CorrelId[:]); correlId != "" {
 		result.CorrelationID = correlId
 	}
 

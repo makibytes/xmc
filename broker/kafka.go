@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/kafka"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -29,10 +31,11 @@ func GetRootCommand() *cobra.Command {
 	})
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "kmc",
-		Short:     "Apache Kafka Messaging Client",
-		Long:      "Command-line interface for Apache Kafka messaging",
-		AIContext: AIDoc("kafka"),
+		Use:              "kmc",
+		Short:            "Apache Kafka Messaging Client",
+		Long:             "Command-line interface for Apache Kafka messaging",
+		AIContext:        AIDoc("kafka"),
+		UnsupportedFlags: []string{"priority", "persistent", "selector"},
 		ConsumeFlags: func(c *cobra.Command) {
 			c.Flags().Int("partition", -1, "Read from a specific partition (disables consumer group)")
 			c.Flags().String("offset", "", "Start offset: earliest, latest, or a number (requires --partition)")
@@ -100,6 +103,27 @@ func GetRootCommand() *cobra.Command {
 				},
 			},
 			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return kafka.DeleteTopic(connArgs, topic) }},
+		},
+		Extra: []*cobra.Command{
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-kafka",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewTopic: func() (backends.TopicBackend, error) {
+					return kafka.NewTopicAdapter(connArgs)
+				},
+				ListTopics: func(_ context.Context) ([]mcp.TopicInfo, error) {
+					topics, err := kafka.ListTopics(connArgs)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]mcp.TopicInfo, len(topics))
+					for i, t := range topics {
+						out[i] = mcp.TopicInfo{Name: t.Name, Partitions: int64(t.PartitionCount)}
+					}
+					return out, nil
+				},
+			}),
 		},
 	})
 }

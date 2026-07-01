@@ -25,10 +25,11 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "pmc",
-		Short:     "Pulsar Messaging Client",
-		Long:      "Command-line interface for Apache Pulsar messaging",
-		AIContext: AIDoc("pulsar"),
+		Use:              "pmc",
+		Short:            "Pulsar Messaging Client",
+		Long:             "Command-line interface for Apache Pulsar messaging",
+		AIContext:        AIDoc("pulsar"),
+		UnsupportedFlags: []string{"priority", "persistent", "selector"},
 		ResolveTarget: func(t cmd.TargetSpec) (string, error) {
 			return pulsarpkg.ResolveTarget(t.IsTopic, t.To, tenant, namespace, nonPersistent)
 		},

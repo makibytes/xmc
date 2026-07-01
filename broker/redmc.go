@@ -24,10 +24,11 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "redmc",
-		Short:     "Redis Messaging Client",
-		Long:      "Command-line interface for Redis messaging (Streams)",
-		AIContext: AIDoc("redis"),
+		Use:              "redmc",
+		Short:            "Redis Messaging Client",
+		Long:             "Command-line interface for Redis messaging (Streams)",
+		AIContext:        AIDoc("redis"),
+		UnsupportedFlags: []string{"ttl", "priority", "persistent", "selector"},
 		ResolveTarget: func(t cmd.TargetSpec) (string, error) {
 			return redispkg.ResolveTarget(t.IsTopic, t.To, prefix)
 		},
@@ -76,8 +77,10 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 			},
-			Purge:       func(queue string) (int64, error) { return redispkg.PurgeQueue(connArgs, prefix, queue) },
-			Stats:       func(queue string) (*backends.QueueStats, error) { return redispkg.GetQueueStats(connArgs, prefix, queue) },
+			Purge: func(queue string) (int64, error) { return redispkg.PurgeQueue(connArgs, prefix, queue) },
+			Stats: func(queue string) (*backends.QueueStats, error) {
+				return redispkg.GetQueueStats(connArgs, prefix, queue)
+			},
 			CreateQueue: &cmd.ManageAction{Run: func(queue string) error { return redispkg.CreateQueue(connArgs, prefix, queue) }},
 			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return redispkg.DeleteQueue(connArgs, prefix, queue) }},
 			CreateTopic: &cmd.ManageAction{Run: func(topic string) error { return redispkg.CreateTopic(connArgs, prefix, topic) }},

@@ -71,10 +71,10 @@ func getDuration(cmd *cobra.Command, name string) time.Duration {
 	return 0
 }
 
-// aliasNormalize maps legacy concatenated flag names to their kebab-case
-// canonical form, so both spellings refer to the same flag (e.g. --contenttype
-// and --content-type). Registering it keeps existing scripts working while the
-// kebab-case names are shown in help.
+// aliasNormalize maps legacy flag spellings to their canonical form, so both
+// spellings refer to the same flag (e.g. --contenttype and --content-type, or
+// the deprecated --queue-name and --queue on read commands). Registering it
+// keeps existing scripts working while the canonical names are shown in help.
 func aliasNormalize(f *pflag.FlagSet, name string) pflag.NormalizedName {
 	switch name {
 	case "contenttype":
@@ -85,6 +85,8 @@ func aliasNormalize(f *pflag.FlagSet, name string) pflag.NormalizedName {
 		name = "message-id"
 	case "replyto":
 		name = "reply-to"
+	case "queue-name":
+		name = "queue"
 	}
 	return pflag.NormalizedName(name)
 }

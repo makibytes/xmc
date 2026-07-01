@@ -333,14 +333,14 @@ pmc manage create-topic <topic> --partitions 3
 
 | Broker | list | purge | stats | create | delete |
 | --- | --- | --- | --- | --- | --- |
-| Artemis | queues | yes | yes | queue, topic | queue, topic |
-| AWS SQS+SNS | queues + topics | yes (native) | yes | — | — |
-| Azure Service Bus | queues + topics | yes (drains) | yes | — | — |
-| Google Pub/Sub | topics + subscriptions | — | — | — | — |
-| Kafka | topics | — | — | topic | topic |
-| NATS | streams (queues) | — | — | queue | queue |
+| Artemis | queues + addresses | yes | yes | queue, topic | queue, topic |
+| AWS SQS+SNS | queues + topics | yes (native) | yes | queue, topic | queue, topic |
+| Azure Service Bus | queues + topics | yes (drains) | yes | queue, topic | queue, topic |
+| Google Pub/Sub | queues + topics | yes | — (no backlog API) | queue, topic | queue, topic |
+| Kafka | topics + consumer groups | — | — | topic | topic |
+| NATS | streams (queues) | yes | yes | queue | queue |
 | Pulsar | topics | — | — | topic | topic |
-| RabbitMQ | queues | yes | yes | queue, exchange (+bind) | queue, exchange (+unbind) |
+| RabbitMQ | queues + exchanges | yes | yes | queue, exchange (+bind) | queue, exchange (+unbind) |
 | Redis | queues + topics | yes | yes | queue, topic | queue, topic |
 | IBM MQ | — | — | — | — | — |
 | MQTT | — | — | — | — | — |

@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"context"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -16,10 +17,11 @@ func GetRootCommand() *cobra.Command {
 	var connArgs gcppkg.ConnArguments
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "gmc",
-		Short:     "Google Pub/Sub Messaging Client",
-		Long:      "Command-line interface for Google Cloud Pub/Sub messaging",
-		AIContext: AIDoc("google"),
+		Use:              "gmc",
+		Short:            "Google Pub/Sub Messaging Client",
+		Long:             "Command-line interface for Google Cloud Pub/Sub messaging",
+		AIContext:        AIDoc("google"),
+		UnsupportedFlags: []string{"ttl", "priority", "persistent", "selector"},
 		ConsumeFlags: func(c *cobra.Command) {
 			c.Flags().String("subscription", "", "Named subscription override for receive/subscribe")
 		},
@@ -78,6 +80,20 @@ func GetRootCommand() *cobra.Command {
 				},
 				NewTopic: func() (backends.TopicBackend, error) {
 					return gcppkg.NewTopicAdapter(connArgs)
+				},
+				ListQueues: func(_ context.Context) ([]mcp.QueueInfo, error) {
+					queues, err := gcppkg.ListQueues(connArgs)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]mcp.QueueInfo, len(queues))
+					for i, q := range queues {
+						out[i] = mcp.QueueInfo{Name: q.Name}
+					}
+					return out, nil
+				},
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
+					return gcppkg.PurgeQueue(connArgs, queue)
 				},
 			}),
 		},

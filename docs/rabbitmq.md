@@ -24,7 +24,7 @@ RabbitMQ 4.x uses AMQP 1.0 address v2 format. rmc applies smart defaults:
 - `-q <queue>` forces `/queues/<queue>` — `<to>` is forbidden with `-q`
 - `-e` and `-q` are mutually exclusive
 - Full v2 addresses (starting with `/`) are always used verbatim — highest precedence
-- receive/subscribe use long-form `--exchange`/`--queue-name` (since `-q`=quiet, `-e`=echo)
+- receive/subscribe use long-form `--exchange`/`--queue` (since `-q`=quiet, `-e`=echo)
 - **Check the exchange type in the topology** — `fanout`/`headers`: omit `--routing-key`; `direct`/`topic`: provide `--routing-key`
 
 ## Exchanges, bindings, and routing

@@ -18,7 +18,7 @@ func TestPeekCommand_NonDestructive(t *testing.T) {
 		Properties: map[string]any{"key": "val"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	err := cmd.Execute()
@@ -36,7 +36,7 @@ func TestPeekCommand_NonDestructive(t *testing.T) {
 
 func TestPeekCommand_TimeoutReturnsNil(t *testing.T) {
 	mock := &mockQueueBackend{receiveErr: context.DeadlineExceeded}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	err := cmd.Execute()
@@ -51,7 +51,7 @@ func TestPeekCommand_CountFlag(t *testing.T) {
 		{Data: []byte("peek2")},
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-n", "2"})
 
 	old := os.Stdout
@@ -91,7 +91,7 @@ func TestPeekCommand_JSONOutput(t *testing.T) {
 		Properties: map[string]any{"color": "blue"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-J"})
 
 	old := os.Stdout
@@ -124,7 +124,7 @@ func TestPeekCommand_JSONOutput(t *testing.T) {
 func TestPeekCommand_SelectorFlag(t *testing.T) {
 	msg := &backends.Message{Data: []byte("filtered")}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-S", "priority > 5"})
 
 	old := os.Stdout
@@ -152,7 +152,7 @@ func TestPeekCommand_QuietFlag(t *testing.T) {
 		Properties: map[string]any{"key": "val"},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-q"})
 
 	oldStderr := os.Stderr
@@ -198,7 +198,7 @@ func TestPeekCommand_NilMessageAfterFirst(t *testing.T) {
 		nil,
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue", "-n", "5"})
 
 	old := os.Stdout
@@ -222,7 +222,7 @@ func TestPeekCommand_NilMessageAfterFirst(t *testing.T) {
 
 func TestPeekCommand_NilMessageFirst(t *testing.T) {
 	mock := &mockQueueBackend{receiveMsg: nil}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"test-queue"})
 
 	err := cmd.Execute()

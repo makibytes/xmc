@@ -25,7 +25,8 @@ subscribe events.>              # NATS wildcard: > matches any remaining tokens
 
 ## Supported features
 
-- Request/reply (native NATS reply subjects)
+- Request/reply (native: private per-request reply queue, auto-created and deleted)
+- Peek browses stored messages by stream sequence (non-destructive, `-n 0` walks all)
 - Move, forward
 - Durable subscriptions via `-D -g <group>`
 - Persistent delivery (`-d`) maps to JetStream

@@ -31,6 +31,8 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("IMC_PASSWORD"), "Password for authentication")
 			c.PersistentFlags().StringVarP(&connArgs.QueueManager, "qmgr", "m", os.Getenv("IMC_QUEUE_MANAGER"), "Queue manager name (overrides URL)")
 			c.PersistentFlags().StringVarP(&connArgs.Channel, "channel", "c", os.Getenv("IMC_CHANNEL"), "Channel name (overrides URL)")
+			c.PersistentFlags().StringVar(&connArgs.ModelQueue, "model-queue", os.Getenv("IMC_MODEL_QUEUE"), "Model queue for temporary reply queues (default SYSTEM.DEFAULT.MODEL.QUEUE)")
+			c.PersistentFlags().StringVar(&connArgs.DynamicQueue, "dynamic-queue", os.Getenv("IMC_DYNAMIC_QUEUE"), "Dynamic queue name pattern for temporary reply queues (default XMC.REPLY.*)")
 		},
 		Queue: func() (backends.QueueBackend, error) { return ibmmq.NewQueueAdapter(connArgs) },
 		Ping:  func() (cmd.Closeable, error) { return ibmmq.NewQueueAdapter(connArgs) },

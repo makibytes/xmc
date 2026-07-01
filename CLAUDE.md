@@ -66,6 +66,8 @@ Each broker provides adapters implementing the backend interfaces:
 - `TopicBackend` interface (`broker/backends/topic.go`) - for topic operations (publish, subscribe)
 - `ManageableBackend` interface (`broker/backends/queue.go`) - optional, for management operations (list, purge, stats)
 - `ManageableTopicBackend` interface (`broker/backends/topic.go`) - optional, for topic management (list topics)
+- `RequestReplyBackend` interface (`broker/backends/request.go`) - optional, native request/reply (Artemis: server-side selector match on shared reply queue; NATS: private per-request reply stream, auto-deleted; IBM MQ: temporary dynamic reply queue + CorrelId match). Others use the broker-neutral default in `backends.Request`. The `reconnectingQueue` wrapper implements it by dispatching through `backends.Request` on the inner adapter so shell/AI mode keeps the native path.
+- `BrowseBackend` interface (`broker/backends/queue.go`) - optional, true non-destructive peek cursor (Artemis/RabbitMQ: AMQP copy-mode receiver; NATS: GetMsg by stream sequence; Redis: XRANGE cursor; Azure: native PeekMessages cursor; IBM MQ: MQOO_BROWSE + BROWSE_FIRST/NEXT). Brokers without it fall back to stateless Receive(ack=false), where `peek -n 0` repeats the head message.
 
 Entry point files (`broker/artemis.go`, etc.) fill in a `cmd.BrokerSpec` struct and call `cmd.NewRootCommand(spec)` which wires up all commands, flags, and the verbose toggle. Management subcommands are specified via `ManageSpec` on `BrokerSpec`; `NewRootCommand` builds the `manage` command tree from it, and the shell builds a fresh one per pipeline invocation for clean IO routing.
 
@@ -118,7 +120,7 @@ Uses `spf13/cobra` for CLI:
 - History: shared readline history per binary (`<binary>-sh.log` in `~/.xmc/`; AI-executed commands are appended to the same file)
 - Connectivity: `ping` (all brokers; connects and reports reachability)
 - Resilience: `--reconnect` (auto-reconnect with exponential backoff for long-running commands; only triggers on real connection/network errors, not application errors)
-- Exchange routing (RabbitMQ): `-e`/`--exchange` and `-q`/`--queue` on send/publish (`--exchange`/`--queue-name` on receive/subscribe); defaults: send→`/queues/<to>`, publish→`/exchanges/amq.topic/<to>`; AMQP 1.0 v2 addresses always win
+- Exchange routing (RabbitMQ): `-e`/`--exchange` and `-q`/`--queue` on send/publish (`--exchange`/`--queue` on receive/subscribe, long-form only since `-q`=quiet there; `--queue-name` is a deprecated alias); defaults: send→`/queues/<to>`, publish→`/exchanges/amq.topic/<to>`; AMQP 1.0 v2 addresses always win
 - Management commands: `manage list`, `manage purge`, `manage stats`, `manage create-queue`, `manage delete-queue`, `manage create-topic`, `manage delete-topic`, `manage create-exchange`, `manage delete-exchange`, `manage bind-queue`, `manage unbind-queue`
 - Output: `-J` JSON, `-F`/`--format` template, or `--ndjson` lossless records, shared across read commands
 - Bulk/load: `-l`/`--lines`, `--ndjson` (input), `-n`/`--count` repeat, `--rate` throttle on send/publish; `-n 0` drains on read commands
@@ -153,6 +155,7 @@ Each broker uses its native management API. Object types listed via `ManageSpec.
 - **RabbitMQ**: RabbitMQ Management API (HTTP port 15672) — queues, exchanges (hierarchical: exchange→binding→queue); purge, stats, create/delete queue, create/delete exchange, bind/unbind queue
 - **Kafka**: Admin client via `segmentio/kafka-go` — topics (partitions), consumer groups; create/delete topic (with `--partitions`, `--replication-factor`, `--config`)
 - **IBM MQ**: No management commands (queue management via IBM tooling)
+- **MQTT**: No management commands (MQTT has no broker management protocol)
 - **NATS**: JetStream API — streams (hierarchical: stream→consumer); create/delete stream (with `--retention`, `--max-msgs`, `--subject`)
 - **Pulsar**: Admin REST API (HTTP port 8080, `--admin-port` to override) — topics; create/delete topic (with `--partitions`); `--tenant`/`--namespace`/`--non-persistent` persistent flags with `ResolveTarget`
 - **Redis**: `go-redis` commands — queues, topics; purge, stats, create/delete queue, create/delete topic; `--prefix`/`--maxlen` persistent flags with `ResolveTarget`
@@ -165,11 +168,12 @@ Each broker uses its native management API. Object types listed via `ManageSpec.
 Each broker can register per-message flags via `BrokerSpec.ProduceFlags`/`ConsumeFlags` and read them back via `ProduceExtra`/`ConsumeExtra` into `opts.Extra map[string]string`:
 - **Artemis**: `--anycast`/`--multicast` (routing-type override); `--broker-name` (Jolokia management)
 - **Kafka**: `--partition`/`--offset` (consume: single-partition reads); key-aware balancer (Hash when key present)
-- **MQTT**: `--qos 0|1|2`/`--retain` (produce); `--qos` (consume); `--group` (shared subscription prefix)
+- **MQTT**: `--qos 0|1|2`/`--retain` (produce); `--qos` (consume); `--queue-group` (persistent; shared subscription prefix for queue reads — distinct from the per-command `-g/--group` consumer group)
 - **AWS**: `--fifo`/`--message-group-id`/`--dedup-id` (produce); `--visibility-timeout` (consume)
 - **Azure**: `--subscription` (consume: named subscription override)
 - **Google**: `--subscription` (consume: named subscription override)
 - **NATS**: `--stream` (JetStream stream name override, produce+consume)
+- **IBM MQ**: `--model-queue`/`--dynamic-queue` (persistent; model queue and dynamic-name pattern for the temporary reply queue used by `request`, defaults SYSTEM.DEFAULT.MODEL.QUEUE / XMC.REPLY.*)
 
 ### Addressing Resolvers
 

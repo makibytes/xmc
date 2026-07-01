@@ -26,7 +26,11 @@ func (m aiTUIModel) startAIRequest() tea.Cmd {
 	// the first AI prompt, which trimHistory alone doesn't catch until
 	// history exceeds maxHistory).
 	history := append([]aiMessage(nil), leadingUserHistory(ai.history)...)
+	// topology is mu-guarded (refreshTopology writes it from background
+	// goroutines), so the read needs the lock even here on the UI goroutine.
+	ai.mu.Lock()
 	needsTopology := ai.topology == "" && len(ai.history) <= 1
+	ai.mu.Unlock()
 
 	return func() tea.Msg {
 		if err := ai.init(); err != nil {

@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-
 // ReconnectOptions controls the auto-reconnect wrapper behaviour.
 type ReconnectOptions struct {
 	// MaxElapsed caps how long the wrapper will keep retrying before giving up.
@@ -75,7 +74,10 @@ func isConnectionError(err error) bool {
 	}
 
 	// Substring fallback for driver-wrapped connection errors that don't
-	// implement standard error interfaces.
+	// implement standard error interfaces. gRPC status errors are matched by
+	// string on purpose: importing google.golang.org/grpc in cmd/ would pull
+	// gRPC+protobuf into every broker binary just to classify errors that only
+	// the gRPC-based brokers (Google Pub/Sub) can produce.
 	msg := strings.ToLower(err.Error())
 	connectionSubstrings := []string{
 		"connection refused",
@@ -86,6 +88,15 @@ func isConnectionError(err error) bool {
 		"no such host",
 		"i/o timeout",
 		"unexpected eof",
+		// gRPC transport failures ("rpc error: code = Unavailable desc = ...").
+		// Unavailable is the canonical retryable transport code; other codes
+		// (NotFound, PermissionDenied, ...) are application errors.
+		"code = unavailable",
+		"transport is closing",
+		// NATS initial-connect / reconnect exhaustion.
+		"no servers available",
+		// Paho MQTT op on a dropped connection.
+		"not currently connected",
 	}
 	for _, sub := range connectionSubstrings {
 		if strings.Contains(msg, sub) {
@@ -252,6 +263,37 @@ func (r *reconnectingQueue) Receive(ctx context.Context, opts backends.ReceiveOp
 	return result, retryErr
 }
 
+// Request implements backends.RequestReplyBackend by dispatching through
+// backends.Request on the underlying adapter, so a broker's native
+// request/reply (Artemis selector matching, NATS private reply queue) is not
+// hidden by the wrapper in shell/AI mode; adapters without native support get
+// the broker-neutral default. Like Send, a retried request is re-sent, so
+// reconnect keeps at-least-once semantics.
+func (r *reconnectingQueue) Request(ctx context.Context, opts backends.RequestOptions) (*backends.Message, error) {
+	r.mu.Lock()
+	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
+	adapter := r.adapter
+	r.mu.Unlock()
+
+	msg, err := backends.Request(ctx, adapter, opts)
+	if err == nil || !isConnectionError(err) {
+		return msg, err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result *backends.Message
+	retryErr := r.retryOp(ctx, fmt.Sprintf("request to %s", opts.Address), func() error {
+		var innerErr error
+		result, innerErr = backends.Request(ctx, r.adapter, opts)
+		return innerErr
+	})
+	return result, retryErr
+}
+
 // Browse implements backends.BrowseBackend by delegating to the underlying
 // adapter if it supports browsing. Returns errBrowseUnsupported if the
 // adapter does not implement BrowseBackend, allowing doReceive to fall back
@@ -330,7 +372,12 @@ func (r *reconnectingTopic) Subscribe(ctx context.Context, opts backends.Subscri
 // wrapReconnectQueue returns a new factory that produces a reconnecting queue
 // adapter. The wrapper lazily connects on first use and transparently
 // reconnects with exponential backoff on connection-loss errors.
+// A nil factory (broker without queue support) yields nil, so callers'
+// nil-capability checks keep working on the wrapped factory.
 func wrapReconnectQueue(factory QueueAdapterFactory, opts ReconnectOptions) QueueAdapterFactory {
+	if factory == nil {
+		return nil
+	}
 	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: opts}}
 	return func() (backends.QueueBackend, error) {
 		return rq, nil
@@ -338,8 +385,11 @@ func wrapReconnectQueue(factory QueueAdapterFactory, opts ReconnectOptions) Queu
 }
 
 // wrapReconnectTopic returns a new factory that produces a reconnecting topic
-// adapter.
+// adapter. A nil factory (broker without topic support) yields nil.
 func wrapReconnectTopic(factory TopicAdapterFactory, opts ReconnectOptions) TopicAdapterFactory {
+	if factory == nil {
+		return nil
+	}
 	rt := &reconnectingTopic{reconnectingAdapter: reconnectingAdapter[backends.TopicBackend]{factory: factory, opts: opts}}
 	return func() (backends.TopicBackend, error) {
 		return rt, nil

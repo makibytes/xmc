@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"context"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -26,10 +27,11 @@ func GetRootCommand() *cobra.Command {
 	var stream string
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "nmc",
-		Short:     "NATS Messaging Client",
-		Long:      "Command-line interface for NATS messaging",
-		AIContext: AIDoc("nats"),
+		Use:              "nmc",
+		Short:            "NATS Messaging Client",
+		Long:             "Command-line interface for NATS messaging",
+		AIContext:        AIDoc("nats"),
+		UnsupportedFlags: []string{"ttl", "priority", "persistent", "selector"},
 		ConsumeFlags: func(c *cobra.Command) {
 			c.Flags().String("stream", "", "JetStream stream name override (default: auto-derived from queue name)")
 		},
@@ -85,6 +87,8 @@ func GetRootCommand() *cobra.Command {
 				Run: func(queue string) error { return natspkg.CreateStream(connArgs, queue, retention, maxMsgs, subjects) },
 			},
 			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return natspkg.DeleteStream(connArgs, queue) }},
+			Purge:       func(queue string) (int64, error) { return natspkg.PurgeStream(connArgs, queue) },
+			Stats:       func(queue string) (*backends.QueueStats, error) { return natspkg.GetStreamStats(connArgs, queue) },
 		},
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{
@@ -96,6 +100,19 @@ func GetRootCommand() *cobra.Command {
 				},
 				NewTopic: func() (backends.TopicBackend, error) {
 					return natspkg.NewTopicAdapter(connArgs)
+				},
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
+					return natspkg.PurgeStream(connArgs, queue)
+				},
+				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
+					s, err := natspkg.GetStreamStats(connArgs, queue)
+					if err != nil {
+						return nil, err
+					}
+					return &mcp.QueueStats{
+						Name: s.Name, MessageCount: s.MessageCount,
+						ConsumerCount: int64(s.ConsumerCount), EnqueueCount: s.EnqueueCount,
+					}, nil
 				},
 			}),
 		},

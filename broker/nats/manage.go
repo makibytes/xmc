@@ -112,6 +112,51 @@ func ListStreamsWithConsumers(connArgs ConnArguments) ([]backends.ObjectNode, er
 	return nodes, nil
 }
 
+// PurgeStream removes all messages from the JetStream stream for a queue and
+// returns how many were purged.
+func PurgeStream(connArgs ConnArguments, queue string) (int64, error) {
+	nc, js, err := ConnectWithJetStream(connArgs)
+	if err != nil {
+		return 0, err
+	}
+	defer nc.Close()
+
+	name := streamName(queue)
+	info, err := js.StreamInfo(name)
+	if err != nil {
+		return 0, fmt.Errorf("looking up stream %s: %w", name, err)
+	}
+	count := int64(info.State.Msgs)
+	if err := js.PurgeStream(name); err != nil {
+		return 0, fmt.Errorf("purging stream %s: %w", name, err)
+	}
+	return count, nil
+}
+
+// GetStreamStats returns queue statistics for the JetStream stream backing a
+// queue (message count, consumer count, lifetime enqueued).
+func GetStreamStats(connArgs ConnArguments, queue string) (*backends.QueueStats, error) {
+	nc, js, err := ConnectWithJetStream(connArgs)
+	if err != nil {
+		return nil, err
+	}
+	defer nc.Close()
+
+	name := streamName(queue)
+	info, err := js.StreamInfo(name)
+	if err != nil {
+		return nil, fmt.Errorf("looking up stream %s: %w", name, err)
+	}
+	return &backends.QueueStats{
+		Name:          info.Config.Name,
+		MessageCount:  int64(info.State.Msgs),
+		ConsumerCount: info.State.Consumers,
+		// LastSeq counts every message ever appended to the stream, so it
+		// serves as the lifetime enqueue counter even after purges.
+		EnqueueCount: int64(info.State.LastSeq),
+	}, nil
+}
+
 // DeleteStream deletes the JetStream stream for a queue.
 func DeleteStream(connArgs ConnArguments, queue string) error {
 	nc, js, err := ConnectWithJetStream(connArgs)

@@ -89,6 +89,12 @@ type BrokerSpec struct {
 	// so the model understands broker-specific concepts (e.g. exchanges,
 	// ANYCAST/MULTICAST, JetStream streams, etc.).
 	AIContext string
+
+	// UnsupportedFlags lists shared per-message flag names (e.g. "ttl",
+	// "priority", "selector") that this broker's adapters silently ignore
+	// because the protocol has no equivalent. When the user explicitly sets
+	// one, a note is printed to stderr so the no-op isn't silent.
+	UnsupportedFlags []string
 }
 
 // NewRootCommand builds the full CLI command tree from a BrokerSpec. It
@@ -104,6 +110,7 @@ func NewRootCommand(spec BrokerSpec) *cobra.Command {
 				log.IsVerbose = true
 			}
 			applyConfigFallback(cmd)
+			warnUnsupportedFlags(cmd, spec.UnsupportedFlags)
 		},
 	}
 
@@ -144,7 +151,7 @@ func NewRootCommand(spec BrokerSpec) *cobra.Command {
 			return c
 		}, queueFactory))
 		rootCmd.AddCommand(WrapQueueCommand(func(b backends.QueueBackend) *cobra.Command {
-			c := NewPeekCommand(b)
+			c := NewPeekCommand(b, resolver, consumeExtra, exchRouting)
 			if consumeFlags != nil {
 				consumeFlags(c)
 			}
@@ -220,6 +227,17 @@ func NewRootCommand(spec BrokerSpec) *cobra.Command {
 	rootCmd.AddCommand(NewVersionCommand())
 
 	return rootCmd
+}
+
+// warnUnsupportedFlags prints a note for every flag the broker declares as
+// unsupported (BrokerSpec.UnsupportedFlags) that the user explicitly set on
+// this invocation. Flags not registered on the running command are skipped.
+func warnUnsupportedFlags(cmd *cobra.Command, unsupported []string) {
+	for _, name := range unsupported {
+		if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+			log.Error("note: --%s is not supported by this broker and is ignored\n", name)
+		}
+	}
 }
 
 // applyConfigFallback loads the YAML config file and fills in empty connection

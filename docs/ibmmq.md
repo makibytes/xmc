@@ -24,10 +24,11 @@ None — use IBM MQ Explorer, `runmqsc`, or the web console for queue management
 - TTL (`-E`): MQMD Expiry field
 - Persistent (`-d`): survives queue manager restart
 - Correlation-id, reply-to, content-type, message-id
-- Request/reply, move, forward, peek
+- Request/reply (native: temporary dynamic reply queue + server-side CorrelId matching; `--model-queue`/`--dynamic-queue` override the SYSTEM.DEFAULT.MODEL.QUEUE / XMC.REPLY.* defaults on locked-down installations)
+- Move, forward; peek uses MQ's browse cursor (`-n 0` walks all messages non-destructively)
 
 ## Constraints
 
 - Queue-only: no topic commands (publish, subscribe)
-- Queues must be pre-defined by an MQ administrator
+- Queues must be pre-defined by an MQ administrator (except temporary reply queues)
 - Build requires IBM MQ client libraries (use container build)

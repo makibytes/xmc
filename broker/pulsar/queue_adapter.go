@@ -43,7 +43,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 		Properties: backends.StringifyProps(opts.Properties),
 	}
 	if opts.MessageID != "" {
-		msg.Key = opts.MessageID
+		msg.Properties[backends.PropMessageID] = opts.MessageID
 	}
 	if opts.CorrelationID != "" {
 		msg.Properties[backends.PropCorrelationID] = opts.CorrelationID
@@ -109,6 +109,8 @@ func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
 	for k, v := range rawProps {
 		props[k] = v
 	}
+	msgID, _ := props[backends.PropMessageID].(string)
+	delete(props, backends.PropMessageID)
 	corrID, _ := props[backends.PropCorrelationID].(string)
 	delete(props, backends.PropCorrelationID)
 	replyTo, _ := props[backends.PropReplyTo].(string)
@@ -118,9 +120,10 @@ func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
 	return &backends.Message{
 		Data:          msg.Payload(),
 		Properties:    props,
-		MessageID:     msg.Key(),
+		MessageID:     msgID,
 		CorrelationID: corrID,
 		ReplyTo:       replyTo,
 		ContentType:   contentType,
+		Key:           msg.Key(),
 	}
 }

@@ -18,25 +18,24 @@ var mgmtHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // MgmtGet performs a GET request against a management API endpoint.
 func MgmtGet(url, user, password string) ([]byte, error) {
-	return mgmtRequest("GET", url, nil, user, password, 200, 200)
+	return mgmtRequest("GET", url, nil, user, password, 200)
 }
 
 // MgmtPost performs a POST request with a JSON body against a management
-// API endpoint. StatusOK is the expected success status code (usually 200,
-// but some APIs return 201 or 204).
+// API endpoint. 200, 201, and 204 count as success.
 func MgmtPost(url string, body []byte, user, password string) ([]byte, error) {
 	return mgmtRequest("POST", url, body, user, password, 200, 201, 204)
 }
 
 // MgmtPut performs a PUT request with a JSON body against a management API
-// endpoint.
+// endpoint. 200, 201, and 204 count as success.
 func MgmtPut(url string, body []byte, user, password string) error {
 	_, err := mgmtRequest("PUT", url, body, user, password, 200, 201, 204)
 	return err
 }
 
 // MgmtDelete performs a DELETE request against a management API endpoint.
-// StatusOK is the expected success status code.
+// 200 and 204 count as success.
 func MgmtDelete(url, user, password string) ([]byte, error) {
 	return mgmtRequest("DELETE", url, nil, user, password, 200, 204)
 }

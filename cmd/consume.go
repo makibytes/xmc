@@ -227,6 +227,9 @@ func displayMessageJSON(w io.Writer, message *backends.Message) error {
 	if message.ContentType != "" {
 		output["contentType"] = message.ContentType
 	}
+	if message.Key != "" {
+		output["key"] = message.Key
+	}
 	if message.Priority != 0 {
 		output["priority"] = message.Priority
 	}

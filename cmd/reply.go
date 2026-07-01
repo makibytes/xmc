@@ -88,8 +88,6 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	if err != nil {
 		return err
 	}
-	duration := sf.Duration
-	follow := sf.Follow
 	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
 		count = 0
 	}
@@ -122,7 +120,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	}
 
 	parentCtx := cmd.Context()
-	ctx, stop := streamContext(duration, parentCtx)
+	ctx, stop := streamContext(sf.Duration, parentCtx)
 	defer stop()
 
 	// With no timeout we block until each request arrives; ctx cancellation
@@ -148,7 +146,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 		case errors.Is(err, context.Canceled):
 			return finishReply(served)
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
-			if follow || count == 0 {
+			if sf.Follow || count == 0 {
 				continue // keep waiting for the next request
 			}
 			return finishReply(served)

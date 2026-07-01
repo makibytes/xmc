@@ -221,6 +221,14 @@ func TestIsConnectionError(t *testing.T) {
 		{"no such host", fmt.Errorf("lookup foo: no such host"), true},
 		{"i/o timeout", fmt.Errorf("read tcp: i/o timeout"), true},
 		{"unexpected eof", fmt.Errorf("unexpected eof in data"), true},
+		{"grpc unavailable", fmt.Errorf("rpc error: code = Unavailable desc = transport is closing"), true},
+		{"grpc unavailable wrapped", fmt.Errorf("publish: %w", errors.New(`rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 127.0.0.1:8085: connect: connection refused"`)), true},
+		{"grpc transport closing", fmt.Errorf("transport is closing"), true},
+		{"grpc not found", fmt.Errorf("rpc error: code = NotFound desc = Resource not found (resource=missing-sub)"), false},
+		{"grpc permission denied", fmt.Errorf("rpc error: code = PermissionDenied desc = User not authorized"), false},
+		{"grpc invalid argument", fmt.Errorf("rpc error: code = InvalidArgument desc = Invalid ack ID"), false},
+		{"nats no servers", fmt.Errorf("nats: no servers available for connection"), true},
+		{"paho not connected", fmt.Errorf("not currently connected and ResumeSubs not set"), true},
 		{"amqp not found", fmt.Errorf("amqp:not-found: no queue 'foo'"), false},
 		{"precondition failed", fmt.Errorf("amqp:precondition-failed"), false},
 		{"auth failure", fmt.Errorf("SASL PLAIN auth failed"), false},
@@ -279,6 +287,40 @@ func TestConditionalReconnectTopic_Nil(t *testing.T) {
 	result := conditionalReconnectTopic(nil, nil)
 	if result != nil {
 		t.Error("expected nil factory for nil input")
+	}
+}
+
+func TestWrapReconnectQueue_Nil(t *testing.T) {
+	// A broker without queue support must stay nil after wrapping, so the
+	// shell's capability checks (queueFactory != nil) keep working instead
+	// of eventually calling the nil inner factory.
+	if wrapReconnectQueue(nil, ReconnectOptions{}) != nil {
+		t.Error("expected nil factory for nil input")
+	}
+}
+
+func TestWrapReconnectTopic_Nil(t *testing.T) {
+	if wrapReconnectTopic(nil, ReconnectOptions{}) != nil {
+		t.Error("expected nil factory for nil input")
+	}
+}
+
+func TestBuildVerbCommand_ForwardTopicOnlySession(t *testing.T) {
+	// A topic-only session (e.g. Kafka) whose factories went through the
+	// reconnect wrappers: forward must force topic topology, i.e. not offer
+	// the --from-topic/--to-topic dual-mode flags.
+	s := &shellSession{
+		queueFactory: wrapReconnectQueue(nil, ReconnectOptions{}),
+		topicFactory: wrapReconnectTopic(func() (backends.TopicBackend, error) {
+			return &mockTopicBackend{}, nil
+		}, ReconnectOptions{}),
+	}
+	cmd, err := s.buildVerbCommand("forward", nil)
+	if err != nil {
+		t.Fatalf("buildVerbCommand: %v", err)
+	}
+	if cmd.Flags().Lookup("from-topic") != nil {
+		t.Error("topic-only broker should not register --from-topic (topology is forced)")
 	}
 }
 
@@ -370,6 +412,38 @@ func TestReconnectingQueue_BrowseSentinelWhenUnsupported(t *testing.T) {
 	}
 }
 
+// requestReplyQueueBackend embeds mockQueueBackend and adds a native Request
+// implementation so delegation through the wrapper can be observed.
+type requestReplyQueueBackend struct {
+	mockQueueBackend
+	requested atomic.Int32
+}
+
+func (rr *requestReplyQueueBackend) Request(_ context.Context, _ backends.RequestOptions) (*backends.Message, error) {
+	rr.requested.Add(1)
+	return &backends.Message{Data: []byte("native reply")}, nil
+}
+
+// TestReconnectingQueue_RequestDelegatesNative verifies that the wrapper does
+// not hide a broker's native RequestReplyBackend: dispatching a request
+// through the wrapped adapter must reach the underlying native Request.
+func TestReconnectingQueue_RequestDelegatesNative(t *testing.T) {
+	underlying := &requestReplyQueueBackend{}
+	factory := func() (backends.QueueBackend, error) { return underlying, nil }
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{}}}
+
+	msg, err := backends.Request(context.Background(), rq, backends.RequestOptions{Address: "q", Message: []byte("ping")})
+	if err != nil {
+		t.Fatalf("Request returned unexpected error: %v", err)
+	}
+	if string(msg.Data) != "native reply" {
+		t.Errorf("got reply %q, want %q", msg.Data, "native reply")
+	}
+	if got := underlying.requested.Load(); got != 1 {
+		t.Errorf("native Request called %d times, want 1", got)
+	}
+}
+
 // TestPeekCommand_BrowseFallbackViaWrapper is the end-to-end regression test
 // for the "peek -n 0 loops forever in shell/AI mode" bug. In that mode the
 // backend is always a *reconnectingQueue; if its underlying adapter does NOT
@@ -385,7 +459,7 @@ func TestPeekCommand_BrowseFallbackViaWrapper(t *testing.T) {
 	factory := func() (backends.QueueBackend, error) { return inner, nil }
 	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{}}}
 
-	cmd := NewPeekCommand(rq)
+	cmd := NewPeekCommand(rq, nil, nil)
 	cmd.SetArgs([]string{"q", "-n", "2"})
 
 	var buf bytes.Buffer
@@ -401,4 +475,3 @@ func TestPeekCommand_BrowseFallbackViaWrapper(t *testing.T) {
 		t.Errorf("output missing expected messages: %q", out)
 	}
 }
-

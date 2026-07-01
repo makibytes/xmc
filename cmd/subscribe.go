@@ -37,10 +37,13 @@ func NewSubscribeCommand(backend backends.TopicBackend, resolver TargetResolver,
 
 	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
 	if hasExchRouting {
-		cmd.Use = "subscribe [--exchange <exchange> [--routing-key <key>] | --queue-name <queue>] [<to>]"
+		cmd.Use = "subscribe [--exchange <exchange> [--routing-key <key>] | --queue <queue>] [<to>]"
 		cmd.Flags().String("exchange", "", "Exchange to subscribe to (default: amq.topic)")
 		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
-		cmd.Flags().String("queue-name", "", "Queue to subscribe to (AMQP 1.0 v2: /queues/<name>)")
+		// Long-form only: -q is --quiet on read commands. --queue-name is the
+		// deprecated spelling, kept working via aliasNormalize.
+		cmd.Flags().String("queue", "", "Queue to subscribe to (AMQP 1.0 v2: /queues/<name>)")
+		cmd.Flags().SetNormalizeFunc(aliasNormalize)
 		cmd.Args = cobra.MaximumNArgs(1)
 	} else {
 		cmd.Args = cobra.MinimumNArgs(1)
@@ -60,14 +63,11 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	durable, _ := cmd.Flags().GetBool("durable")
 	format, _ := cmd.Flags().GetString("format")
 	ndjson, _ := cmd.Flags().GetBool("ndjson")
-	stats, _ := cmd.Flags().GetBool("stats")
 
 	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
 	}
-	duration := sf.Duration
-	follow := sf.Follow
 	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
 		count = 0
 	}
@@ -102,8 +102,8 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 		verbosity:  opts.Verbosity,
 		format:     format,
 		ndjson:     ndjson,
-		follow:     follow,
+		follow:     sf.Follow,
 		dataOut:    cmd.OutOrStdout(),
 		metaOut:    cmd.ErrOrStderr(),
-	}, duration, stats, parentCtx)
+	}, sf.Duration, sf.Stats, parentCtx)
 }

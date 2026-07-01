@@ -378,10 +378,18 @@ func (s *shellSession) buildVerbCommand(verb string, rootCmd *cobra.Command) (*c
 	}
 
 	queueVerbBuilders := map[string]func(backends.QueueBackend) *cobra.Command{
-		"send":    func(b backends.QueueBackend) *cobra.Command { return applyProduce(NewSendCommand(b, resolver, produceExtra, exchRouting)) },
-		"receive": func(b backends.QueueBackend) *cobra.Command { return applyConsume(NewReceiveCommand(b, resolver, consumeExtra, exchRouting)) },
-		"get":     func(b backends.QueueBackend) *cobra.Command { return applyConsume(NewReceiveCommand(b, resolver, consumeExtra, exchRouting)) },
-		"peek":    func(b backends.QueueBackend) *cobra.Command { return applyConsume(NewPeekCommand(b)) },
+		"send": func(b backends.QueueBackend) *cobra.Command {
+			return applyProduce(NewSendCommand(b, resolver, produceExtra, exchRouting))
+		},
+		"receive": func(b backends.QueueBackend) *cobra.Command {
+			return applyConsume(NewReceiveCommand(b, resolver, consumeExtra, exchRouting))
+		},
+		"get": func(b backends.QueueBackend) *cobra.Command {
+			return applyConsume(NewReceiveCommand(b, resolver, consumeExtra, exchRouting))
+		},
+		"peek": func(b backends.QueueBackend) *cobra.Command {
+			return applyConsume(NewPeekCommand(b, resolver, consumeExtra, exchRouting))
+		},
 		"request": NewRequestCommand,
 		"reply":   NewReplyCommand, "respond": NewReplyCommand,
 		"move": NewMoveCommand,
@@ -389,8 +397,12 @@ func (s *shellSession) buildVerbCommand(verb string, rootCmd *cobra.Command) (*c
 
 	// Topic verbs — publish and subscribe get the target resolver.
 	topicVerbBuilders := map[string]func(backends.TopicBackend) *cobra.Command{
-		"publish":   func(b backends.TopicBackend) *cobra.Command { return applyProduce(NewPublishCommand(b, resolver, produceExtra, exchRouting)) },
-		"subscribe": func(b backends.TopicBackend) *cobra.Command { return applyConsume(NewSubscribeCommand(b, resolver, consumeExtra, exchRouting)) },
+		"publish": func(b backends.TopicBackend) *cobra.Command {
+			return applyProduce(NewPublishCommand(b, resolver, produceExtra, exchRouting))
+		},
+		"subscribe": func(b backends.TopicBackend) *cobra.Command {
+			return applyConsume(NewSubscribeCommand(b, resolver, consumeExtra, exchRouting))
+		},
 	}
 
 	// forward/bridge may need a queue adapter, a topic adapter, or both,
@@ -555,7 +567,7 @@ func expandAlias(line string, aliases map[string]string) string {
 				j++
 			}
 			if j > i+1 {
-				n, _ := strconv.Atoi(tmpl[i+1:j])
+				n, _ := strconv.Atoi(tmpl[i+1 : j])
 				if n >= 1 && n <= len(args) {
 					result.WriteString(args[n-1])
 				}

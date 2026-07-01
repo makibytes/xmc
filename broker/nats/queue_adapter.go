@@ -178,9 +178,20 @@ func (a *QueueAdapter) ensureStreamWithName(name, subject string) error {
 	return nil
 }
 
-// streamName returns the JetStream stream name for a queue.
+// streamName returns the JetStream stream name for a queue. JetStream stream
+// names must not contain dots, spaces, wildcards or path separators, so every
+// character outside [A-Za-z0-9_] maps to '_' (dashes included, preserving the
+// historical naming for dash-separated queues).
 func streamName(queue string) string {
-	return fmt.Sprintf("XMC_Q_%s", strings.ToUpper(strings.ReplaceAll(queue, "-", "_")))
+	mapped := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, queue)
+	return "XMC_Q_" + strings.ToUpper(mapped)
 }
 
 // queueSubject returns the NATS subject for a queue.
@@ -192,11 +203,18 @@ func queueSubject(queue string) string {
 // extracting the four reserved metadata keys into the typed fields so that
 // request/reply and -F templating work consistently with other brokers.
 func natsToBackendMessage(msg *natsclient.Msg) *backends.Message {
+	return headersToBackendMessage(msg.Data, msg.Header)
+}
+
+// headersToBackendMessage builds a backends.Message from payload and headers;
+// shared by the live-delivery path (*nats.Msg) and the browse path
+// (*nats.RawStreamMsg), which carry the same header type but different shells.
+func headersToBackendMessage(data []byte, header natsclient.Header) *backends.Message {
 	result := &backends.Message{
-		Data:       msg.Data,
+		Data:       data,
 		Properties: make(map[string]any),
 	}
-	for k, vals := range msg.Header {
+	for k, vals := range header {
 		if len(vals) == 0 {
 			continue
 		}
