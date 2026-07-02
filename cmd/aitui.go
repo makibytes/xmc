@@ -58,22 +58,36 @@ const (
 
 // ---------- Bubble Tea messages ----------
 
-type tokenMsg struct{ text string }                              // streamed token from AI
-type aiDoneMsg struct{ text string; usage TokenUsage; err error } // AI request completed
-type execDoneMsg struct{ err error; stdout, stderr string }       // command finished
-type sideActionMsg struct{ action string; err error }             // sidebar create/delete finished
-type setCancelMsg struct{ cancel context.CancelFunc }             // pass cancel from bg goroutine to model
-type modelsMsg struct{ models []string; err error }               // model listing result
-type objectsMsg struct {                                         // broker objects fetch result
+type tokenMsg struct{ text string } // streamed token from AI
+type aiDoneMsg struct {
+	text  string
+	usage TokenUsage
+	err   error
+} // AI request completed
+type execDoneMsg struct {
+	err            error
+	stdout, stderr string
+} // command finished
+type sideActionMsg struct {
+	action string
+	copy   string
+	err    error
+}                                                     // sidebar action finished
+type setCancelMsg struct{ cancel context.CancelFunc } // pass cancel from bg goroutine to model
+type modelsMsg struct {
+	models []string
+	err    error
+}                        // model listing result
+type objectsMsg struct { // broker objects fetch result
 	windows [][]backends.ObjectNode // one slice per ObjectType
-	errs    []error                // per-ObjectType errors
+	errs    []error                 // per-ObjectType errors
 }
 
-type connMsg struct{ err error }              // connection probe result
-type reconnectTickMsg struct{}                // 500ms ticker for reconnect countdown + blink
-type reconnectProbeMsg struct{ err error }    // result of a reconnect probe attempt
-type refreshTickMsg struct{}                  // time for the next periodic sidebar fetch
-type refreshWatchdogMsg struct{ gen int }     // fired after refreshWatchdogTimeout if a fetch is still in-flight
+type connMsg struct{ err error }           // connection probe result
+type reconnectTickMsg struct{}             // 500ms ticker for reconnect countdown + blink
+type reconnectProbeMsg struct{ err error } // result of a reconnect probe attempt
+type refreshTickMsg struct{}               // time for the next periodic sidebar fetch
+type refreshWatchdogMsg struct{ gen int }  // fired after refreshWatchdogTimeout if a fetch is still in-flight
 
 // errNoManageAPI is returned by startLoadObjects when the broker has no ManageSpec.
 var errNoManageAPI = errors.New("no management API")
@@ -268,19 +282,19 @@ var (
 
 // objWindow holds the state for one object-type window in the sidebar.
 type objWindow struct {
-	kind         objWindowKind         // window type (default 0 = broker objects, 1 = processes)
-	label        string                // header title: "Queues", "Exchanges", …
-	hierarchical bool                  // true → expand hotkey reveals Children
+	kind         objWindowKind                         // window type (default 0 = broker objects, 1 = processes)
+	label        string                                // header title: "Queues", "Exchanges", …
+	hierarchical bool                                  // true → expand hotkey reveals Children
 	listFn       func() ([]backends.ObjectNode, error) // data source
-	nodes        []backends.ObjectNode // current data (nil = not yet loaded)
-	err          error                 // last fetch error
-	sel          int                   // selected index (in filtered+sorted view)
-	filter       string               // active case-insensitive substring filter
-	sortIdx      sortMode             // current sort mode
-	treeView     bool                  // hierarchical children shown (x to toggle)
-	collapsed    bool                  // window collapsed to title only (Space to toggle)
-	createAction *ManageAction         // optional: 'c' hotkey creates this object type
-	deleteAction *ManageAction         // optional: 'd' hotkey deletes selected
+	nodes        []backends.ObjectNode                 // current data (nil = not yet loaded)
+	err          error                                 // last fetch error
+	sel          int                                   // selected index (in filtered+sorted view)
+	filter       string                                // active case-insensitive substring filter
+	sortIdx      sortMode                              // current sort mode
+	treeView     bool                                  // hierarchical children shown (x to toggle)
+	collapsed    bool                                  // window collapsed to title only (Space to toggle)
+	createAction *ManageAction                         // optional: 'c' hotkey creates this object type
+	deleteAction *ManageAction                         // optional: 'd' hotkey deletes selected
 }
 
 // ---------- Model ----------
@@ -292,20 +306,20 @@ type aiTUIModel struct {
 	spinner  spinner.Model
 
 	// State
-	state        tuiState
-	transcript   *strings.Builder // full transcript (pointer: Builder must not be copied)
-	streamBuf    *strings.Builder // tokens streamed so far (pointer: Builder must not be copied)
-	proposedCmd        string
+	state               tuiState
+	transcript          *strings.Builder // full transcript (pointer: Builder must not be copied)
+	streamBuf           *strings.Builder // tokens streamed so far (pointer: Builder must not be copied)
+	proposedCmd         string
 	proposedDestructive bool // true when the proposed command is flagged as destructive
-	shimmerPhase       int  // animation frame counter for the proposal shimmer
-	execCancel     context.CancelFunc
-	quitting       bool
-	exitAll        bool // /exit: quit xmc entirely
-	fetchingModels bool // spinner while /model fetches the list
-	fixAttempts    int  // auto-fix retry counter (reset on success or new user prompt)
-	follow         bool // auto-scroll to bottom on new content (false when user scrolls up)
-	width        int
-	height       int
+	shimmerPhase        int  // animation frame counter for the proposal shimmer
+	execCancel          context.CancelFunc
+	quitting            bool
+	exitAll             bool // /exit: quit xmc entirely
+	fetchingModels      bool // spinner while /model fetches the list
+	fixAttempts         int  // auto-fix retry counter (reset on success or new user prompt)
+	follow              bool // auto-scroll to bottom on new content (false when user scrolls up)
+	width               int
+	height              int
 
 	// AI session
 	ai      *aiSession
@@ -324,6 +338,9 @@ type aiTUIModel struct {
 	totalOut int
 	turnIn   int
 	turnOut  int
+
+	// Metadata peek rendering format (sidebar 'm' action): yaml or json.
+	metadataFormat metadataFormat
 
 	// Sidebar object windows (from ManageSpec.Objects)
 	objTypes       []objWindow
@@ -344,12 +361,12 @@ type aiTUIModel struct {
 	lastStreamRender time.Time
 
 	// Periodic sidebar refresh state
-	refreshing      bool          // true while a background fetch is in-flight
-	refreshStart    time.Time     // wall-clock time the current fetch started
-	lastFetchDur    time.Duration // duration of the most recent fetch (drives adaptive interval)
-	refreshGen      int           // generation counter — guards against stale watchdog messages
-	refreshPeriod   time.Duration // effective base interval (floor before adaptive scaling)
-	refreshEnabled  bool          // whether the periodic refresh loop is active
+	refreshing     bool          // true while a background fetch is in-flight
+	refreshStart   time.Time     // wall-clock time the current fetch started
+	lastFetchDur   time.Duration // duration of the most recent fetch (drives adaptive interval)
+	refreshGen     int           // generation counter — guards against stale watchdog messages
+	refreshPeriod  time.Duration // effective base interval (floor before adaptive scaling)
+	refreshEnabled bool          // whether the periodic refresh loop is active
 
 	// Focus (0 = chat, 1..N = objTypes index + 1)
 	focus     focusTarget
@@ -430,18 +447,18 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 
 	// Build sidebar windows from ManageSpec.Objects.
 	var windows []objWindow
-		if session != nil && session.spec.ManageSpec != nil {
-			for _, ot := range session.spec.ManageSpec.Objects {
-				c, d := session.spec.ManageSpec.SidebarActions(ot.Label)
-				windows = append(windows, objWindow{
-					label:        ot.Label,
-					hierarchical: ot.Hierarchical,
-					listFn:       ot.List,
-					createAction: c,
-					deleteAction: d,
-				})
-			}
+	if session != nil && session.spec.ManageSpec != nil {
+		for _, ot := range session.spec.ManageSpec.Objects {
+			c, d := session.spec.ManageSpec.SidebarActions(ot.Label)
+			windows = append(windows, objWindow{
+				label:        ot.Label,
+				hierarchical: ot.Hierarchical,
+				listFn:       ot.List,
+				createAction: c,
+				deleteAction: d,
+			})
 		}
+	}
 
 	// Build autocomplete tree (same as the regular shell).
 	var comp *readline.PrefixCompleter
@@ -459,32 +476,37 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 		period = ai.refreshPeriod
 		refreshOn = ai.refreshEnabled
 	}
+	mdFmt := metadataFormatYAML
+	if cfg, err := loadConfig(); err == nil && cfg != nil {
+		mdFmt = cfg.AI.metadataFormat()
+	}
 
 	return aiTUIModel{
-		viewport:        vp,
-		input:           ta,
-		spinner:         sp,
-		state:           tuiIdle,
-		width:           w,
-		height:          h,
-		transcript:      &strings.Builder{},
-		streamBuf:       &strings.Builder{},
-		ai:              ai,
-		session:         session,
-		rootCmd:         rootCmd,
-		binaryName:      binaryName,
-		server:          server,
-		follow:          true,
-		objTypes:        windows,
-		loadingObjects:  len(windows) > 0,
-		inputLines:      1,
-		refreshPeriod:   period,
-		refreshEnabled:  refreshOn,
-		completer:       comp,
-		cmdHistory:      shellHistory.Load(),
-		askHistory:      askHistory.Load(),
-		histIdx:         -1,
-		procWinIdx:      -1,
+		viewport:       vp,
+		input:          ta,
+		spinner:        sp,
+		state:          tuiIdle,
+		width:          w,
+		height:         h,
+		transcript:     &strings.Builder{},
+		streamBuf:      &strings.Builder{},
+		ai:             ai,
+		session:        session,
+		rootCmd:        rootCmd,
+		binaryName:     binaryName,
+		server:         server,
+		follow:         true,
+		objTypes:       windows,
+		loadingObjects: len(windows) > 0,
+		inputLines:     1,
+		refreshPeriod:  period,
+		refreshEnabled: refreshOn,
+		metadataFormat: mdFmt,
+		completer:      comp,
+		cmdHistory:     shellHistory.Load(),
+		askHistory:     askHistory.Load(),
+		histIdx:        -1,
+		procWinIdx:     -1,
 	}
 }
 
@@ -594,7 +616,16 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.appendTranscript(warnStyle.Render("✗ "+msg.err.Error()) + "\n\n")
 		} else if msg.action != "" {
-			m.appendTranscript(msg.action + "\n\n")
+			action := strings.TrimRight(msg.action, "\n")
+			if action != "" {
+				m.appendTranscript(action + "\n")
+			}
+			if msg.copy != "" {
+				m.copyItems = append(m.copyItems, msg.copy)
+				m.appendTranscript(copyHintStyle.Render("  ⧉") + "\n\n")
+			} else {
+				m.appendTranscript("\n")
+			}
 		} else {
 			m.appendTranscript(histOkStyle.Render("✓ ok") + "\n\n")
 		}
@@ -898,20 +929,28 @@ func (m aiTUIModel) renderStatusBar() string {
 				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Space") + statusStyle.Render(" collapse") +
 				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Tab") + statusStyle.Render("/") +
-				statusKeyStyle.Render("Shift+Tab") + statusStyle.Render(" next/prev") +
-				statusStyle.Render("  ") +
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" chat")
 		} else if m.focus != focusChat {
 			wi := int(m.focus) - 1
-			kvs := []hintKV{{"↑↓", "move"}, {"/", "filter"}, {"s", "sort"}}
+			kvs := []hintKV{{"↑↓", "move"}, {"/", "filter"}, {"s", "sort"}, {"r", "refresh"}}
 			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
 				kvs = append(kvs, hintKV{"x", "tree"})
 			}
 			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].createAction != nil {
 				kvs = append(kvs, hintKV{"c", "create"})
 			}
-			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].deleteAction != nil {
+			// childSelected is true only when the current selection is a
+			// tree-view child row (RabbitMQ binding, NATS consumer, Azure/
+			// Google subscription, ...). d/p/m/P(non-Topics)/S/R below all
+			// dispatch via selectedTopLevelNode() — which returns ok=false for
+			// a child row — so on a child row of a hierarchical window they
+			// would be dead keys; hide them here instead of advertising a key
+			// that does nothing when pressed. The Topics branch further down
+			// already handles its own child-eligible p/m/P/R separately, so
+			// this only ever suppresses the generic (non-Topics-child) hints.
+			// c (create) never depends on selection, so it's exempt above.
+			_, _, childSelected := m.selectedChildNode()
+			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].deleteAction != nil && !childSelected {
 				kvs = append(kvs, hintKV{"d", "delete"})
 			}
 			srpEligible := wi >= 0 && wi < len(m.objTypes) && sidebarWindowSupportsSRP(m.objTypes[wi].label)
@@ -922,13 +961,19 @@ func (m aiTUIModel) renderStatusBar() string {
 			// misleading, unlike per-node gating that could vary by selection.
 			purgeReceiveEligible := srpEligible && wi >= 0 && wi < len(m.objTypes) &&
 				sidebarPurgeReceiveAllowed(m.objTypes[wi].label, backends.ObjectNode{})
-			if purgeReceiveEligible && m.session != nil && m.session.spec.ManageSpec != nil && m.session.spec.ManageSpec.Purge != nil {
+			if purgeReceiveEligible && !childSelected && m.session != nil && m.session.spec.ManageSpec != nil && m.session.spec.ManageSpec.Purge != nil {
 				kvs = append(kvs, hintKV{"P", "purge"})
 			}
-			if srpEligible {
+			if wi >= 0 && wi < len(m.objTypes) && !childSelected {
+				switch m.objTypes[wi].label {
+				case "Queues", "Streams":
+					kvs = append(kvs, hintKV{"p", "peek"}, hintKV{"m", "metadata"})
+				}
+			}
+			if srpEligible && !childSelected {
 				kvs = append(kvs, hintKV{"S", "send"})
 			}
-			if purgeReceiveEligible {
+			if purgeReceiveEligible && !childSelected {
 				kvs = append(kvs, hintKV{"R", "receive"})
 			}
 			// Topics windows: P means publish on a top-level topic, but
@@ -940,7 +985,7 @@ func (m aiTUIModel) renderStatusBar() string {
 				if _, ok := m.selectedTopLevelNode(); ok {
 					kvs = append(kvs, hintKV{"P", "publish"})
 				} else if child, _, ok := m.selectedChildNode(); ok && sidebarSubscriptionEligible("Topics", child.Kind) {
-					kvs = append(kvs, hintKV{"p", "peek"})
+					kvs = append(kvs, hintKV{"p", "peek"}, hintKV{"m", "metadata"})
 					if m.session != nil && m.session.spec.ManageSpec != nil && m.session.spec.ManageSpec.PurgeSubscription != nil {
 						kvs = append(kvs, hintKV{"P", "purge"})
 					}
@@ -950,7 +995,6 @@ func (m aiTUIModel) renderStatusBar() string {
 			kvs = append(kvs,
 				hintKV{"Space", "collapse"},
 				hintKV{"Enter", "use"},
-				hintKV{"Tab/Shift+Tab", "next/prev"},
 				hintKV{"Esc", "chat"},
 			)
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)

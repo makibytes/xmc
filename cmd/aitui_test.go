@@ -754,7 +754,7 @@ func TestAITUI_ServerInfo_Connected(t *testing.T) {
 
 func TestAITUI_ServerInfo_Error(t *testing.T) {
 	m := newTestModel()
-	m.	conn.checked = true
+	m.conn.checked = true
 	m.conn.err = fmt.Errorf("refused")
 	info := m.serverInfo()
 	if !strings.Contains(info, "localhost:5672") {
@@ -919,8 +919,8 @@ func TestCopyIdxForLine(t *testing.T) {
 	mark := copyHintStyle.Render("⧉")
 	m.wrappedContentLines = []string{
 		"▶ ran: receive q " + mark, // line 0 → copyItems[0]
-		"  some payload",            // line 1 — no marker
-		"  " + mark,                 // line 2 → copyItems[1]
+		"  some payload",           // line 1 — no marker
+		"  " + mark,                // line 2 → copyItems[1]
 		"▶ ran: send q x " + mark,  // line 3 → copyItems[2]
 	}
 	m.copyItems = []string{"receive q", "payload text", "send q x"}
@@ -952,9 +952,11 @@ func TestIsMessageReadCommand(t *testing.T) {
 		want bool
 	}{
 		{"receive orders", true},
+		{"xmc receive orders", true},
 		{"receive orders -n 5", true},
 		{"receive", true},
 		{"peek dlq", true},
+		{"./rmc peek dlq", true},
 		{"peek", true},
 		{"subscribe events", true},
 		{"subscribe events --durable", true},
@@ -971,6 +973,69 @@ func TestIsMessageReadCommand(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isMessageReadCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
 		}
+	}
+}
+
+func TestAITUI_MetadataFormatHotkeys(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, nil)
+	m.metadataFormat = metadataFormatYAML
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("J")})
+	model := updated.(aiTUIModel)
+	if model.metadataFormat != metadataFormatJSON {
+		t.Fatalf("metadata format after J = %q, want %q", model.metadataFormat, metadataFormatJSON)
+	}
+	if !strings.Contains(model.transcript.String(), "metadata format → json") {
+		t.Fatalf("transcript missing JSON format switch message, got: %s", model.transcript.String())
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Y")})
+	model = updated.(aiTUIModel)
+	if model.metadataFormat != metadataFormatYAML {
+		t.Fatalf("metadata format after Y = %q, want %q", model.metadataFormat, metadataFormatYAML)
+	}
+	if !strings.Contains(model.transcript.String(), "metadata format → yaml") {
+		t.Fatalf("transcript missing YAML format switch message, got: %s", model.transcript.String())
+	}
+}
+
+func TestAITUI_MetadataPeekHotkey_ShowsMetadataOnly_WithCopyMarker(t *testing.T) {
+	qb := &mockQueueBackend{receiveMsg: &backends.Message{
+		Data:          []byte("secret-payload"),
+		MessageID:     "msg-1",
+		CorrelationID: "corr-1",
+		Properties:    map[string]any{"tenant": "acme"},
+		InternalMetadata: map[string]any{
+			"Header": "durable=false",
+			"Ignored": "<nil>",
+		},
+	}}
+	m := newTestModelWithQueueWindow(qb, nil, nil)
+	m.metadataFormat = metadataFormatJSON
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	model := updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from the metadata peek hotkey")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+
+	out := model.transcript.String()
+	if strings.Contains(out, "secret-payload") {
+		t.Fatalf("metadata peek must not render payload, got: %s", out)
+	}
+	if qb.lastReceiveOpts.Verbosity != backends.VerbosityVerbose {
+		t.Fatalf("metadata peek must request VerbosityVerbose, got %v", qb.lastReceiveOpts.Verbosity)
+	}
+	for _, want := range []string{`"messageId": "msg-1"`, `"correlationId": "corr-1"`, `"tenant": "acme"`, `"internalMetadata"`, `"Header": "durable=false"`, "⧉"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("metadata peek output missing %q, got: %s", want, out)
+		}
+	}
+	if strings.Contains(out, `"Ignored"`) {
+		t.Fatalf("metadata peek must prune empty/nil-like values, got: %s", out)
 	}
 }
 
@@ -1102,7 +1167,7 @@ func TestSidebarSendViaTopic(t *testing.T) {
 		{"Addresses", "anycast", false},
 		{"Addresses", "any/multi", false},
 		{"Addresses", "", false},
-		{"Exchanges", "topic", true},   // always publishes, regardless of exchange type
+		{"Exchanges", "topic", true}, // always publishes, regardless of exchange type
 		{"Exchanges", "fanout", true},
 		{"Exchanges", "", true},
 		{"Queues", "multicast", false}, // never topic-routed outside Addresses/Exchanges
@@ -1304,10 +1369,13 @@ func TestAITUI_StatusBar_ShowsPSRHints_OnQueuesWindow(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m = updated.(aiTUIModel)
 	bar := m.renderStatusBar()
-	for _, want := range []string{"P", "purge", "S", "send", "R", "receive"} {
+	for _, want := range []string{"P", "purge", "p", "peek", "m", "metadata", "S", "send", "R", "receive"} {
 		if !strings.Contains(bar, want) {
 			t.Errorf("status bar missing %q, got: %s", want, bar)
 		}
+	}
+	if strings.Contains(bar, "next/prev") {
+		t.Errorf("status bar should not show next/prev in object window hints, got: %s", bar)
 	}
 }
 
@@ -1734,6 +1802,19 @@ func TestAITUI_StatusBar_ShowsSendButHidesPurgeReceive_OnExchangesWindow(t *test
 	if strings.Contains(bar, "receive") {
 		t.Errorf("status bar = %q, should not show a receive hint on an Exchanges window", bar)
 	}
+	if strings.Contains(bar, "next/prev") {
+		t.Errorf("status bar should not show next/prev in object window hints, got: %s", bar)
+	}
+}
+
+func TestAITUI_StatusBar_ProcessPane_HidesNextPrevHint(t *testing.T) {
+	m := newTestModel()
+	m.objTypes = []objWindow{{kind: objWindowProcs, label: "Processes"}}
+	m.focus = 1
+	bar := m.renderStatusBar()
+	if strings.Contains(bar, "next/prev") {
+		t.Errorf("status bar should not show next/prev in process window hints, got: %s", bar)
+	}
 }
 
 func TestAITUI_SendPrompt_KeySpace_AppendsSpace(t *testing.T) {
@@ -1985,6 +2066,41 @@ func TestAITUI_PurgeSendReceiveHotkeys_NoOpOnChildRow(t *testing.T) {
 	}
 }
 
+// TestAITUI_StatusBar_HidesDeadHints_OnChildRowSelected guards the hint-bar
+// fix: d/p/m/P/S/R previously stayed in the status bar's hint line even when
+// a tree-view child row (a RabbitMQ binding here) was selected, even though
+// TestAITUI_DeleteHotkey_NoOpsOnChildRow / TestAITUI_PurgeSendReceiveHotkeys_
+// NoOpOnChildRow above show the keys are no-ops there — an "advertised but
+// dead" mismatch. c (create) has no selection dependency, so it must remain.
+func TestAITUI_StatusBar_HidesDeadHints_OnChildRowSelected(t *testing.T) {
+	action := &ManageAction{Run: func(string) error { return nil }}
+	purge := func(string) (int64, error) { return 0, nil }
+	m := newTestModelWithExchangeChildren(purge, action)
+	m.objTypes[0].treeView = true
+	// newTestModelWithExchangeChildren only wires deleteAction from its param;
+	// set createAction directly so the "create stays visible" assertion below
+	// exercises a real create-eligible window rather than a false premise.
+	m.objTypes[0].createAction = action
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(aiTUIModel)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model := updated.(aiTUIModel)
+	if _, _, ok := model.selectedChildNode(); !ok {
+		t.Fatal("setup: selection should be on the child row")
+	}
+
+	bar := model.renderStatusBar()
+	for _, dead := range []string{"delete", "send"} {
+		if strings.Contains(bar, dead) {
+			t.Errorf("status bar should hide %q hint on a selected child row, got: %s", dead, bar)
+		}
+	}
+	if !strings.Contains(bar, "create") {
+		t.Errorf("status bar should still show 'create' (selection-independent), got: %s", bar)
+	}
+}
+
 // ---------- P = publish on Topics top-level nodes ----------
 
 func newTestModelWithTopicsWindow(tb backends.TopicBackend) aiTUIModel {
@@ -2166,6 +2282,25 @@ func TestAITUI_PeekHotkey_OnSubscriptionChild_Google(t *testing.T) {
 	}
 }
 
+func TestAITUI_MetadataPeekHotkey_OnSubscriptionChild_RequestsVerboseMetadata(t *testing.T) {
+	tb := &mockTopicBackend{subscribeMsg: &backends.Message{Properties: map[string]any{"foo": "bar"}}}
+	m := newTestModelWithTopicSubscriptions(tb, nil)
+	m = selectSubscriptionChild(t, m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	model := updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from metadata peek on a subscription child")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	_ = updated.(aiTUIModel)
+
+	if tb.lastSubscribeOpts.Verbosity != backends.VerbosityVerbose {
+		t.Fatalf("metadata peek must request VerbosityVerbose, got %v", tb.lastSubscribeOpts.Verbosity)
+	}
+}
+
 func TestAITUI_ReceiveHotkey_OnSubscriptionChild_Google(t *testing.T) {
 	tb := &mockTopicBackend{subscribeMsg: &backends.Message{Data: []byte("payload")}}
 	m := newTestModelWithTopicSubscriptions(tb, nil)
@@ -2298,7 +2433,7 @@ func TestAITUI_StatusBar_TracksSelectionDepth_OnTopicsWindow(t *testing.T) {
 	// Subscription child selected: "P purge", "p peek", "R receive".
 	m = selectSubscriptionChild(t, m)
 	bar = m.renderStatusBar()
-	for _, want := range []string{"purge", "peek", "receive"} {
+	for _, want := range []string{"purge", "peek", "metadata", "receive"} {
 		if !strings.Contains(bar, want) {
 			t.Errorf("child selection: status bar missing %q, got: %s", want, bar)
 		}

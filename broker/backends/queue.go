@@ -50,6 +50,7 @@ type SendOptions struct {
 	ContentType   string
 	Priority      int
 	Persistent    bool
+	Key           string            // Partition/routing key (Kafka, Pulsar); ignored by most brokers
 	TTL           int64             // Time-to-live in milliseconds (0 = no expiry)
 	Extra         map[string]string // Broker-specific flags (e.g. fifo, qos, routing-type)
 }
@@ -61,7 +62,7 @@ type ReceiveOptions struct {
 	Wait        bool
 	Acknowledge bool // true = destructive read (get), false = browse (peek)
 	Verbosity   Verbosity
-	Selector    string // JMS-style message selector expression
+	Selector    string            // JMS-style message selector expression
 	Extra       map[string]string // Broker-specific flags (e.g. visibility-timeout, qos)
 }
 

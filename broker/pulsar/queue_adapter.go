@@ -40,6 +40,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 
 	msg := &pulsar.ProducerMessage{
 		Payload:    opts.Message,
+		Key:        opts.Key,
 		Properties: backends.StringifyProps(opts.Properties),
 	}
 	if opts.MessageID != "" {
@@ -117,6 +118,11 @@ func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
 	delete(props, backends.PropReplyTo)
 	contentType, _ := props[backends.PropContentType].(string)
 	delete(props, backends.PropContentType)
+	// propTTLMs is an xmc-internal transport header (set by Send when --ttl is
+	// given), not application data — strip it so it doesn't leak into
+	// Properties on receive/peek/subscribe (it isn't a remaining-lifetime
+	// value once received, so it wouldn't be meaningful there anyway).
+	delete(props, propTTLMs)
 	return &backends.Message{
 		Data:          msg.Payload(),
 		Properties:    props,

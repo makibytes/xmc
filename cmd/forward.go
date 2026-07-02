@@ -32,9 +32,12 @@ import (
 // optional --command pipes each message through a shell command, turning
 // forward into a streaming transformer.
 //
-// Message metadata is preserved; the destination assigns a fresh message ID. The
-// relay is destructive on the source (like move): if a downstream command or
-// send fails, the consumed message is written to stdout so it can be recovered.
+// Message metadata (including the original message ID and, on Kafka/Pulsar,
+// the partition/routing key) is preserved — see docs/BRIDGE_AND_FORWARD.md's
+// "Metadata: Always preserved" claim, matched here the same way bridge's
+// NDJSON path preserves it. The relay is destructive on the source (like
+// move): if a downstream command or send fails, the consumed message is
+// written to stdout so it can be recovered.
 func NewForwardCommand(queueBackend backends.QueueBackend, topicBackend backends.TopicBackend, queueCapable, topicCapable bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "forward <source> <destination>",
@@ -212,7 +215,9 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 			return topicBackend.Publish(ctx, backends.PublishOptions{
 				Topic:         destination,
 				Message:       body,
+				Key:           src.Key,
 				Properties:    src.Properties,
+				MessageID:     src.MessageID,
 				CorrelationID: src.CorrelationID,
 				ReplyTo:       src.ReplyTo,
 				ContentType:   src.ContentType,
@@ -225,7 +230,9 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 			return queueBackend.Send(ctx, backends.SendOptions{
 				Queue:         destination,
 				Message:       body,
+				Key:           src.Key,
 				Properties:    src.Properties,
+				MessageID:     src.MessageID,
 				CorrelationID: src.CorrelationID,
 				ReplyTo:       src.ReplyTo,
 				ContentType:   src.ContentType,

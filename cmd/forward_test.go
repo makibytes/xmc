@@ -55,6 +55,7 @@ func TestForwardCommand_CountLimit(t *testing.T) {
 func TestForwardCommand_PreservesMetadata(t *testing.T) {
 	msg := &backends.Message{
 		Data:          []byte("payload"),
+		Key:           "part-1",
 		MessageID:     "orig",
 		CorrelationID: "c1",
 		ReplyTo:       "rq",
@@ -72,13 +73,14 @@ func TestForwardCommand_PreservesMetadata(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+	// forward always preserves metadata (docs/BRIDGE_AND_FORWARD.md: "Metadata:
+	// Always preserved"), including the original message ID and partition/routing
+	// key — unlike a fresh publish, this is a same-broker relay, not a new message.
 	o := mock.lastSendOpts
-	if string(o.Message) != "payload" || o.CorrelationID != "c1" || o.ReplyTo != "rq" ||
+	if string(o.Message) != "payload" || o.Key != "part-1" || o.MessageID != "orig" ||
+		o.CorrelationID != "c1" || o.ReplyTo != "rq" ||
 		o.ContentType != "application/json" || o.Priority != 6 || !o.Persistent || o.Properties["env"] != "prod" {
 		t.Errorf("metadata not preserved: %+v", o)
-	}
-	if o.MessageID != "" {
-		t.Errorf("messageID = %q, want empty (destination assigns a fresh one)", o.MessageID)
 	}
 }
 

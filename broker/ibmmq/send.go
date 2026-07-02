@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ibm-messaging/mq-golang/v5/ibmmq"
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 )
 
@@ -74,8 +75,13 @@ func SendMessage(qMgr ibmmq.MQQueueManager, args SendArguments) error {
 	// Create a buffer for the message with properties
 	buffer := args.Message
 
-	// If we have properties, we need to use message handle (MQRFH2)
-	if len(args.Properties) > 0 {
+	// If we have properties (or a content type), we need to use message handle
+	// (MQRFH2). MQMD has no dedicated content-type field, so content-type rides
+	// along as a message-handle property under the same reserved key
+	// (backends.PropContentType) header-based brokers (Kafka, Pulsar, Redis,
+	// ...) use — extracted back out on receive in queue_adapter.go so it lands
+	// on Message.ContentType rather than as an ordinary application property.
+	if len(args.Properties) > 0 || args.ContentType != "" {
 		log.Verbose("📦 adding %d properties to message...", len(args.Properties))
 
 		// Create message handle for properties
@@ -93,6 +99,11 @@ func SendMessage(qMgr ibmmq.MQQueueManager, args SendArguments) error {
 			err = msgHandle.SetMP(smpo, key, pd, value)
 			if err != nil {
 				log.Verbose("⚠️  failed to set property %s: %v", key, err)
+			}
+		}
+		if args.ContentType != "" {
+			if err := msgHandle.SetMP(smpo, backends.PropContentType, pd, args.ContentType); err != nil {
+				log.Verbose("⚠️  failed to set content-type: %v", err)
 			}
 		}
 

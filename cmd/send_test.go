@@ -75,6 +75,7 @@ func TestSendCommand_WithFlags(t *testing.T) {
 		"-T", "application/json",
 		"-C", "corr-123",
 		"-I", "msg-456",
+		"-K", "partition-key",
 		"-Y", "7",
 		"-d",
 		"-R", "reply-queue",
@@ -96,6 +97,9 @@ func TestSendCommand_WithFlags(t *testing.T) {
 	}
 	if opts.MessageID != "msg-456" {
 		t.Errorf("messageid = %q, want %q", opts.MessageID, "msg-456")
+	}
+	if opts.Key != "partition-key" {
+		t.Errorf("key = %q, want %q", opts.Key, "partition-key")
 	}
 	if opts.Priority != 7 {
 		t.Errorf("priority = %d, want %d", opts.Priority, 7)

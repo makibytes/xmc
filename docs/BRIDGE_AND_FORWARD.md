@@ -97,7 +97,7 @@ Each line is a JSON object. Binary payloads use `dataBase64` instead of `data`.
 | Content type | Yes | `-T` / `--content-type` |
 | Priority | Yes | `-Y` / `--priority` (0–9) |
 | Persistent / durable | Yes | `-d` / `--persistent` |
-| Partition key | Yes | `-K` / `--key` (Kafka) |
+| Partition key | Yes | `-K` / `--key` (Kafka, Pulsar) — on both `send`/`receive` (queue) and `publish`/`subscribe` (topic) |
 | TTL / expiry | **No** | Not in the NDJSON record |
 
 ### Broker-Specific Caveats

@@ -49,6 +49,14 @@ Kafka), with an optional `-x`/`--command` shell command. `--for` (time-bounded s
 `--stats` (live throughput to stderr) apply to every read command and to `forward`, so
 any broker can be sampled for a fixed window or monitored for throughput while streaming.
 
+"Message priority" and "Persistent delivery" showing "-" above means the broker has no
+native concept for it, not that xmc's support is partial: `--priority`/`--persistent` are
+accepted on every broker's send/publish command (so scripts and pipelines don't need
+per-broker branching), but on a broker without native support the value is a no-op on
+send and is never populated on receive — it will not appear in `-J`/`--ndjson` output or
+round-trip through `forward`/`bridge`. Only Artemis, RabbitMQ, and IBM MQ currently honor
+both in both directions.
+
 ## Traditional Message Brokers
 
 ### Apache Artemis

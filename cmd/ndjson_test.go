@@ -78,6 +78,9 @@ func TestReceiveCommand_NDJSONOutput(t *testing.T) {
 		MessageID:     "m1",
 		CorrelationID: "c1",
 		Properties:    map[string]any{"k": "v"},
+		InternalMetadata: map[string]any{
+			"Header": "native-debug",
+		},
 	}
 	mock := &mockQueueBackend{receiveMsg: msg}
 	cmd := NewReceiveCommand(mock, nil, nil)
@@ -95,6 +98,13 @@ func TestReceiveCommand_NDJSONOutput(t *testing.T) {
 	}
 	if rec.Data != "hi" || rec.MessageID != "m1" || rec.CorrelationID != "c1" || rec.Properties["k"] != "v" {
 		t.Errorf("record mismatch: %+v", rec)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &generic); err != nil {
+		t.Fatalf("output is not valid JSON object: %v (%q)", err, out)
+	}
+	if _, ok := generic["internalMetadata"]; ok {
+		t.Fatalf("NDJSON record must not include internalMetadata: %v", generic)
 	}
 }
 
@@ -167,6 +177,49 @@ func TestSendCommand_NDJSONImport(t *testing.T) {
 	})
 }
 
+// TestSendCommand_NDJSONImport_PreservesKey guards against the regression
+// where SendOptions had no Key field: a Pulsar/Kafka queue receive populates
+// Message.Key, so a `receive --ndjson | send --ndjson` round trip must not
+// silently drop it (the NDJSON record is documented as lossless — see
+// docs/BRIDGE_AND_FORWARD.md's "Partition key | Yes" row).
+func TestSendCommand_NDJSONImport_PreservesKey(t *testing.T) {
+	input := `{"data":"evt","key":"partition-1"}` + "\n"
+
+	withStdin(t, input, func() {
+		mock := &mockQueueBackend{}
+		cmd := NewSendCommand(mock, nil, nil)
+		cmd.SetArgs([]string{"q", "--ndjson"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.sendCount != 1 {
+			t.Fatalf("sendCount = %d, want 1", mock.sendCount)
+		}
+		if mock.lastSendOpts.Key != "partition-1" {
+			t.Errorf("key = %q, want %q (dropped on send --ndjson)", mock.lastSendOpts.Key, "partition-1")
+		}
+	})
+}
+
+// TestSendCommand_KeyFlag_FallsBackWhenRecordKeyEmpty verifies --key acts as
+// a per-batch default for --ndjson records that don't carry their own key,
+// mirroring publish's existing -K fallback behavior.
+func TestSendCommand_KeyFlag_FallsBackWhenRecordKeyEmpty(t *testing.T) {
+	input := `{"data":"evt"}` + "\n"
+
+	withStdin(t, input, func() {
+		mock := &mockQueueBackend{}
+		cmd := NewSendCommand(mock, nil, nil)
+		cmd.SetArgs([]string{"q", "--ndjson", "-K", "default-key"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.lastSendOpts.Key != "default-key" {
+			t.Errorf("key = %q, want %q (fallback to --key)", mock.lastSendOpts.Key, "default-key")
+		}
+	})
+}
+
 func TestPublishCommand_NDJSONImport(t *testing.T) {
 	input := `{"data":"evt","key":"partition-1","priority":3}` + "\n"
 
@@ -184,6 +237,40 @@ func TestPublishCommand_NDJSONImport(t *testing.T) {
 			t.Errorf("record not restored: %+v", mock.lastPublishOpts)
 		}
 	})
+}
+
+func TestReceiveCommand_NDJSON_PrunesEmptyMetadataValues(t *testing.T) {
+	msg := &backends.Message{
+		Data: []byte("hi"),
+		Properties: map[string]any{
+			"foo":    "bar",
+			"blank":  "",
+			"nilish": "<nil>",
+			"empty":  []any{},
+		},
+	}
+	mock := &mockQueueBackend{receiveMsg: msg}
+	cmd := NewReceiveCommand(mock, nil, nil)
+	cmd.SetArgs([]string{"q", "--ndjson"})
+
+	out := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	var rec messageRecord
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &rec); err != nil {
+		t.Fatalf("output is not valid JSON: %v (%q)", err, out)
+	}
+	if rec.Properties["foo"] != "bar" {
+		t.Fatalf("expected foo=bar in properties, got %+v", rec.Properties)
+	}
+	for _, banned := range []string{"blank", "nilish", "empty"} {
+		if _, ok := rec.Properties[banned]; ok {
+			t.Fatalf("property %q must be pruned from NDJSON output: %+v", banned, rec.Properties)
+		}
+	}
 }
 
 // captureStdout redirects os.Stdout for the duration of fn and returns what was

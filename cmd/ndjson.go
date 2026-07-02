@@ -32,6 +32,13 @@ type messageRecord struct {
 	Priority      int            `json:"priority,omitempty"`
 	Persistent    bool           `json:"persistent,omitempty"`
 	Properties    map[string]any `json:"properties,omitempty"`
+
+	// InternalMetadata carries broker-specific display fields (Kafka
+	// partition/offset, IBM MQ MQMD fields, ...) when requested — see
+	// recordForDisplay in message_schema.go. newMessageRecord (the NDJSON
+	// export path) never sets this: it isn't portable across brokers, so it
+	// has no place in a lossless, broker-neutral export/import record.
+	InternalMetadata map[string]any `json:"internalMetadata,omitempty"`
 }
 
 // newMessageRecord captures a received message as a lossless record.
@@ -44,7 +51,7 @@ func newMessageRecord(m *backends.Message) messageRecord {
 		ContentType:   m.ContentType,
 		Priority:      m.Priority,
 		Persistent:    m.Persistent,
-		Properties:    m.Properties,
+		Properties:    pruneMap(m.Properties),
 	}
 	if utf8.Valid(m.Data) {
 		rec.Data = string(m.Data)
@@ -96,6 +103,7 @@ func forEachRecord(r io.Reader, visit func(messageRecord) error) (int, error) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			return processed, fmt.Errorf("parse record on line %d: %w", processed+1, err)
 		}
+		rec.Properties = pruneMap(rec.Properties)
 		if err := visit(rec); err != nil {
 			return processed, err
 		}

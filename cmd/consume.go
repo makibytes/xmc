@@ -158,7 +158,7 @@ func outputMessage(message *backends.Message, cfg consumeConfig) error {
 	case cfg.format != "":
 		return displayMessageFormat(w, message, cfg.format)
 	case cfg.jsonOutput:
-		return displayMessageJSON(w, message)
+		return displayMessageJSON(w, message, cfg.verbosity)
 	default:
 		return displayMessage(w, cfg.metaWriter(), message, cfg.verbosity)
 	}
@@ -210,40 +210,13 @@ func shouldAddNewline(w io.Writer) bool {
 	return true
 }
 
-// displayMessageJSON outputs the message as a JSON object
-func displayMessageJSON(w io.Writer, message *backends.Message) error {
-	output := map[string]any{
-		"data": string(message.Data),
-	}
-	if message.MessageID != "" {
-		output["messageId"] = message.MessageID
-	}
-	if message.CorrelationID != "" {
-		output["correlationId"] = message.CorrelationID
-	}
-	if message.ReplyTo != "" {
-		output["replyTo"] = message.ReplyTo
-	}
-	if message.ContentType != "" {
-		output["contentType"] = message.ContentType
-	}
-	if message.Key != "" {
-		output["key"] = message.Key
-	}
-	if message.Priority != 0 {
-		output["priority"] = message.Priority
-	}
-	if message.Persistent {
-		output["persistent"] = message.Persistent
-	}
-	if len(message.Properties) > 0 {
-		output["properties"] = message.Properties
-	}
-	if len(message.InternalMetadata) > 0 {
-		output["metadata"] = message.InternalMetadata
-	}
-
-	data, err := json.Marshal(output)
+// displayMessageJSON outputs the message as a JSON object, using the same
+// messageRecord schema as --ndjson (see recordForDisplay). Verbose mode
+// (-v) also includes internalMetadata, matching what verbose text output
+// (displayMessage) shows via writeKeyValueMap.
+func displayMessageJSON(w io.Writer, message *backends.Message, verbosity backends.Verbosity) error {
+	rec := recordForDisplay(message, true, verbosity >= backends.VerbosityVerbose)
+	data, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message to JSON: %w", err)
 	}

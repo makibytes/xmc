@@ -93,6 +93,9 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend,
 			ContentType:   rec.ContentType,
 			Priority:      rec.Priority,
 			Persistent:    rec.Persistent,
+			// See cmd/send.go's emitRecord: messageRecord has no TTL field, so
+			// --ndjson publishes fall back to the --ttl flag as a per-batch default.
+			TTL: pf.ttl,
 		})
 	}
 

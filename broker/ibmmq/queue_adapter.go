@@ -130,6 +130,17 @@ func convertMQMDToBackendMessage(md *ibmmq.MQMD, data []byte, msgHandle ibmmq.MQ
 		impo.Options = ibmmq.MQIMPO_INQ_NEXT
 	}
 
+	// content-type rides as a message-handle property (see send.go — MQMD has
+	// no native content-type field); pull it back out into ContentType so it
+	// doesn't show up as an ordinary application property, mirroring how
+	// Kafka/Pulsar/Redis extract their four reserved Prop* headers.
+	if ct, ok := result.Properties[backends.PropContentType]; ok {
+		if s, isStr := ct.(string); isStr {
+			result.ContentType = s
+		}
+		delete(result.Properties, backends.PropContentType)
+	}
+
 	// Add internal metadata for verbose display
 	if withMetadata {
 		result.InternalMetadata["Format"] = strings.TrimSpace(md.Format)

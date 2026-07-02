@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 // pickerState holds the state for an interactive selection list (Claude Code-style).
@@ -259,6 +262,9 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 				"Up/Down      recall history\n"+
 				"Space        collapse/expand selected sidebar window\n"+
 				"x            toggle hierarchical tree-view for broker objects\n"+
+				"r            refresh the selected sidebar window now\n"+
+				"m            peek metadata (where peek is available)\n"+
+				"J / Y        metadata output format (JSON / YAML)\n"+
 				"PgUp/PgDn    scroll conversation · mouse wheel also works\n"+
 				"Home/End     jump to top/bottom\n"+
 				"             click ⧉ in the transcript to copy any item\n") + "\n")
@@ -557,6 +563,26 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.filtering = true
 			return m, nil
+		case "J":
+			if m.metadataFormat != metadataFormatJSON {
+				m.metadataFormat = metadataFormatJSON
+				msg := "metadata format → json"
+				if err := saveMetadataFormat(metadataFormatJSON); err != nil {
+					msg += fmt.Sprintf(" (save failed: %s)", err)
+				}
+				m.appendTranscript(dimStyle.Render(msg) + "\n\n")
+			}
+			return m, nil
+		case "Y":
+			if m.metadataFormat != metadataFormatYAML {
+				m.metadataFormat = metadataFormatYAML
+				msg := "metadata format → yaml"
+				if err := saveMetadataFormat(metadataFormatYAML); err != nil {
+					msg += fmt.Sprintf(" (save failed: %s)", err)
+				}
+				m.appendTranscript(dimStyle.Render(msg) + "\n\n")
+			}
+			return m, nil
 		case "s":
 			m.cycleSort()
 			return m, nil
@@ -585,15 +611,25 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.startPrompt("delete", wi, node.Name)
 			}
 			return m, nil
-		case "p":
+		case "p", "m":
+			metadataOnly := msg.String() == "m"
+			verbosity := backends.VerbosityQuiet
+			if metadataOnly {
+				// Metadata peek must request full metadata from adapters, otherwise
+				// some backends intentionally omit properties/internal metadata.
+				verbosity = backends.VerbosityVerbose
+			}
 			if child, parentName, ok := m.selectedChildNode(); ok {
 				if !sidebarSubscriptionEligible(m.objTypes[wi].label, child.Kind) || child.Name == "" {
 					return m, nil
 				}
 				desc := fmt.Sprintf("▶ peek Subscription \"%s\"", child.Name)
+				if metadataOnly {
+					desc = fmt.Sprintf("▶ peek metadata Subscription \"%s\"", child.Name)
+				}
 				m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 				m.state = tuiExecuting
-				topic, sub, session := parentName, child.Name, m.session
+				topic, sub, session, fmtMode := parentName, child.Name, m.session, m.metadataFormat
 				return m, func() tea.Msg {
 					ta, err := session.getTopicAdapter()
 					if err != nil {
@@ -605,6 +641,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						Topic:       topic,
 						Extra:       map[string]string{"subscription": sub},
 						Acknowledge: false,
+						Verbosity:   verbosity,
 						Timeout:     1,
 						Wait:        false,
 					})
@@ -614,8 +651,10 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						}
 						return sideActionMsg{err: err}
 					}
-					result := formatMessagePayload(msg)
-					return sideActionMsg{action: result}
+					if metadataOnly {
+						return formatMessageMetadataForSideAction(msg, fmtMode)
+					}
+					return formatMessagePayloadForSideAction(msg)
 				}
 			}
 
@@ -630,10 +669,13 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			name := node.Name
 			desc := fmt.Sprintf("▶ peek %s \"%s\"", singular(m.objTypes[wi].label), name)
+			if metadataOnly {
+				desc = fmt.Sprintf("▶ peek metadata %s \"%s\"", singular(m.objTypes[wi].label), name)
+			}
 			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 			m.state = tuiExecuting
 			// capture by value
-			queue := name
+			queue, fmtMode := name, m.metadataFormat
 			return m, func() tea.Msg {
 				qa, err := m.session.getQueueAdapter()
 				if err != nil {
@@ -644,6 +686,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				msg, err := qa.Receive(ctx, backends.ReceiveOptions{
 					Queue:       queue,
 					Acknowledge: false,
+					Verbosity:   verbosity,
 					Timeout:     1,
 					Wait:        false,
 				})
@@ -653,8 +696,10 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					return sideActionMsg{err: err}
 				}
-				result := formatMessagePayload(msg)
-				return sideActionMsg{action: result}
+				if metadataOnly {
+					return formatMessageMetadataForSideAction(msg, fmtMode)
+				}
+				return formatMessagePayloadForSideAction(msg)
 			}
 		case "P":
 			label := m.objTypes[wi].label
@@ -733,8 +778,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						}
 						return sideActionMsg{err: err}
 					}
-					result := formatMessagePayload(msg)
-					return sideActionMsg{action: result}
+					return formatMessagePayloadForSideAction(msg)
 				}
 			}
 			node, ok := m.selectedTopLevelNode()
@@ -767,8 +811,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					return sideActionMsg{err: err}
 				}
-				result := formatMessagePayload(msg)
-				return sideActionMsg{action: result}
+				return formatMessagePayloadForSideAction(msg)
 			}
 		}
 	}
@@ -1066,17 +1109,51 @@ func initManageAction(a *ManageAction) {
 	a.SetupFlags(&cobra.Command{})
 }
 
-// formatMessagePayload formats a message payload (from peek or receive) for
-// display in the TUI transcript.
-func formatMessagePayload(msg *backends.Message) string {
-	if len(msg.Data) == 0 {
-		return ""
-	}
+func formatMessagePayloadForSideAction(msg *backends.Message) sideActionMsg {
 	payload := strings.TrimRight(string(msg.Data), "\n\r\t ")
-	if len(payload) > 255 {
-		payload = payload[:255] + "..."
+	if payload == "" {
+		return sideActionMsg{action: "   └ (empty payload)"}
 	}
-	return payload + "\n"
+	return sideActionMsg{
+		action: renderMessagePayload(payload),
+		copy:   payload,
+	}
+}
+
+func normalizeMessageMetadata(msg *backends.Message) (map[string]any, error) {
+	return recordAsMap(recordForDisplay(msg, false, true))
+}
+
+func formatMessageMetadata(msg *backends.Message, format metadataFormat) (string, error) {
+	normalized, err := normalizeMessageMetadata(msg)
+	if err != nil {
+		return "", err
+	}
+	switch format {
+	case metadataFormatJSON:
+		b, err := json.MarshalIndent(normalized, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	default:
+		b, err := yaml.Marshal(normalized)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(string(b), "\n"), nil
+	}
+}
+
+func formatMessageMetadataForSideAction(msg *backends.Message, format metadataFormat) sideActionMsg {
+	rendered, err := formatMessageMetadata(msg, format)
+	if err != nil {
+		return sideActionMsg{err: err}
+	}
+	return sideActionMsg{
+		action: renderMessagePayload(rendered),
+		copy:   rendered,
+	}
 }
 
 func (m aiTUIModel) handleKeyExecuting(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1596,6 +1673,7 @@ func (m aiTUIModel) copyIdxForLine(clickedLine int) int {
 // isMessageReadCommand reports whether cmd is one that consumes / peeks
 // messages and therefore produces payload output on stdout.
 func isMessageReadCommand(cmd string) bool {
+	cmd = stripKnownBinaryPrefix(cmd)
 	verbs := []string{"receive ", "receive\n", "get ", "get\n", "peek ", "peek\n", "subscribe ", "subscribe\n"}
 	cmd = strings.TrimSpace(cmd)
 	for _, v := range verbs {
@@ -1609,6 +1687,24 @@ func isMessageReadCommand(cmd string) bool {
 		return true
 	}
 	return false
+}
+
+func stripKnownBinaryPrefix(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return cmd
+	}
+	fields := strings.Fields(cmd)
+	if len(fields) < 2 {
+		return cmd
+	}
+	first := strings.TrimPrefix(filepath.Base(fields[0]), "./")
+	switch first {
+	case "xmc", "amc", "awsmc", "azmc", "gmc", "imc", "kmc", "mmc", "nmc", "pmc", "rmc", "redmc":
+		return strings.Join(fields[1:], " ")
+	default:
+		return cmd
+	}
 }
 
 // renderMessagePayload renders a message payload (or multiple NDJSON records)

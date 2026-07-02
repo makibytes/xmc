@@ -415,6 +415,9 @@ $ xmc receive -J test-queue
 {"data":"hello world","messageId":"ID:123","properties":{"env":"prod"}}
 ```
 
+`-J` emits a canonical, portable message shape (payload + transferable metadata).
+Broker-internal debug metadata is intentionally excluded.
+
 ### Custom Output Format
 
 Use `-F`/`--format` with `receive`, `peek`, `subscribe`, and `request` to render
@@ -452,7 +455,8 @@ so include `\n` where you want one.
 newline-delimited JSON — one record per line. Unlike `-J` (a human-readable
 dump), NDJSON is designed to be re-imported: binary payloads are base64-encoded
 and all metadata (message ID, correlation ID, reply-to, content type, priority,
-persistence, and properties) is preserved.
+persistence, and properties) is preserved. Empty/nil-like metadata values are
+pruned, and broker-internal debug metadata is excluded.
 
 Export by consuming with `--ndjson`; import by producing with `--ndjson`:
 
@@ -627,6 +631,8 @@ Tab          autocomplete (command mode) · browse sidebar forward (AI mode)
 Shift+Tab    browse sidebar backward
 Up/Down      recall mode-specific history
 PgUp/PgDn    scroll conversation
+m            peek message metadata (where peek is available, includes internal/broker metadata)
+J / Y        switch metadata format for `m` (JSON / YAML; persisted)
 ```
 
 History behavior is shared and persistent:
@@ -688,6 +694,7 @@ select the specific provider and model xmc should use:
 ai:
   provider: opencode
   model: mimo-v2.5-free
+  metadata-format: yaml
 ```
 
 Provider selection precedence is:
