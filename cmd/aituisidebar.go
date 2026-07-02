@@ -297,7 +297,7 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		if pad < 0 {
 			pad = 0
 		}
-		b.WriteString(sidebarFocusStyle.Render(headerText + strings.Repeat(" ", pad) + "◂"))
+		b.WriteString(m.theme().focusHeader().Render(headerText + strings.Repeat(" ", pad) + "◂"))
 	} else {
 		b.WriteString(histTitleStyle.Render(headerText))
 	}

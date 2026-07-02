@@ -480,6 +480,11 @@ func (m *aiTUIModel) enterProcessView() {
 	if m.mode != modeCmd {
 		applyPromptFunc(&m.input, m.binaryName+"> ")
 	}
+	// Always re-color to the cmd theme (blue) regardless of the branch above:
+	// the label text is always "<binary>>" in process view, so its color must
+	// always be themeCmd, even when m.mode was already modeCmd (in which case
+	// the text didn't need to change, but the color must still match it).
+	m.setPromptTheme(themeCmd)
 	m.updateProcPrompt()
 	m.input.Blur()
 }
@@ -496,6 +501,10 @@ func (m *aiTUIModel) exitProcessView() {
 		applyPromptFunc(&m.input, m.binaryName+"> ")
 	}
 	m.mode = m.savedMode
+	// Re-color to match the restored mode (petrol for ask>, blue for
+	// <binary>>) — must track the text set just above, not the cmd-theme
+	// color left over from process view.
+	m.setPromptTheme(m.theme())
 	m.input.SetValue(m.savedInput)
 	m.histIdx = m.savedHist
 	m.updateInputHeight()
@@ -575,7 +584,7 @@ func (m aiTUIModel) writeProcessSection(b *strings.Builder, width, bodyLines int
 		if pad < 0 {
 			pad = 0
 		}
-		b.WriteString(sidebarFocusStyle.Render(headerText + strings.Repeat(" ", pad) + "◂"))
+		b.WriteString(m.theme().focusHeader().Render(headerText + strings.Repeat(" ", pad) + "◂"))
 	} else {
 		b.WriteString(histTitleStyle.Render(headerText))
 	}

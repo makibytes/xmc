@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/makibytes/xmc/broker/backends"
+	"github.com/muesli/termenv"
 )
 
 func newTestModel() aiTUIModel {
@@ -1377,6 +1379,235 @@ func TestAITUI_ReceiveHotkey_NoOpOnAnyArtemisAddress(t *testing.T) {
 		if model.state != tuiIdle || cmd != nil {
 			t.Errorf("receive hotkey should no-op on an Artemis address of Kind %q (an address has no reliable queue mapping)", kind)
 		}
+	}
+}
+
+func TestAITUI_Theme_PetrolInAIMode_BlueInCmdMode(t *testing.T) {
+	m := newTestModel()
+	if m.mode != modeAI {
+		t.Fatalf("initial mode should be modeAI, got %v", m.mode)
+	}
+	if got := m.theme(); got != themeAI {
+		t.Errorf("theme() in modeAI = %+v, want themeAI %+v", got, themeAI)
+	}
+
+	m.mode = modeCmd
+	if got := m.theme(); got != themeCmd {
+		t.Errorf("theme() in modeCmd = %+v, want themeCmd %+v", got, themeCmd)
+	}
+	if themeAI.accent == themeCmd.accent {
+		t.Error("themeAI and themeCmd must use different accent colors")
+	}
+}
+
+func TestAITUI_View_TitleAndModelInfo_SwitchesWithMode(t *testing.T) {
+	ai := &aiSession{modelName: "claude-opus", providerName: "anthropic"}
+	base := newAITUIModel(ai, &shellSession{spec: BrokerSpec{}}, nil, "test", "localhost:5672")
+	updated, _ := base.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m := updated.(aiTUIModel)
+
+	aiView := m.View()
+	if !strings.Contains(aiView, "XMC AI") {
+		t.Error("AI mode title should contain \"XMC AI\"")
+	}
+	if strings.Contains(aiView, "XMC Shell") {
+		t.Error("AI mode title should not contain \"XMC Shell\"")
+	}
+	if !strings.Contains(aiView, "claude-opus") {
+		t.Error("AI mode title bar should show the model info")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	cmdModel := updated.(aiTUIModel)
+	cmdView := cmdModel.View()
+	if !strings.Contains(cmdView, "XMC Shell") {
+		t.Error("command mode title should contain \"XMC Shell\"")
+	}
+	if strings.Contains(cmdView, "XMC AI") {
+		t.Error("command mode title should not contain \"XMC AI\"")
+	}
+	if strings.Contains(cmdView, "claude-opus") {
+		t.Error("command mode title bar should not show the model info")
+	}
+}
+
+func TestAITUI_PromptLabel_MatchesModeTheme(t *testing.T) {
+	m := newTestModel()
+	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeAI.accent {
+		t.Errorf("initial (AI mode) prompt label color = %v, want themeAI accent %v", got, themeAI.accent)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model := updated.(aiTUIModel)
+	if model.mode != modeCmd {
+		t.Fatalf("expected modeCmd after Esc, got %v", model.mode)
+	}
+	if got := model.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
+		t.Errorf("command mode prompt label color = %v, want themeCmd accent %v", got, themeCmd.accent)
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	backToAI := updated.(aiTUIModel)
+	if got := backToAI.input.FocusedStyle.Prompt.GetForeground(); got != themeAI.accent {
+		t.Errorf("prompt label color after toggling back to AI mode = %v, want themeAI accent %v", got, themeAI.accent)
+	}
+}
+
+func TestAITUI_ProcessView_FromAIMode_PromptColorTracksText(t *testing.T) {
+	m := newTestModel() // starts in modeAI
+	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeAI.accent {
+		t.Fatalf("initial prompt color = %v, want themeAI accent", got)
+	}
+
+	(&m).enterProcessView()
+	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
+		t.Errorf("process view always shows a \"<binary>>\"-shaped prompt, so its color must be themeCmd even when entered from AI mode; got %v", got)
+	}
+
+	(&m).exitProcessView()
+	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeAI.accent {
+		t.Errorf("after exiting process view, prompt color = %v, want themeAI accent (the mode it was entered from)", got)
+	}
+	if m.mode != modeAI {
+		t.Errorf("mode after exitProcessView = %v, want modeAI restored", m.mode)
+	}
+}
+
+func TestAITUI_ProcessView_FromCmdMode_PromptStaysBlueThroughout(t *testing.T) {
+	m := newTestModel()
+	(&m).toggleInputMode() // -> modeCmd
+	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
+		t.Fatalf("after toggling to cmd mode, prompt color = %v, want themeCmd accent", got)
+	}
+
+	(&m).enterProcessView()
+	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
+		t.Errorf("process view prompt color = %v, want themeCmd accent", got)
+	}
+
+	(&m).exitProcessView()
+	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
+		t.Errorf("after exiting process view, prompt color = %v, want themeCmd accent (mode was restored to cmd)", got)
+	}
+	if m.mode != modeCmd {
+		t.Errorf("mode after exitProcessView = %v, want modeCmd restored", m.mode)
+	}
+}
+
+// TestAITUI_View_PromptColor_SurvivesValueCopySemantics renders through the
+// real View() pipeline after a value-copy hop (Update() has a value receiver
+// and returns a copy, exactly like the real Bubble Tea runtime loop), instead
+// of inspecting the FocusedStyle/BlurredStyle struct fields directly. The
+// bubbles textarea caches its active style behind a private pointer that only
+// Focus()/Blur() re-point; mutating the style fields alone (what
+// setPromptTheme's callers used to rely on) can leave that pointer stale
+// after a copy, so a struct-field assertion can pass while the actual
+// rendered color is still wrong. Forces a TrueColor profile so the ANSI SGR
+// codes needed to tell the two accents apart actually get emitted.
+func TestAITUI_View_PromptColor_SurvivesValueCopySemantics(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(old)
+
+	base := newTestModel()
+	updated, _ := base.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.(aiTUIModel).Update(tea.KeyMsg{Type: tea.KeyEsc}) // -> modeCmd (blue)
+	model := updated.(aiTUIModel)
+
+	rendered := model.View()
+
+	bluePrefix, _, ok := strings.Cut(themeCmd.promptLabel().Render("Z"), "Z")
+	if !ok || bluePrefix == "" {
+		t.Fatalf("test setup error: forced TrueColor profile did not produce ANSI codes")
+	}
+	if !strings.Contains(rendered, bluePrefix) {
+		t.Errorf("rendered view does not contain themeCmd (blue) prompt-label ANSI prefix %q", bluePrefix)
+	}
+
+	petrolPrefix, _, _ := strings.Cut(themeAI.promptLabel().Render("Z"), "Z")
+	if strings.Contains(rendered, petrolPrefix) {
+		t.Errorf("rendered view still contains stale themeAI (petrol) prompt-label ANSI prefix %q — pointer-staleness regression", petrolPrefix)
+	}
+}
+
+func TestIsNoMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"sentinel", backends.ErrNoMessageAvailable, true},
+		{"wrapped sentinel", fmt.Errorf("receive: %w", backends.ErrNoMessageAvailable), true},
+		{"deadline exceeded", context.DeadlineExceeded, true},
+		{"wrapped deadline exceeded", fmt.Errorf("receive: %w", context.DeadlineExceeded), true},
+		{"canceled", context.Canceled, false},
+		{"nil", nil, false},
+		{"other error", fmt.Errorf("connection refused"), false},
+	}
+	for _, c := range cases {
+		if got := isNoMessage(c.err); got != c.want {
+			t.Errorf("isNoMessage(%v) [%s] = %v, want %v", c.err, c.name, got, c.want)
+		}
+	}
+}
+
+func TestAITUI_PeekHotkey_DeadlineExceeded_ShowsNoMessageAvailable(t *testing.T) {
+	qb := &mockQueueBackend{receiveErr: context.DeadlineExceeded}
+	m := newTestModelWithQueueWindow(qb, nil, nil)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model := updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from the peek hotkey")
+	}
+	msg := cmd()
+	sam, ok := msg.(sideActionMsg)
+	if !ok {
+		t.Fatalf("expected a sideActionMsg, got %T", msg)
+	}
+	if sam.err != nil {
+		t.Errorf("a bare receive timeout on an empty queue must not surface as an error, got: %v", sam.err)
+	}
+	if !strings.Contains(sam.action, "no messages available") {
+		t.Errorf("action = %q, want it to say no messages available", sam.action)
+	}
+
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+	transcript := model.transcript.String()
+	if strings.Contains(transcript, "deadline exceeded") {
+		t.Errorf("transcript should never show the raw deadline-exceeded error, got: %s", transcript)
+	}
+	if strings.Contains(transcript, "✗") {
+		t.Errorf("transcript should not show an error marker for an empty queue, got: %s", transcript)
+	}
+}
+
+func TestAITUI_ReceiveHotkey_DeadlineExceeded_ShowsNoMessageAvailable(t *testing.T) {
+	qb := &mockQueueBackend{receiveErr: context.DeadlineExceeded}
+	m := newTestModelWithQueueWindow(qb, nil, nil)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	model := updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from the receive hotkey")
+	}
+	msg := cmd()
+	sam, ok := msg.(sideActionMsg)
+	if !ok {
+		t.Fatalf("expected a sideActionMsg, got %T", msg)
+	}
+	if sam.err != nil {
+		t.Errorf("a bare receive timeout on an empty queue must not surface as an error, got: %v", sam.err)
+	}
+	if !strings.Contains(sam.action, "no messages available") {
+		t.Errorf("action = %q, want it to say no messages available", sam.action)
+	}
+
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+	if strings.Contains(model.transcript.String(), "deadline exceeded") {
+		t.Errorf("transcript should never show the raw deadline-exceeded error, got: %s", model.transcript.String())
 	}
 }
 

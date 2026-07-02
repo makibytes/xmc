@@ -106,35 +106,101 @@ const (
 	modeCmd                  // direct xmc command entry (shell-like)
 )
 
+// ---------- Mode theme ----------
+
+// tuiTheme holds the accent colors that visually distinguish AI mode (ask>,
+// petrol) from direct command mode (xmc>, blue): title-bar background, the
+// horizontal rules bracketing the input, the focused sidebar-window header,
+// and the input prompt label all derive from it, so the active mode is
+// unmistakable at a glance without reading any text.
+type tuiTheme struct {
+	accent  lipgloss.Color // title-bar/rule/header background, prompt label foreground
+	dimText lipgloss.Color // title-bar secondary text (binary name, padding rule, model info)
+}
+
+var (
+	themeAI  = tuiTheme{accent: lipgloss.Color("#1a7f8a"), dimText: lipgloss.Color("#b0d4d8")} // petrol
+	themeCmd = tuiTheme{accent: lipgloss.Color("#2563d9"), dimText: lipgloss.Color("#bcccf5")} // blue
+)
+
+// theme returns the accent theme for the model's current input mode.
+func (m aiTUIModel) theme() tuiTheme {
+	if m.mode == modeCmd {
+		return themeCmd
+	}
+	return themeAI
+}
+
+// titleMain renders the leading title-bar segment (" XMC AI "/" XMC Shell ").
+func (t tuiTheme) titleMain() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(t.accent)
+}
+
+// titleDim renders the secondary title-bar segments (binary name, padding
+// rule, model info).
+func (t tuiTheme) titleDim() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.dimText).Background(t.accent)
+}
+
+// serverOK renders the title-bar server URL when connected.
+func (t tuiTheme) serverOK() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(t.accent)
+}
+
+// serverErr renders the title-bar server URL when confirmed unreachable.
+func (t tuiTheme) serverErr() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).Background(t.accent)
+}
+
+// serverBusy renders the title-bar server URL while auto-reconnect is active
+// (yellow + ANSI blink, independent of the accent theme).
+func (t tuiTheme) serverBusy() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f5a623")).Blink(true).Background(t.accent)
+}
+
+// rule renders the horizontal rules bracketing the input area.
+func (t tuiTheme) rule() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.accent)
+}
+
+// focusHeader renders a sidebar window's header when it has focus.
+func (t tuiTheme) focusHeader() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(t.accent).PaddingLeft(1).PaddingRight(1)
+}
+
+// promptLabel renders the "ask>"/"xmc>" input prompt label.
+func (t tuiTheme) promptLabel() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.accent).Bold(true)
+}
+
+// setPromptTheme re-colors the input textarea's prompt label to th. Must be
+// called every time the prompt text is changed to an ask>-shaped or
+// <binary>>-shaped label (toggleInputMode, enterProcessView/exitProcessView)
+// — the label's color is not derived from its text automatically, so the two
+// can drift out of sync (e.g. process view briefly shows "<binary>>" using
+// whatever color the mode was last toggled to) unless every call site that
+// changes the prompt text also calls this with the matching theme.
+func (m *aiTUIModel) setPromptTheme(th tuiTheme) {
+	sty := th.promptLabel()
+	m.input.FocusedStyle.Prompt = sty
+	m.input.BlurredStyle.Prompt = sty
+	// textarea.Model renders through a private *Style pointer that Focus()/Blur()
+	// point at &FocusedStyle/&BlurredStyle. Since Bubble Tea threads aiTUIModel
+	// through Update()/View() by value, that pointer keeps referencing whichever
+	// past copy of the model last called Focus()/Blur() — mutating the style
+	// fields above doesn't move it. Without re-arming it here, the new color only
+	// becomes visible once some unrelated code path happens to call Focus()/Blur()
+	// again later, which looks like the color changing "at random".
+	if m.input.Focused() {
+		m.input.Focus()
+	} else {
+		m.input.Blur()
+	}
+}
+
 // ---------- Styles ----------
 
 var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("15")).
-			Background(lipgloss.Color("#1a7f8a"))
-
-	titleDimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#b0d4d8")).
-			Background(lipgloss.Color("#1a7f8a"))
-
-	titleServerOKStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("15")).
-				Background(lipgloss.Color("#1a7f8a"))
-
-	titleServerErrStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("9")).
-				Background(lipgloss.Color("#1a7f8a"))
-
-	// titleServerBusyStyle: yellow + ANSI blink — shown while auto-reconnect is active.
-	titleServerBusyStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#f5a623")).
-				Blink(true).
-				Background(lipgloss.Color("#1a7f8a"))
-
 	userStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("6")) // cyan
@@ -171,12 +237,6 @@ var (
 	histOkStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("2"))
 
-	sidebarFocusStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("15")).
-				Background(lipgloss.Color("#1a7f8a")).
-				PaddingLeft(1).PaddingRight(1)
-
 	sidebarSelStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("15"))
@@ -185,11 +245,6 @@ var (
 	// to distinguish from the header, no background so it blends with the pane).
 	sidebarErrStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("9")) // bright red
-
-	// promptRuleStyle draws the horizontal rules that bracket the input area
-	// (same teal as the title-bar background).
-	promptRuleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#1a7f8a"))
 
 	// shimmerHighStyle is the bright "lit" rune style used in the proposal shimmer.
 	shimmerHighStyle = lipgloss.NewStyle().
@@ -355,7 +410,7 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 	// SetPromptFunc must be called before SetWidth so promptWidth is known.
 	const initPrompt = "ask> "
 	applyPromptFunc(&ta, initPrompt)
-	promptLabelSty := lipgloss.NewStyle().Foreground(lipgloss.Color("#1a7f8a")).Bold(true)
+	promptLabelSty := themeAI.promptLabel() // starts in modeAI (petrol); toggleInputMode re-styles on Esc
 	ta.FocusedStyle.Prompt = promptLabelSty
 	ta.BlurredStyle.Prompt = promptLabelSty
 	ta.Placeholder = "Ask anything..."
@@ -603,22 +658,28 @@ func (m aiTUIModel) View() string {
 	if m.quitting {
 		return ""
 	}
-
 	w := m.width
+	th := m.theme()
 
-	// ── Title bar ──
+	// ── Title bar ── petrol + "XMC AI" + model info in AI mode, blue + "XMC
+	// Shell" + no model info in command mode — the mode is unmistakable at a
+	// glance without reading any text.
 	modelInfo := m.modelInfo()
 	titleText := " XMC AI "
+	if m.mode == modeCmd {
+		titleText = " XMC Shell "
+		modelInfo = ""
+	}
 	binaryText := " " + m.binaryName + " "
 	serverInfo := m.serverInfo()
 	padLen := w - lipgloss.Width(titleText) - lipgloss.Width(binaryText) - lipgloss.Width(modelInfo) - lipgloss.Width(serverInfo)
 	if padLen < 1 {
 		padLen = 1
 	}
-	titleBar := titleStyle.Render(titleText) +
-		titleDimStyle.Render(binaryText) +
-		titleDimStyle.Render(strings.Repeat("─", padLen)) +
-		titleDimStyle.Render(modelInfo) +
+	titleBar := th.titleMain().Render(titleText) +
+		th.titleDim().Render(binaryText) +
+		th.titleDim().Render(strings.Repeat("─", padLen)) +
+		th.titleDim().Render(modelInfo) +
 		serverInfo
 
 	// ── Main content area ──
@@ -635,8 +696,8 @@ func (m aiTUIModel) View() string {
 	// ── Status bar ──
 	statusBar := m.renderStatusBar()
 
-	// ── Horizontal rules bracketing the prompt (same teal as title bar) ──
-	rule := promptRuleStyle.Render(strings.Repeat("─", w))
+	// ── Horizontal rules bracketing the prompt (same accent as title bar) ──
+	rule := th.rule().Render(strings.Repeat("─", w))
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		titleBar,
@@ -667,14 +728,15 @@ func (m aiTUIModel) serverInfo() string {
 	if m.server == "" {
 		return ""
 	}
+	th := m.theme()
 	text := " " + m.server + " "
 	switch {
 	case m.conn.reconnecting:
-		return titleServerBusyStyle.Render(text)
+		return th.serverBusy().Render(text)
 	case m.conn.checked && m.conn.err != nil:
-		return titleServerErrStyle.Render(text)
+		return th.serverErr().Render(text)
 	default:
-		return titleServerOKStyle.Render(text)
+		return th.serverOK().Render(text)
 	}
 }
 

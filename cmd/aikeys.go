@@ -609,7 +609,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						Wait:        false,
 					})
 					if err != nil {
-						if errors.Is(err, backends.ErrNoMessageAvailable) {
+						if isNoMessage(err) {
 							return sideActionMsg{action: "   └ (no messages available)"}
 						}
 						return sideActionMsg{err: err}
@@ -648,7 +648,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Wait:        false,
 				})
 				if err != nil {
-					if errors.Is(err, backends.ErrNoMessageAvailable) {
+					if isNoMessage(err) {
 						return sideActionMsg{action: "   └ (no messages available)"}
 					}
 					return sideActionMsg{err: err}
@@ -728,7 +728,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						Wait:        false,
 					})
 					if err != nil {
-						if errors.Is(err, backends.ErrNoMessageAvailable) {
+						if isNoMessage(err) {
 							return sideActionMsg{action: "   └ (no messages available)"}
 						}
 						return sideActionMsg{err: err}
@@ -762,7 +762,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Wait:        false,
 				})
 				if err != nil {
-					if errors.Is(err, backends.ErrNoMessageAvailable) {
+					if isNoMessage(err) {
 						return sideActionMsg{action: "   └ (no messages available)"}
 					}
 					return sideActionMsg{err: err}
@@ -1418,6 +1418,17 @@ func sidebarSubscriptionEligible(label, kind string) bool {
 	return label == "Topics" && kind == "subscription"
 }
 
+// isNoMessage reports whether err means "the source was empty this read" —
+// either the explicit sentinel or a bare receive/poll timeout. The AMQP
+// backends (Artemis, RabbitMQ) surface an empty queue as the raw
+// context.DeadlineExceeded from their own per-call wait deadline rather than
+// ErrNoMessageAvailable (unlike their Browse/peek-cursor path, which already
+// maps it); without this, the sidebar showed a confusing
+// "✗ context deadline exceeded" instead of "no message available".
+func isNoMessage(err error) bool {
+	return errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded)
+}
+
 // cycleSort advances the sort mode for the focused pane.
 func (m *aiTUIModel) cycleSort() {
 	wi := int(m.focus) - 1
@@ -1445,6 +1456,10 @@ func (m *aiTUIModel) toggleInputMode() {
 		applyPromptFunc(&m.input, "ask> ")
 		m.input.Placeholder = "Ask anything..."
 	}
+	// Re-style the prompt label to match the new mode's accent (petrol for
+	// ask>, blue for xmc>) — same visual cue as the title bar/rules/sidebar
+	// header, so the active mode is unmistakable everywhere at once.
+	m.setPromptTheme(m.theme())
 	// Re-layout: prompt width may have changed (e.g. "ask> " vs "awsmc> ").
 	// updateInputHeight recomputes inputLines for the new prompt width, then calls recalcLayout.
 	m.updateInputHeight()
