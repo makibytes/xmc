@@ -16,6 +16,8 @@ type ConnArguments struct {
 	Password     string
 	QueueManager string
 	Channel      string
+	ModelQueue   string // model queue for temporary reply queues (request command)
+	DynamicQueue string // dynamic queue name pattern for temporary reply queues, e.g. "XMC.REPLY.*"
 }
 
 // Connect establishes a connection to IBM MQ

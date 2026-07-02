@@ -7,30 +7,34 @@ import (
 	"time"
 
 	pulsar "github.com/apache/pulsar-client-go/pulsar"
+	"github.com/apache/pulsar-client-go/pulsar/auth"
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
-// ConnArguments holds parameters for establishing a Pulsar connection.
-type ConnArguments struct {
-	Server   string
-	User     string
-	Password string
-	TLS      TLSConfig
-}
-
-// TLSConfig is an alias for the shared TLS configuration.
-type TLSConfig = tlsutil.TLSConfig
+type ConnArguments = backends.CommonConnArgs
 
 // Connect creates and returns a Pulsar client.
 func Connect(args ConnArguments) (pulsar.Client, error) {
+	if args.User != "" && args.Token != "" {
+		return nil, fmt.Errorf("use --user/--password for password auth or --token for token auth, not both")
+	}
+
 	opts := pulsar.ClientOptions{
 		URL:               args.Server,
 		OperationTimeout:  30 * time.Second,
 		ConnectionTimeout: 30 * time.Second,
 	}
 
-	if args.User != "" {
-		opts.Authentication = pulsar.NewAuthenticationToken(args.Password)
+	switch {
+	case args.Token != "":
+		opts.Authentication = pulsar.NewAuthenticationToken(args.Token)
+	case args.User != "":
+		provider, err := auth.NewAuthenticationBasic(args.User, args.Password)
+		if err != nil {
+			return nil, fmt.Errorf("creating basic auth: %w", err)
+		}
+		opts.Authentication = provider
 	}
 
 	if args.TLS.Enabled || args.TLS.CACert != "" || args.TLS.ClientCert != "" {
@@ -41,6 +45,9 @@ func Connect(args ConnArguments) (pulsar.Client, error) {
 		opts.TLSConfig = tlsCfg
 		opts.TLSAllowInsecureConnection = args.TLS.Insecure
 		if args.TLS.ClientCert != "" {
+			if args.User != "" || args.Token != "" {
+				return nil, fmt.Errorf("TLS client certificate auth cannot be combined with --user/--password or --token")
+			}
 			opts.Authentication = pulsar.NewAuthenticationTLS(args.TLS.ClientCert, args.TLS.ClientKey)
 		}
 	}

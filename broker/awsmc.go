@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/makibytes/xmc/broker/backends"
 	awspkg "github.com/makibytes/xmc/broker/awssqs"
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/cmd"
 	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
@@ -23,10 +23,11 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "awsmc",
-		Short:     "AWS SQS/SNS Messaging Client",
-		Long:      "Command-line interface for AWS SQS (queues) and SNS (topics)",
-		AIContext: AIDoc("aws"),
+		Use:              "awsmc",
+		Short:            "AWS SQS/SNS Messaging Client",
+		Long:             "Command-line interface for AWS SQS (queues) and SNS (topics)",
+		AIContext:        AIDoc("aws"),
+		UnsupportedFlags: []string{"ttl", "priority", "persistent", "selector"},
 		ProduceFlags: func(c *cobra.Command) {
 			c.Flags().Bool("fifo", false, "Send to a FIFO queue")
 			c.Flags().String("message-group-id", "", "Message group ID for FIFO queues")

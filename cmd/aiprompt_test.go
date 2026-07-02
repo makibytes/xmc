@@ -347,6 +347,32 @@ func TestExtractCommandWithVerbs_TwoWordProse(t *testing.T) {
 	}
 }
 
+func TestExtractCommandWithVerbs_StrayCommentPassesThroughUnrecognized(t *testing.T) {
+	// A "#" line that is NOT "# ask:"/"# cannot:" (e.g. the model inventing its
+	// own confirmation question) has no verb anywhere in the response, so it
+	// should come back unchanged — the caller (handleAIDone) is responsible
+	// for refusing to propose/execute anything starting with an unrecognized "#".
+	verbs := buildVerbSet(testVerbRoot())
+	input := "# This will permanently delete 5 queues. Proceed? (yes/no)"
+	got := extractCommandWithVerbs(input, verbs)
+	if got != input {
+		t.Errorf("got %q, want unchanged %q", got, input)
+	}
+}
+
+func TestExtractCommandWithVerbs_StrayCommentThenRealCommand(t *testing.T) {
+	// If the model prefixes a real command with a stray explanatory comment,
+	// the actual command on a later line must still be found — a non-canonical
+	// "#" prefix must not short-circuit the prose scan the way "# ask:"/
+	// "# cannot:" intentionally do.
+	verbs := buildVerbSet(testVerbRoot())
+	input := "# This deletes the queue\nmanage delete-queue orders"
+	got := extractCommandWithVerbs(input, verbs)
+	if got != "manage delete-queue orders" {
+		t.Errorf("got %q, want 'manage delete-queue orders'", got)
+	}
+}
+
 func TestExtractCommandWithVerbs_NilVerbSet(t *testing.T) {
 	// With a nil verb set, falls back to extractCommand behaviour.
 	got := extractCommandWithVerbs("receive q -n 5", nil)

@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"context"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -26,10 +27,11 @@ func GetRootCommand() *cobra.Command {
 	var stream string
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "nmc",
-		Short:     "NATS Messaging Client",
-		Long:      "Command-line interface for NATS messaging",
-		AIContext: AIDoc("nats"),
+		Use:              "nmc",
+		Short:            "NATS Messaging Client",
+		Long:             "Command-line interface for NATS messaging",
+		AIContext:        AIDoc("nats"),
+		UnsupportedFlags: []string{"ttl", "priority", "persistent", "selector"},
 		ConsumeFlags: func(c *cobra.Command) {
 			c.Flags().String("stream", "", "JetStream stream name override (default: auto-derived from queue name)")
 		},
@@ -61,11 +63,7 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("NMC_USER"), "Username for authentication")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("NMC_PASSWORD"), "Password for authentication")
 			c.PersistentFlags().StringVar(&stream, "stream", "", "Default JetStream stream name (applied when --stream on verb is not set)")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Queue: func() (backends.QueueBackend, error) { return natspkg.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return natspkg.NewTopicAdapter(connArgs) },
@@ -89,6 +87,8 @@ func GetRootCommand() *cobra.Command {
 				Run: func(queue string) error { return natspkg.CreateStream(connArgs, queue, retention, maxMsgs, subjects) },
 			},
 			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return natspkg.DeleteStream(connArgs, queue) }},
+			Purge:       func(queue string) (int64, error) { return natspkg.PurgeStream(connArgs, queue) },
+			Stats:       func(queue string) (*backends.QueueStats, error) { return natspkg.GetStreamStats(connArgs, queue) },
 		},
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{
@@ -100,6 +100,19 @@ func GetRootCommand() *cobra.Command {
 				},
 				NewTopic: func() (backends.TopicBackend, error) {
 					return natspkg.NewTopicAdapter(connArgs)
+				},
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
+					return natspkg.PurgeStream(connArgs, queue)
+				},
+				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
+					s, err := natspkg.GetStreamStats(connArgs, queue)
+					if err != nil {
+						return nil, err
+					}
+					return &mcp.QueueStats{
+						Name: s.Name, MessageCount: s.MessageCount,
+						ConsumerCount: int64(s.ConsumerCount), EnqueueCount: s.EnqueueCount,
+					}, nil
 				},
 			}),
 		},

@@ -195,8 +195,9 @@ Never use "body", "payload", or "message" — the exact field names are:
 - Use ONLY the exact flags listed below — do not invent flags
 - Destination names and address formats are broker-specific — see broker docs below
 - When broker objects are listed below, use those exact names — do not guess
-- Queue commands: send, receive, peek, request, reply, move, forward (point-to-point)
+- Queue commands: send, receive, peek, request, reply, move (point-to-point)
 - Topic commands: publish, subscribe (pub/sub fan-out)
+- Cross-topology relays: forward, bridge — default to a queue on both ends; when this broker also supports topics, forward's --from-topic/--to-topic and bridge's --topic select a topic endpoint instead (see the flag list below for exact availability)
 
 ## Destructive operations
 
@@ -204,6 +205,8 @@ ONLY these commands are destructive (require explicit user confirmation):
   manage delete-queue, manage delete-topic, manage delete-exchange, manage unbind-queue, manage purge
 
 All other commands — including receive, peek, move, forward, subscribe (even with -n 0 to drain a queue) — are NON-DESTRUCTIVE read or relay operations. Do NOT warn about or ask confirmation for these.
+
+The xmc shell itself always shows the user a confirmation prompt before running any destructive command — you must NOT ask for confirmation yourself, and must NOT restate or summarize what a command will do. Just output the command(s); the app handles confirmation. For a request that spans multiple objects (e.g. "delete all X"), chain every command on one line with ';' — do not ask which ones, or emit only one and stop, unless the target set is genuinely ambiguous (see below).
 
 Available commands and flags:
 
@@ -214,6 +217,7 @@ Available commands and flags:
 - Output ONLY the command. Nothing else.
 - If impossible: # cannot: <brief reason>
 - If ambiguous: # ask: <clarifying question>
+- No other "#" comment, confirmation question, or explanation is allowed — "# cannot:" and "# ask:" are the only two.
 `, caps, brokerSection, connectionSection, topologySection, aliasesSection)
 }
 
@@ -306,8 +310,11 @@ func extractCommandWithVerbs(response string, verbs map[string]bool) string {
 	if cmd == "" {
 		return cmd
 	}
-	// Already a comment or a known verb — return as-is.
-	if strings.HasPrefix(cmd, "#") {
+	// A canonical "# ask:"/"# cannot:" reply — return as-is without scanning
+	// for a verb line. Any other "#"-led text (e.g. a stray explanatory
+	// comment) falls through to the prose scan below, since it may be
+	// followed by a real command on a later line.
+	if strings.HasPrefix(cmd, "# ask:") || strings.HasPrefix(cmd, "# cannot:") {
 		return cmd
 	}
 	first := strings.Fields(cmd)[0]

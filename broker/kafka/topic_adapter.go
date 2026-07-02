@@ -161,6 +161,10 @@ func convertKafkaToBackendMessage(msg *kafka.Message, withMetadata bool) *backen
 	extract(backends.PropCorrelationID, &result.CorrelationID)
 	extract(backends.PropMessageID, &result.MessageID)
 	extract(backends.PropReplyTo, &result.ReplyTo)
+	// propTTL is an xmc-internal transport header (set by Publish when --ttl is
+	// given), not application data — strip it so it doesn't leak into
+	// Properties on receive/subscribe.
+	delete(result.Properties, propTTL)
 
 	if withMetadata {
 		result.InternalMetadata["Topic"] = msg.Topic

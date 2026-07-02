@@ -40,11 +40,7 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("RMC_USER"), "Username for SASL PLAIN login")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("RMC_PASSWORD"), "Password for SASL PLAIN login")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Queue: func() (backends.QueueBackend, error) { return rabbitmq.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return rabbitmq.NewTopicAdapter(connArgs) },
@@ -109,7 +105,9 @@ func GetRootCommand() *cobra.Command {
 				SetupFlags: func(c *cobra.Command) {
 					c.Flags().StringVar(&routingKey, "routing-key", "#", "Routing key for the binding to remove")
 				},
-				Run: func(queue, exchange string) error { return rabbitmq.UnbindQueue(mgmtArgs(), queue, exchange, routingKey) },
+				Run: func(queue, exchange string) error {
+					return rabbitmq.UnbindQueue(mgmtArgs(), queue, exchange, routingKey)
+				},
 			},
 		},
 		Extra: []*cobra.Command{

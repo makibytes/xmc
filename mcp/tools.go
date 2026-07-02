@@ -37,6 +37,13 @@ type QueueStats struct {
 	DequeueCount  int64  `json:"dequeueCount"`
 }
 
+// TopicInfo is the neutral result type for topic listings (e.g. Kafka topics
+// with partition counts).
+type TopicInfo struct {
+	Name       string `json:"name"`
+	Partitions int64  `json:"partitions,omitempty"`
+}
+
 // Deps is everything a broker wires in to build its MCP server. Connection
 // credentials are captured in these closures, so they never appear as tool
 // parameters and never enter the model's context. Management hooks are
@@ -46,12 +53,13 @@ type Deps struct {
 	ServerVersion string
 	Target        string // broker URL, surfaced in descriptions for context
 
-	NewQueue QueueFactory
-	NewTopic TopicFactory // optional, reserved
+	NewQueue QueueFactory // optional on topic-only brokers (e.g. Kafka)
+	NewTopic TopicFactory // optional on queue-only brokers (e.g. IBM MQ)
 
 	ListQueues func(ctx context.Context) ([]QueueInfo, error)
 	PurgeQueue func(ctx context.Context, queue string) (int64, error)
 	QueueStats func(ctx context.Context, queue string) (*QueueStats, error)
+	ListTopics func(ctx context.Context) ([]TopicInfo, error)
 }
 
 // NewServerFromDeps builds a Server with the standard messaging tool set plus
@@ -59,10 +67,16 @@ type Deps struct {
 func NewServerFromDeps(d Deps) *Server {
 	s := NewServer(orDefault(d.ServerName, "xmc"), orDefault(d.ServerVersion, "dev"))
 
-	registerSend(s, d)
-	registerRequest(s, d)
-	registerPeek(s, d)
-	registerReceive(s, d)
+	if d.NewQueue != nil {
+		registerSend(s, d)
+		registerRequest(s, d)
+		registerPeek(s, d)
+		registerReceive(s, d)
+	}
+	if d.NewTopic != nil {
+		registerPublish(s, d)
+		registerConsume(s, d)
+	}
 	registerPing(s, d)
 
 	if d.ListQueues != nil {
@@ -73,6 +87,9 @@ func NewServerFromDeps(d Deps) *Server {
 	}
 	if d.PurgeQueue != nil {
 		registerPurgeQueue(s, d)
+	}
+	if d.ListTopics != nil {
+		registerListTopics(s, d)
 	}
 	return s
 }
@@ -388,6 +405,165 @@ func registerReceive(s *Server, d Deps) {
 	})
 }
 
+// ---- publish / consume (topics) ---------------------------------------------
+
+// withTopic opens a topic connection, runs fn, and always closes.
+func withTopic(d Deps, fn func(backends.TopicBackend) (*ToolResult, error)) (*ToolResult, error) {
+	t, err := d.NewTopic()
+	if err != nil {
+		return nil, fmt.Errorf("could not connect to broker %s: %v", d.Target, err)
+	}
+	defer t.Close()
+	return fn(t)
+}
+
+type publishArgs struct {
+	Topic         string         `json:"topic"`
+	Body          string         `json:"body"`
+	Properties    map[string]any `json:"properties"`
+	ContentType   string         `json:"content_type"`
+	CorrelationID string         `json:"correlation_id"`
+	MessageID     string         `json:"message_id"`
+	Key           string         `json:"key"`
+	Count         *int           `json:"count"`
+}
+
+func registerPublish(s *Server, d Deps) {
+	s.AddTool(&Tool{
+		Name: "publish",
+		Description: "Publish a message to a topic (pub/sub fan-out; every subscriber receives it). " +
+			"Use 'send' for point-to-point queue delivery where available.",
+		InputSchema: object(map[string]any{
+			"topic":          stringProp("Target topic name."),
+			"body":           stringProp("Message payload as text."),
+			"properties":     mapProp("Optional application properties (string keys to values)."),
+			"content_type":   stringProp("MIME type of the body (default \"text/plain\")."),
+			"correlation_id": stringProp("Optional correlation ID."),
+			"message_id":     stringProp("Optional message ID."),
+			"key":            stringProp("Optional message key for partitioning (Kafka)."),
+			"count":          intProp("Number of times to publish the message (default 1)."),
+		}, "topic", "body"),
+		Annotations: map[string]any{
+			"title":           "Publish message",
+			"readOnlyHint":    false,
+			"destructiveHint": false,
+			"idempotentHint":  false,
+			"openWorldHint":   true,
+		},
+		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
+			var a publishArgs
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, fmt.Errorf("invalid arguments: %v", err)
+			}
+			if a.Topic == "" {
+				return nil, errors.New("topic is required")
+			}
+			count := 1
+			if a.Count != nil {
+				count = *a.Count
+			}
+			if count < 1 {
+				return nil, errors.New("count must be at least 1")
+			}
+
+			return withTopic(d, func(t backends.TopicBackend) (*ToolResult, error) {
+				opts := backends.PublishOptions{
+					Topic:         a.Topic,
+					Message:       []byte(a.Body),
+					Properties:    a.Properties,
+					MessageID:     a.MessageID,
+					CorrelationID: a.CorrelationID,
+					ContentType:   orDefault(a.ContentType, "text/plain"),
+					Key:           a.Key,
+				}
+				for i := 0; i < count; i++ {
+					if err := t.Publish(ctx, opts); err != nil {
+						return nil, fmt.Errorf("publish failed after %d/%d messages: %v", i, count, err)
+					}
+				}
+				return jsonResult(map[string]any{"published": count, "topic": a.Topic})
+			})
+		},
+	})
+}
+
+type consumeArgs struct {
+	Topic          string   `json:"topic"`
+	Group          string   `json:"group"`
+	Count          *int     `json:"count"`
+	TimeoutSeconds *float64 `json:"timeout_seconds"`
+}
+
+func registerConsume(s *Server, d Deps) {
+	s.AddTool(&Tool{
+		Name: "consume",
+		Description: "Consume messages from a topic subscription. Reads advance the consumer group's " +
+			"position, so repeated calls with the same group see new messages only.",
+		InputSchema: object(map[string]any{
+			"topic":           stringProp("Topic to consume from."),
+			"group":           stringProp("Consumer group ID (default \"xmc-consumer-group\")."),
+			"count":           intProp("Maximum number of messages to consume (default 1)."),
+			"timeout_seconds": numberProp("How long to wait for a message before returning, in seconds (default 2)."),
+		}, "topic"),
+		Annotations: map[string]any{
+			"title":         "Consume topic messages",
+			"readOnlyHint":  false,
+			"openWorldHint": true,
+		},
+		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
+			var a consumeArgs
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, fmt.Errorf("invalid arguments: %v", err)
+			}
+			if a.Topic == "" {
+				return nil, errors.New("topic is required")
+			}
+			count := 1
+			if a.Count != nil {
+				count = *a.Count
+			}
+			if count < 1 {
+				return nil, errors.New("count must be at least 1")
+			}
+			timeout := float32(2)
+			if a.TimeoutSeconds != nil {
+				timeout = float32(*a.TimeoutSeconds)
+			}
+
+			callCtx, cancel := context.WithTimeout(ctx, time.Duration((timeout*float32(count))+5)*time.Second)
+			defer cancel()
+
+			return withTopic(d, func(t backends.TopicBackend) (*ToolResult, error) {
+				opts := backends.SubscribeOptions{
+					Topic:     a.Topic,
+					GroupID:   orDefault(a.Group, "xmc-consumer-group"),
+					Timeout:   timeout,
+					Verbosity: backends.VerbosityNormal,
+				}
+				messages := make([]messageJSON, 0, count)
+				for i := 0; i < count; i++ {
+					msg, err := t.Subscribe(callCtx, opts)
+					if err != nil {
+						if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
+							break
+						}
+						return nil, fmt.Errorf("consume failed after %d messages: %v", len(messages), err)
+					}
+					if msg == nil {
+						break
+					}
+					messages = append(messages, toMessageJSON(msg))
+				}
+				return jsonResult(map[string]any{
+					"topic":    a.Topic,
+					"count":    len(messages),
+					"messages": messages,
+				})
+			})
+		},
+	})
+}
+
 // ---- ping ------------------------------------------------------------------
 
 func registerPing(s *Server, d Deps) {
@@ -402,13 +578,21 @@ func registerPing(s *Server, d Deps) {
 			"openWorldHint": true,
 		},
 		Handler: func(ctx context.Context, _ json.RawMessage) (*ToolResult, error) {
+			// Probe via whichever adapter the broker has (topic-only brokers
+			// like Kafka have no queue factory).
+			connect := func() (interface{ Close() error }, error) {
+				if d.NewQueue != nil {
+					return d.NewQueue()
+				}
+				return d.NewTopic()
+			}
 			start := time.Now()
-			q, err := d.NewQueue()
+			conn, err := connect()
 			elapsed := time.Since(start)
 			if err != nil {
 				return nil, fmt.Errorf("broker %s unreachable: %v", d.Target, err)
 			}
-			_ = q.Close()
+			_ = conn.Close()
 			return jsonResult(map[string]any{
 				"ok":     true,
 				"target": d.Target,
@@ -436,6 +620,26 @@ func registerListQueues(s *Server, d Deps) {
 				return nil, fmt.Errorf("failed to list queues: %v", err)
 			}
 			return jsonResult(map[string]any{"count": len(queues), "queues": queues})
+		},
+	})
+}
+
+func registerListTopics(s *Server, d Deps) {
+	s.AddTool(&Tool{
+		Name:        "manage_list_topics",
+		Description: "List topics on the broker. Read-only.",
+		InputSchema: object(map[string]any{}),
+		Annotations: map[string]any{
+			"title":         "List topics",
+			"readOnlyHint":  true,
+			"openWorldHint": true,
+		},
+		Handler: func(ctx context.Context, _ json.RawMessage) (*ToolResult, error) {
+			topics, err := d.ListTopics(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list topics: %v", err)
+			}
+			return jsonResult(map[string]any{"count": len(topics), "topics": topics})
 		},
 	})
 }

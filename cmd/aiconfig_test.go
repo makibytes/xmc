@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -365,5 +366,67 @@ func TestAutoUpdateYAMLParsing(t *testing.T) {
 	}
 	if !cfg.AI.autoUpdateMessagesEnabled() {
 		t.Error("auto-update-messages should be enabled after YAML parse")
+	}
+}
+
+func TestParseMetadataFormat(t *testing.T) {
+	tests := []struct {
+		in   string
+		want metadataFormat
+	}{
+		{"", metadataFormatYAML},
+		{"yaml", metadataFormatYAML},
+		{"YAML", metadataFormatYAML},
+		{"json", metadataFormatJSON},
+		{"JSON", metadataFormatJSON},
+		{"unknown", metadataFormatYAML},
+	}
+	for _, tt := range tests {
+		if got := parseMetadataFormat(tt.in); got != tt.want {
+			t.Errorf("parseMetadataFormat(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestMetadataFormatYAMLParsing(t *testing.T) {
+	data := []byte(`ai:
+  metadata-format: "json"
+`)
+	var cfg xmcConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.AI.metadataFormat(); got != metadataFormatJSON {
+		t.Errorf("metadataFormat = %q, want %q", got, metadataFormatJSON)
+	}
+}
+
+func TestSaveMetadataFormat(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", dir)
+	}
+
+	if err := saveMetadataFormat(metadataFormatJSON); err != nil {
+		t.Fatalf("saveMetadataFormat(json): %v", err)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig after save: %v", err)
+	}
+	if got := cfg.AI.metadataFormat(); got != metadataFormatJSON {
+		t.Fatalf("metadata format after save = %q, want %q", got, metadataFormatJSON)
+	}
+
+	if err := saveMetadataFormat(metadataFormatYAML); err != nil {
+		t.Fatalf("saveMetadataFormat(yaml): %v", err)
+	}
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig after second save: %v", err)
+	}
+	if got := cfg.AI.metadataFormat(); got != metadataFormatYAML {
+		t.Fatalf("metadata format after second save = %q, want %q", got, metadataFormatYAML)
 	}
 }

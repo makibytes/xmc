@@ -26,24 +26,39 @@ const maxCapture = 2048
 // before giving up and returning to idle.
 const maxFixAttempts = 2
 
+// aiSession is shared between the Bubble Tea UI goroutine and the background
+// goroutines spawned as tea.Cmd closures (AI requests, command execution).
+// Two different concurrency disciplines apply to its fields:
+//
+//   - history is UI-goroutine-owned: it is only ever read or mutated from
+//     aiTUIModel.Update() and its direct callees (handleKey*, handleAIDone,
+//     handleExecDone, ...). Background closures that need it (startAIRequest)
+//     must receive a snapshot captured synchronously on the UI goroutine
+//     before the closure is spawned, never read ai.history themselves — the
+//     user can mutate history via Esc-to-cancel while a request is in flight,
+//     and an unsynchronized read from the background goroutine would race
+//     with that write.
+//   - sysPrompt/topology are guarded by mu, since rebuildPrompt/refreshTopology
+//     can run from a background goroutine (topology refresh during an AI
+//     request or command execution).
 type aiSession struct {
 	mu                 sync.Mutex
 	client             aiClient
-	sysPrompt          string
+	sysPrompt          string // guarded by mu
 	brokerContext      string
-	topology           string
-	capabilities       string // cached buildCapabilities result (command tree is static)
+	topology           string          // guarded by mu
+	capabilities       string          // cached buildCapabilities result (command tree is static)
 	verbSet            map[string]bool // cached verb set for extractCommandWithVerbs
 	aliases            map[string]string
 	session            *shellSession
 	rootCmd            *cobra.Command
-	history            []aiMessage
+	history            []aiMessage // UI-goroutine-owned; see struct doc above
 	initOnce           sync.Once
 	initErr            error
 	providerName       string
 	modelName          string
-	autoUpdateObjects  bool // refresh sidebar on create/delete/bind topology changes
-	autoUpdateMessages bool // refresh sidebar on send/publish/receive/purge message changes
+	autoUpdateObjects  bool          // refresh sidebar on create/delete/bind topology changes
+	autoUpdateMessages bool          // refresh sidebar on send/publish/receive/purge message changes
 	refreshPeriod      time.Duration // base periodic refresh interval (floor before adaptive scaling)
 	refreshEnabled     bool          // whether periodic sidebar refresh is active
 }
@@ -64,14 +79,18 @@ func (a *aiSession) init() error {
 		a.providerName = spec.name
 		a.modelName = spec.model
 		a.verbSet = buildVerbSet(a.rootCmd)
+		a.mu.Lock()
 		a.rebuildPrompt()
+		a.mu.Unlock()
 		log.Verbose("AI provider: %s, model: %s", spec.name, spec.model)
 	})
 	return a.initErr
 }
 
 // rebuildPrompt rebuilds the system prompt from the current state (capabilities,
-// broker docs, server URL, and cached topology).
+// broker docs, server URL, and cached topology). Callers must hold a.mu, since
+// it writes a.sysPrompt (rebuildPrompt itself does not lock, so it can be
+// called from within a section that already holds the lock, e.g. refreshTopology).
 func (a *aiSession) rebuildPrompt() {
 	if a.capabilities == "" {
 		a.capabilities = buildCapabilities(a.rootCmd)
@@ -114,12 +133,14 @@ func (a *aiSession) refreshTopology() {
 }
 
 // resetHistory clears the conversation history and refreshes topology.
+// The caller (the /reset slash command) is responsible for notifying the
+// user via the transcript — this must not write to stderr, since the AI TUI
+// owns the terminal's alternate screen for the duration of the session.
 func (a *aiSession) resetHistory() {
 	a.mu.Lock()
 	a.history = nil
 	a.mu.Unlock()
 	a.refreshTopology()
-	fmt.Fprintln(os.Stderr, "AI conversation reset")
 }
 
 // trimHistory keeps the last maxLen messages, preserving conversation order.
@@ -130,9 +151,22 @@ func trimHistory(history *[]aiMessage, maxLen int) {
 		return
 	}
 	*history = (*history)[len(*history)-maxLen:]
-	for len(*history) > 0 && (*history)[0].Role != "user" {
-		*history = (*history)[1:]
+	*history = leadingUserHistory(*history)
+}
+
+// leadingUserHistory drops any leading non-"user" messages so the returned
+// slice always starts with a "user" turn. Anthropic and Gemini both reject
+// requests whose first message has a different role; that role mismatch can
+// occur even with a short history — e.g. a cmd-mode command run before the
+// first AI prompt appends an "assistant" message first (see startExecution /
+// startBackgroundProcess), and trimHistory alone only fixes this once the
+// history grows past maxHistory. Callers should apply this to the slice sent
+// to the AI client, not necessarily to the stored ai.history.
+func leadingUserHistory(history []aiMessage) []aiMessage {
+	for len(history) > 0 && history[0].Role != "user" {
+		history = history[1:]
 	}
+	return history
 }
 
 // buildFeedback formats the execution result as a history message so the AI
@@ -166,33 +200,6 @@ var destructivePrefixes = []string{
 	"manage delete-exchange",
 	"manage unbind-queue",
 	"manage purge",
-}
-
-// drainVerbs lists verbs that drain when -n 0 / --count 0 is specified.
-var drainVerbs = []string{"receive", "move", "forward", "subscribe"}
-
-// isDrainCommand returns true if the command uses -n 0 or --count 0, which
-// causes receive/move/forward/subscribe to drain all messages from the source.
-func isDrainCommand(command string) bool {
-	lower := strings.ToLower(strings.TrimSpace(command))
-	var matchesVerb bool
-	for _, v := range drainVerbs {
-		if strings.HasPrefix(lower, v+" ") || lower == v {
-			matchesVerb = true
-			break
-		}
-	}
-	if !matchesVerb {
-		return false
-	}
-	// Look for -n 0 or --count 0 anywhere in the command.
-	fields := strings.Fields(lower)
-	for i, f := range fields {
-		if (f == "-n" || f == "--count") && i+1 < len(fields) && fields[i+1] == "0" {
-			return true
-		}
-	}
-	return false
 }
 
 // objectPrefixes lists commands that create, delete, or rebind broker entities
@@ -266,6 +273,9 @@ func anyCommand(line string, predicate func(string) bool) bool {
 }
 
 // cappedBuffer is a bytes.Buffer that only keeps the last `max` bytes.
+// max <= 0 (including the zero value) means unbounded — Write/String never
+// trim. Callers that need a cap must set max explicitly; this guards against
+// the zero-value footgun of silently discarding all written output.
 type cappedBuffer struct {
 	buf bytes.Buffer
 	max int
@@ -274,7 +284,7 @@ type cappedBuffer struct {
 func (c *cappedBuffer) Write(p []byte) (int, error) {
 	n := len(p)
 	c.buf.Write(p)
-	if c.buf.Len() > 2*c.max {
+	if c.max > 0 && c.buf.Len() > 2*c.max {
 		b := c.buf.Bytes()
 		c.buf.Reset()
 		c.buf.Write(b[len(b)-c.max:])
@@ -284,9 +294,8 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 
 func (c *cappedBuffer) String() string {
 	b := c.buf.Bytes()
-	if len(b) > c.max {
+	if c.max > 0 && len(b) > c.max {
 		return string(b[len(b)-c.max:])
 	}
 	return c.buf.String()
 }
-

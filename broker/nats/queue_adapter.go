@@ -16,10 +16,10 @@ import (
 
 // QueueAdapter adapts NATS JetStream to the QueueBackend interface.
 type QueueAdapter struct {
-	nc        *natsclient.Conn
-	js        natsclient.JetStreamContext
-	consumers map[string]*natsclient.Subscription // cached pull subscribers, keyed by queue name
-	ensured   map[string]struct{}                 // stream names already confirmed this process
+	nc              *natsclient.Conn
+	js              natsclient.JetStreamContext
+	consumers       map[string]*natsclient.Subscription // cached pull subscribers, keyed by queue name
+	ensuredSubjects map[string]string                   // stream name -> effective subject, confirmed this process
 }
 
 // NewQueueAdapter creates a new NATS JetStream queue adapter.
@@ -30,22 +30,21 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	}
 
 	return &QueueAdapter{
-		nc:        nc,
-		js:        js,
-		consumers: make(map[string]*natsclient.Subscription),
-		ensured:   make(map[string]struct{}),
+		nc:              nc,
+		js:              js,
+		consumers:       make(map[string]*natsclient.Subscription),
+		ensuredSubjects: make(map[string]string),
 	}, nil
 }
 
 // Send implements backends.QueueBackend.
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
-	subject := queueSubject(opts.Queue)
-
 	sn := streamName(opts.Queue)
 	if opts.Extra != nil && opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]
 	}
-	if err := a.ensureStreamWithName(sn, subject); err != nil {
+	subject, err := a.ensureStreamWithName(sn, queueSubject(opts.Queue))
+	if err != nil {
 		return err
 	}
 
@@ -69,7 +68,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 		msg.Header.Set(k, v)
 	}
 
-	_, err := a.js.PublishMsg(msg)
+	_, err = a.js.PublishMsg(msg)
 	return err
 }
 
@@ -79,11 +78,12 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	if opts.Extra != nil && opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]
 	}
-	if err := a.ensureStreamWithName(sn, queueSubject(opts.Queue)); err != nil {
+	subject, err := a.ensureStreamWithName(sn, queueSubject(opts.Queue))
+	if err != nil {
 		return nil, err
 	}
 
-	sub, err := a.getOrCreateConsumer(opts.Queue, sn)
+	sub, err := a.getOrCreateConsumer(opts.Queue, sn, subject)
 	if err != nil {
 		return nil, err
 	}
@@ -118,13 +118,16 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 }
 
 // getOrCreateConsumer returns a cached pull subscriber for the given queue,
-// creating one if it doesn't exist.
-func (a *QueueAdapter) getOrCreateConsumer(queue, sn string) (*natsclient.Subscription, error) {
+// creating one if it doesn't exist. subject is the stream's actual effective
+// subject (from ensureStreamWithName), not a fresh queueSubject(queue)
+// recomputation — the latter would mismatch when queue is an already-resolved
+// stream name (e.g. from the AI shell sidebar).
+func (a *QueueAdapter) getOrCreateConsumer(queue, sn, subject string) (*natsclient.Subscription, error) {
 	if sub, ok := a.consumers[queue]; ok {
 		return sub, nil
 	}
 
-	sub, err := a.js.PullSubscribe(queueSubject(queue), "xmc-consumer",
+	sub, err := a.js.PullSubscribe(subject, "xmc-consumer",
 		natsclient.BindStream(sn),
 	)
 	if err != nil {
@@ -146,24 +149,33 @@ func (a *QueueAdapter) Close() error {
 	return nil
 }
 
-func (a *QueueAdapter) ensureStreamWithName(name, subject string) error {
-	if _, ok := a.ensured[name]; ok {
-		return nil
+// ensureStreamWithName makes sure a WorkQueue stream named name exists and
+// routes subject, creating it if needed, and returns the subject actually in
+// effect. That is usually just subject, but when the stream already exists
+// and doesn't route it, its own first bound subject is returned instead: this
+// happens when name is an already-resolved stream name (e.g. relisted by the
+// AI shell sidebar) rather than a fresh call of streamName() on the original
+// bare queue name — the stream's exact-case subject cannot be recovered from
+// the uppercased stream name, so recomputing it would produce the wrong one.
+func (a *QueueAdapter) ensureStreamWithName(name, subject string) (string, error) {
+	if s, ok := a.ensuredSubjects[name]; ok {
+		return s, nil
 	}
 
 	info, err := a.js.StreamInfo(name)
 	if err == nil {
 		if info.Config.Retention != natsclient.WorkQueuePolicy {
-			return fmt.Errorf("stream %s has retention %v, expected WorkQueuePolicy", name, info.Config.Retention)
+			return "", fmt.Errorf("stream %s has retention %v, expected WorkQueuePolicy", name, info.Config.Retention)
 		}
-		if !slices.Contains(info.Config.Subjects, subject) {
-			return fmt.Errorf("stream %s does not route subject %s (has %v)", name, subject, info.Config.Subjects)
+		effective := subject
+		if !slices.Contains(info.Config.Subjects, subject) && len(info.Config.Subjects) > 0 {
+			effective = info.Config.Subjects[0]
 		}
-		a.ensured[name] = struct{}{}
-		return nil
+		a.ensuredSubjects[name] = effective
+		return effective, nil
 	}
 	if !errors.Is(err, natsclient.ErrStreamNotFound) {
-		return fmt.Errorf("fetching stream %s: %w", name, err)
+		return "", fmt.Errorf("fetching stream %s: %w", name, err)
 	}
 
 	_, err = a.js.AddStream(&natsclient.StreamConfig{
@@ -172,15 +184,33 @@ func (a *QueueAdapter) ensureStreamWithName(name, subject string) error {
 		Retention: natsclient.WorkQueuePolicy,
 	})
 	if err != nil {
-		return fmt.Errorf("creating stream %s: %w", name, err)
+		return "", fmt.Errorf("creating stream %s: %w", name, err)
 	}
-	a.ensured[name] = struct{}{}
-	return nil
+	a.ensuredSubjects[name] = subject
+	return subject, nil
 }
 
-// streamName returns the JetStream stream name for a queue.
+// streamName returns the JetStream stream name for a queue. JetStream stream
+// names must not contain dots, spaces, wildcards or path separators, so every
+// character outside [A-Za-z0-9_] maps to '_' (dashes included, preserving the
+// historical naming for dash-separated queues).
 func streamName(queue string) string {
-	return fmt.Sprintf("XMC_Q_%s", strings.ToUpper(strings.ReplaceAll(queue, "-", "_")))
+	// Idempotent: callers that already hold a resolved stream name (e.g. the
+	// AI shell sidebar, which lists and re-submits JetStream's own
+	// info.Config.Name) must not have it re-prefixed into a nonexistent
+	// "XMC_Q_XMC_Q_..." stream.
+	if strings.HasPrefix(queue, "XMC_Q_") {
+		return queue
+	}
+	mapped := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, queue)
+	return "XMC_Q_" + strings.ToUpper(mapped)
 }
 
 // queueSubject returns the NATS subject for a queue.
@@ -192,11 +222,18 @@ func queueSubject(queue string) string {
 // extracting the four reserved metadata keys into the typed fields so that
 // request/reply and -F templating work consistently with other brokers.
 func natsToBackendMessage(msg *natsclient.Msg) *backends.Message {
+	return headersToBackendMessage(msg.Data, msg.Header)
+}
+
+// headersToBackendMessage builds a backends.Message from payload and headers;
+// shared by the live-delivery path (*nats.Msg) and the browse path
+// (*nats.RawStreamMsg), which carry the same header type but different shells.
+func headersToBackendMessage(data []byte, header natsclient.Header) *backends.Message {
 	result := &backends.Message{
-		Data:       msg.Data,
+		Data:       data,
 		Properties: make(map[string]any),
 	}
-	for k, vals := range msg.Header {
+	for k, vals := range header {
 		if len(vals) == 0 {
 			continue
 		}

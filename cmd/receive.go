@@ -40,10 +40,13 @@ func NewReceiveCommand(backend backends.QueueBackend, resolver TargetResolver, c
 
 	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
 	if hasExchRouting {
-		cmd.Use = "receive [--exchange <exchange> [--routing-key <key>] | --queue-name <queue>] [<to>]"
+		cmd.Use = "receive [--exchange <exchange> [--routing-key <key>] | --queue <queue>] [<to>]"
 		cmd.Flags().String("exchange", "", "Exchange to receive from")
 		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
-		cmd.Flags().String("queue-name", "", "Queue to receive from (AMQP 1.0 v2: /queues/<name>)")
+		// Long-form only: -q is --quiet on read commands. --queue-name is the
+		// deprecated spelling, kept working via aliasNormalize.
+		cmd.Flags().String("queue", "", "Queue to receive from (AMQP 1.0 v2: /queues/<name>)")
+		cmd.Flags().SetNormalizeFunc(aliasNormalize)
 		cmd.Args = cobra.MaximumNArgs(1)
 	} else {
 		cmd.Args = cobra.MinimumNArgs(1)
@@ -61,19 +64,13 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 	selector, _ := cmd.Flags().GetString("selector")
 	format, _ := cmd.Flags().GetString("format")
 	ndjson, _ := cmd.Flags().GetBool("ndjson")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
-	stats, _ := cmd.Flags().GetBool("stats")
 	omit, _ := cmd.Flags().GetInt("omit")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
 	}
-	follow := duration > 0 || forever || stats
-	// When streaming by time or --forever, treat as "drain all" unless the user
-	// explicitly set -n / --count.
-	if (duration > 0 || forever) && !cmd.Flags().Changed("count") {
+	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
 		count = 0
 	}
 
@@ -103,7 +100,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 		verbosity:  opts.Verbosity,
 		format:     format,
 		ndjson:     ndjson,
-		follow:     follow,
+		follow:     sf.Follow,
 		omit:       omit,
 		dataOut:    cmd.OutOrStdout(),
 		metaOut:    cmd.ErrOrStderr(),
@@ -130,7 +127,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 			switch {
 			case err == nil:
 				defer browser.Close()
-				return runConsume(browser.Next, cfg, duration, stats, parentCtx)
+				return runConsume(browser.Next, cfg, sf.Duration, sf.Stats, parentCtx)
 			case !errors.Is(err, backends.ErrBrowseUnsupported):
 				return err
 			// ErrBrowseUnsupported: fall through to the plain Receive loop below
@@ -140,7 +137,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 
 	return runConsume(func(ctx context.Context) (*backends.Message, error) {
 		return backend.Receive(ctx, opts)
-	}, cfg, duration, stats, parentCtx)
+	}, cfg, sf.Duration, sf.Stats, parentCtx)
 }
 
 // resolveConsumeTarget parses --exchange/--queue/<to> for receive/subscribe
@@ -154,17 +151,17 @@ func resolveConsumeTarget(cmd *cobra.Command, args []string, resolver TargetReso
 	}
 
 	exchange, _ := cmd.Flags().GetString("exchange")
-	queueName, _ := cmd.Flags().GetString("queue-name")
+	queueName, _ := cmd.Flags().GetString("queue")
 
 	if exchange != "" && queueName != "" {
-		return "", fmt.Errorf("--exchange and --queue-name are mutually exclusive")
+		return "", fmt.Errorf("--exchange and --queue are mutually exclusive")
 	}
 
 	var to string
 	switch {
 	case queueName != "":
 		if len(args) > 0 {
-			return "", fmt.Errorf("unexpected argument %q when --queue-name is specified", args[0])
+			return "", fmt.Errorf("unexpected argument %q when --queue is specified", args[0])
 		}
 	case exchange != "":
 		routingKey, _ := cmd.Flags().GetString("routing-key")
@@ -175,7 +172,7 @@ func resolveConsumeTarget(cmd *cobra.Command, args []string, resolver TargetReso
 		}
 	default:
 		if len(args) < 1 {
-			return "", fmt.Errorf("requires a destination argument, or use --exchange / --queue-name")
+			return "", fmt.Errorf("requires a destination argument, or use --exchange / --queue")
 		}
 		to = args[0]
 	}

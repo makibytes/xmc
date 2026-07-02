@@ -65,7 +65,7 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 		return fmt.Errorf("source and destination must differ")
 	}
 
-	ctx, stop := interruptContext()
+	ctx, stop := interruptContext(cmd.Context())
 	defer stop()
 
 	moved := 0

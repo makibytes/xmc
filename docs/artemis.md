@@ -16,10 +16,13 @@ Artemis has a two-level model (analogous to RabbitMQ exchanges/queues):
 
 When you want to pre-create topology explicitly:
 - `manage create-address <name>` — create a bare address (default `--routing-type ANYCAST`; pass `MULTICAST` or `ANYCAST,MULTICAST`)
-- `manage create-queue <name>` — create an address **and** an ANYCAST queue with the same name
+- `manage create-queue <name>` — create a queue; `--address <addr>` binds it to a different address (default: same name, auto-created), plus `--routing-type`, `--filter`, `--durable`, `--max-consumers`, `--purge-on-no-consumers`, `--exclusive`, `--last-value [--last-value-key]`, `--non-destructive`, `--ring-size`
+- `manage bind-queue <queue> <address>` — same as create-queue --address (a queue is bound at creation; no re-bind exists — delete and bind again to move it); flags `--routing-type`, `--filter`, `--durable`
 - `manage create-topic <name>` — create a MULTICAST address (no queue; subscribers auto-create queues)
 - `manage delete-address <name>` — delete an address and all its queues
 - `manage delete-queue <name>` — delete an ANYCAST queue (and auto-delete address if empty)
+- `manage update-queue <queue>` — change settings of an existing queue: `--filter` (`--filter ""` removes it), `--max-consumers`, `--purge-on-no-consumers`, `--exclusive`, `--non-destructive`, `--ring-size`
+- `manage enable-queue <queue>` / `manage disable-queue <queue>` — resume/stop message dispatch (disabled queues accumulate but do not deliver)
 
 ## Routing in send/publish
 
@@ -32,7 +35,7 @@ When you want to pre-create topology explicitly:
 
 ## Manage commands
 
-`list`, `purge <queue>`, `stats <queue>`, `create-queue <name>`, `delete-queue <name>`, `create-topic <name>`, `delete-topic <name>`, `create-address <name> [--routing-type ANYCAST|MULTICAST|ANYCAST,MULTICAST]`, `delete-address <name>`.
+`list`, `purge <queue>`, `stats <queue>`, `create-queue <name> [--address --routing-type --filter --durable --max-consumers --purge-on-no-consumers --exclusive --last-value --last-value-key --non-destructive --ring-size]`, `delete-queue <name>`, `update-queue <queue> [--filter --max-consumers --purge-on-no-consumers --exclusive --non-destructive --ring-size]`, `enable-queue <queue>`, `disable-queue <queue>`, `bind-queue <queue> <address> [--routing-type --filter --durable]`, `create-topic <name>`, `delete-topic <name>`, `create-address <name> [--routing-type ANYCAST|MULTICAST|ANYCAST,MULTICAST]`, `delete-address <name>`.
 
 Management uses the Jolokia REST API on port 8161 (derived from the AMQP host).
 

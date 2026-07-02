@@ -93,7 +93,7 @@ func TestForwardCommand_LongCommandFlag(t *testing.T) {
 		receiveMsgs: []*backends.Message{{Data: []byte("hello")}},
 		receiveErr:  context.Canceled,
 	}
-	cmd := NewForwardCommand(mock)
+	cmd := NewForwardCommand(mock, nil, true, false)
 	cmd.SetArgs([]string{"src", "dst", "--command", "tr a-z A-Z"})
 
 	captureStdout(t, func() {

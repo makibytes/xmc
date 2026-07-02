@@ -114,13 +114,15 @@ func (a *QueueAdapter) Close() error {
 // brokers.
 func waitForMessage(ctx context.Context, msgCh <-chan pahomqtt.Message, timeout float32, wait bool) (*backends.Message, error) {
 	dur := backends.TimeoutDuration(timeout, wait)
+	timer := time.NewTimer(dur)
+	defer timer.Stop()
 
 	select {
 	case msg := <-msgCh:
 		return convertMessage(msg), nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(dur):
+	case <-timer.C:
 		return nil, backends.ErrNoMessageAvailable
 	}
 }

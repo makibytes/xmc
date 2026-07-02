@@ -67,6 +67,7 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend, re
 			ContentType:   pf.contentType,
 			Priority:      pf.priority,
 			Persistent:    pf.persistent,
+			Key:           pf.key,
 			TTL:           pf.ttl,
 			Extra:         extra,
 		})
@@ -87,6 +88,12 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend, re
 			ContentType:   rec.ContentType,
 			Priority:      rec.Priority,
 			Persistent:    rec.Persistent,
+			Key:           pf.resolveKey(rec.Key),
+			// messageRecord has no TTL field (TTL is a remaining-lifetime value at
+			// receive time, not portable across a store-and-forward round trip —
+			// see cmd/ndjson.go). Apply the --ttl flag as a per-batch default so
+			// --ndjson sends at least respect an explicit --ttl like plain send does.
+			TTL: pf.ttl,
 		})
 	}
 

@@ -25,25 +25,21 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "pmc",
-		Short:     "Pulsar Messaging Client",
-		Long:      "Command-line interface for Apache Pulsar messaging",
-		AIContext: AIDoc("pulsar"),
+		Use:              "pmc",
+		Short:            "Pulsar Messaging Client",
+		Long:             "Command-line interface for Apache Pulsar messaging",
+		AIContext:        AIDoc("pulsar"),
+		UnsupportedFlags: []string{"priority", "persistent", "selector"},
 		ResolveTarget: func(t cmd.TargetSpec) (string, error) {
 			return pulsarpkg.ResolveTarget(t.IsTopic, t.To, tenant, namespace, nonPersistent)
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
-			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("PMC_USER"), "Username for authentication")
-			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("PMC_PASSWORD"), "Password for authentication")
+			backends.RegisterCommonFlags(c, &connArgs, "PMC_", defaultServer)
+			c.PersistentFlags().StringVar(&connArgs.Token, "token", os.Getenv("PMC_TOKEN"), "Authentication token (mutually exclusive with --user/--password)")
 			c.PersistentFlags().StringVar(&tenant, "tenant", "public", "Pulsar tenant")
 			c.PersistentFlags().StringVar(&namespace, "namespace", "default", "Pulsar namespace")
 			c.PersistentFlags().BoolVar(&nonPersistent, "non-persistent", false, "Use non-persistent topics")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Queue: func() (backends.QueueBackend, error) { return pulsarpkg.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return pulsarpkg.NewTopicAdapter(connArgs) },

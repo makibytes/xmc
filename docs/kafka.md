@@ -20,13 +20,14 @@ publish mytopic -K "user-42" "msg"    # -K sets the partition key
 subscribe orders -g processors -n 0
 ```
 
-## Topic forward
+## Topic forward / bridge
 
-Kafka supports topic-to-topic forwarding:
+Kafka supports topic-to-topic forwarding (same broker) and bridging (cross-broker relay to another xmc binary):
 
 ```
 forward source-topic dest-topic
 forward raw clean -x "jq '.status = \"done\"'"
+bridge orders --to 'rmc send orders-mirror'
 ```
 
 ## Manage commands

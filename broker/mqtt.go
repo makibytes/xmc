@@ -24,10 +24,11 @@ func GetRootCommand() *cobra.Command {
 	var group string
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "mmc",
-		Short:     "MQTT Messaging Client",
-		Long:      "Command-line interface for MQTT messaging",
-		AIContext: AIDoc("mqtt"),
+		Use:              "mmc",
+		Short:            "MQTT Messaging Client",
+		Long:             "Command-line interface for MQTT messaging",
+		AIContext:        AIDoc("mqtt"),
+		UnsupportedFlags: []string{"priority", "ttl", "selector", "property", "content-type", "correlation-id", "message-id", "reply-to"},
 		ProduceFlags: func(c *cobra.Command) {
 			c.Flags().Int("qos", 1, "QoS level (0, 1, or 2)")
 			c.Flags().Bool("retain", false, "Set retain flag on published messages")
@@ -58,12 +59,11 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("MMC_USER"), "Username")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("MMC_PASSWORD"), "Password")
 			c.PersistentFlags().StringVar(&connArgs.ClientID, "client-id", "", "MQTT client ID (auto-generated if empty)")
-			c.PersistentFlags().StringVar(&group, "group", "xmc", "Queue shared subscription group name")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			// Named --queue-group (not --group) to avoid clashing with the
+			// per-command -g/--group consumer-group flag on subscribe/forward/
+			// bridge, which has a different meaning and default.
+			c.PersistentFlags().StringVar(&group, "queue-group", "xmc", "Queue shared subscription group name")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Queue: func() (backends.QueueBackend, error) { return mqtt.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return mqtt.NewTopicAdapter(connArgs) },

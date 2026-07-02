@@ -22,7 +22,7 @@ func TestOmitFlag_PeekLargerQueue(t *testing.T) {
 		{Data: []byte("msg-5")},
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-n", "3", "-o", "2"})
 
 	var buf bytes.Buffer
@@ -56,7 +56,7 @@ func TestOmitFlag_PeekSmallerQueue(t *testing.T) {
 		{Data: []byte("msg-3")},
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-n", "3", "-o", "2"})
 
 	var buf bytes.Buffer
@@ -87,7 +87,7 @@ func TestOmitFlag_OmitExceedsAvailable(t *testing.T) {
 		{Data: []byte("msg-2")},
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-n", "5", "-o", "5"})
 	cmd.SilenceUsage = true // prevent cobra printing help text on error
 
@@ -112,7 +112,7 @@ func TestOmitFlag_ZeroIsNoop(t *testing.T) {
 		{Data: []byte("msg-2")},
 	}
 	mock := &mockQueueBackend{receiveMsgs: msgs}
-	cmd := NewPeekCommand(mock)
+	cmd := NewPeekCommand(mock, nil, nil)
 	cmd.SetArgs([]string{"q", "-n", "2", "-o", "0"})
 
 	var buf bytes.Buffer

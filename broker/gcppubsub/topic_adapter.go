@@ -82,7 +82,11 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 			m.Nack()
 			return
 		}
-		m.Ack()
+		if opts.Acknowledge {
+			m.Ack()
+		} else {
+			m.Nack() // non-destructive: leave it for redelivery (peek)
+		}
 		msg = pubsubToBackendMessage(m)
 		cancel()
 	})
@@ -109,4 +113,3 @@ func (a *TopicAdapter) Close() error {
 	}
 	return nil
 }
-

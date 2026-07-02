@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
@@ -70,9 +72,46 @@ func runAI(cmd *cobra.Command, spec BrokerSpec) error {
 		server = f.Value.String()
 	}
 
+	// The TUI owns the terminal's alternate screen for the duration of the
+	// session. log.Verbose/log.Error normally write straight to stdout/stderr,
+	// which would scramble the alt-screen if anything logs mid-session (token
+	// counts, reconnect retries, background-process errors, etc.). Capture
+	// that output instead and flush it to stderr once the alt-screen closes.
+	var logBuf syncBuffer
+	restoreOut := log.SetOutput(&logBuf)
+	restoreErr := log.SetErrorOutput(&logBuf)
+
 	_, totalIn, totalOut, err := runAITUI(ai, session, rootCmd, baseName, server)
+
+	log.SetOutput(restoreOut)
+	log.SetErrorOutput(restoreErr)
+	if captured := logBuf.String(); captured != "" {
+		fmt.Fprint(os.Stderr, captured)
+	}
+
 	if totalIn > 0 || totalOut > 0 {
 		fmt.Fprintf(os.Stderr, "tokens: %s in, %s out\n", fmtTokens(totalIn), fmtTokens(totalOut))
 	}
 	return err
+}
+
+// syncBuffer is a concurrency-safe bytes.Buffer used to capture log output
+// while the AI TUI owns the terminal. Background goroutines (auto-reconnect,
+// background processes) may log concurrently with the UI goroutine, so a
+// plain bytes.Buffer is not safe here.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

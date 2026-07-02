@@ -37,14 +37,6 @@ func buildFields(data []byte, props map[string]any, messageID, correlationID, re
 	return fields
 }
 
-var reservedFields = map[string]struct{}{
-	fieldData:          {},
-	fieldMessageID:     {},
-	fieldCorrelationID: {},
-	fieldReplyTo:       {},
-	fieldContentType:   {},
-}
-
 func streamToMessage(id string, values map[string]any) *backends.Message {
 	msg := &backends.Message{
 		Properties:       make(map[string]any),

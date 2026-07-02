@@ -385,7 +385,111 @@ func TestReceiveCommand_JSONOutputAllFields(t *testing.T) {
 	if result["persistent"] != true {
 		t.Errorf("persistent = %v, want true", result["persistent"])
 	}
-	if result["metadata"] == nil {
-		t.Error("metadata should be present")
+	if _, ok := result["metadata"]; ok {
+		t.Error("metadata should not be present in canonical -J output")
+	}
+}
+
+func TestReceiveCommand_JSONOutput_PrunesEmptyValues(t *testing.T) {
+	msg := &backends.Message{
+		Data: []byte("keep"),
+		Properties: map[string]any{
+			"foo":   "bar",
+			"blank": "",
+			"nil":   "<nil>",
+		},
+		InternalMetadata: map[string]any{
+			"Header": "debug",
+		},
+	}
+	mock := &mockQueueBackend{receiveMsg: msg}
+	cmd := NewReceiveCommand(mock, nil, nil)
+	cmd.SetArgs([]string{"test-queue", "-J"})
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := cmd.Execute()
+	w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
+		t.Fatalf("failed to parse JSON output: %v\noutput: %s", err, buf.String())
+	}
+
+	props, ok := result["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties missing from JSON output: %v", result)
+	}
+	if props["foo"] != "bar" {
+		t.Fatalf("foo property missing: %v", props)
+	}
+	if _, ok := props["blank"]; ok {
+		t.Fatalf("blank property must be pruned: %v", props)
+	}
+	if _, ok := props["nil"]; ok {
+		t.Fatalf("nil-like property must be pruned: %v", props)
+	}
+	if _, ok := result["metadata"]; ok {
+		t.Fatalf("legacy metadata field must not be emitted: %v", result)
+	}
+	if _, ok := result["internalMetadata"]; ok {
+		t.Fatalf("internalMetadata must not be emitted by -J: %v", result)
+	}
+}
+
+// TestReceiveCommand_JSONOutput_VerboseIncludesInternalMetadata guards the
+// -v/-J parity fix: verbose text output has always shown InternalMetadata
+// (via writeKeyValueMap in displayMessage), but -J previously hard-coded it
+// off regardless of verbosity. -J must now match -v the same way it already
+// matches non-verbose text output.
+func TestReceiveCommand_JSONOutput_VerboseIncludesInternalMetadata(t *testing.T) {
+	msg := &backends.Message{
+		Data:             []byte("full"),
+		MessageID:        "m1",
+		InternalMetadata: map[string]any{"Partition": "3"},
+	}
+	mock := &mockQueueBackend{receiveMsg: msg}
+	cmd := NewReceiveCommand(mock, nil, nil)
+	cmd.SetArgs([]string{"test-queue", "-J"})
+
+	origVerbose := log.IsVerbose
+	log.IsVerbose = true
+	defer func() { log.IsVerbose = origVerbose }()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := cmd.Execute()
+	w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
+		t.Fatalf("failed to parse JSON output: %v\noutput: %s", err, buf.String())
+	}
+	internal, ok := result["internalMetadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("internalMetadata missing from verbose -J output: %v", result)
+	}
+	if internal["Partition"] != "3" {
+		t.Errorf("internalMetadata.Partition = %v, want %q", internal["Partition"], "3")
 	}
 }

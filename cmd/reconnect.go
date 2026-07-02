@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-
 // ReconnectOptions controls the auto-reconnect wrapper behaviour.
 type ReconnectOptions struct {
 	// MaxElapsed caps how long the wrapper will keep retrying before giving up.
@@ -75,7 +74,10 @@ func isConnectionError(err error) bool {
 	}
 
 	// Substring fallback for driver-wrapped connection errors that don't
-	// implement standard error interfaces.
+	// implement standard error interfaces. gRPC status errors are matched by
+	// string on purpose: importing google.golang.org/grpc in cmd/ would pull
+	// gRPC+protobuf into every broker binary just to classify errors that only
+	// the gRPC-based brokers (Google Pub/Sub) can produce.
 	msg := strings.ToLower(err.Error())
 	connectionSubstrings := []string{
 		"connection refused",
@@ -86,6 +88,15 @@ func isConnectionError(err error) bool {
 		"no such host",
 		"i/o timeout",
 		"unexpected eof",
+		// gRPC transport failures ("rpc error: code = Unavailable desc = ...").
+		// Unavailable is the canonical retryable transport code; other codes
+		// (NotFound, PermissionDenied, ...) are application errors.
+		"code = unavailable",
+		"transport is closing",
+		// NATS initial-connect / reconnect exhaustion.
+		"no servers available",
+		// Paho MQTT op on a dropped connection.
+		"not currently connected",
 	}
 	for _, sub := range connectionSubstrings {
 		if strings.Contains(msg, sub) {
@@ -96,23 +107,30 @@ func isConnectionError(err error) bool {
 	return false
 }
 
-// --- reconnecting queue adapter ---
+// --- generic reconnecting adapter ---
 
-// reconnectingQueue wraps a QueueAdapterFactory and transparently reconnects
-// on connection-loss errors.
-type reconnectingQueue struct {
+// Closer is satisfied by any adapter with a Close method.
+type Closer interface {
+	Close() error
+}
+
+// reconnectingAdapter provides shared reconnect logic for any adapter type.
+// The factory is called to create a fresh adapter on initial connect and on
+// reconnection. Embed this in a type-specific wrapper that adds the domain
+// methods (Send/Receive, Publish/Subscribe).
+type reconnectingAdapter[T Closer] struct {
 	mu      sync.Mutex
-	factory QueueAdapterFactory
+	factory func() (T, error)
 	opts    ReconnectOptions
-	adapter backends.QueueBackend
+	adapter T
 	closed  bool
 }
 
-func (r *reconnectingQueue) ensureConnected() error {
+func (r *reconnectingAdapter[T]) ensureConnected() error {
 	if r.closed {
 		return fmt.Errorf("adapter closed")
 	}
-	if r.adapter != nil {
+	if any(r.adapter) != nil {
 		return nil
 	}
 	a, err := r.factory()
@@ -123,10 +141,11 @@ func (r *reconnectingQueue) ensureConnected() error {
 	return nil
 }
 
-func (r *reconnectingQueue) reconnect() error {
-	if r.adapter != nil {
+func (r *reconnectingAdapter[T]) reconnect() error {
+	if any(r.adapter) != nil {
 		_ = r.adapter.Close()
-		r.adapter = nil
+		var zero T
+		r.adapter = zero
 	}
 	a, err := r.factory()
 	if err != nil {
@@ -134,6 +153,68 @@ func (r *reconnectingQueue) reconnect() error {
 	}
 	r.adapter = a
 	return nil
+}
+
+func (r *reconnectingAdapter[T]) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	if any(r.adapter) != nil {
+		err := r.adapter.Close()
+		var zero T
+		r.adapter = zero
+		return err
+	}
+	return nil
+}
+
+// retryOp reconnects and retries op with exponential backoff. The caller must
+// hold r.mu.
+func (r *reconnectingAdapter[T]) retryOp(ctx context.Context, desc string, op func() error) error {
+	b := newBackoffPolicy(r.opts)
+	var lastErr error
+
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if r.closed {
+			return fmt.Errorf("%s: adapter closed", desc)
+		}
+
+		wait := b.NextBackOff()
+		if wait == backoff.Stop {
+			return fmt.Errorf("reconnect exhausted for %s: %w", desc, lastErr)
+		}
+
+		log.Error("connection lost (%s), reconnecting in %s...\n", desc, wait.Round(time.Millisecond))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+
+		if err := r.reconnect(); err != nil {
+			lastErr = err
+			log.Error("reconnect failed: %s\n", err)
+			continue
+		}
+		log.Verbose("reconnected successfully (%s)", desc)
+
+		err := op()
+		if err == nil || !isConnectionError(err) {
+			return err
+		}
+		lastErr = err
+	}
+}
+
+// --- reconnecting queue adapter ---
+
+// reconnectingQueue wraps a QueueAdapterFactory and transparently reconnects
+// on connection-loss errors.
+type reconnectingQueue struct {
+	reconnectingAdapter[backends.QueueBackend]
 }
 
 func (r *reconnectingQueue) Send(ctx context.Context, opts backends.SendOptions) error {
@@ -182,16 +263,35 @@ func (r *reconnectingQueue) Receive(ctx context.Context, opts backends.ReceiveOp
 	return result, retryErr
 }
 
-func (r *reconnectingQueue) Close() error {
+// Request implements backends.RequestReplyBackend by dispatching through
+// backends.Request on the underlying adapter, so a broker's native
+// request/reply (Artemis selector matching, NATS private reply queue) is not
+// hidden by the wrapper in shell/AI mode; adapters without native support get
+// the broker-neutral default. Like Send, a retried request is re-sent, so
+// reconnect keeps at-least-once semantics.
+func (r *reconnectingQueue) Request(ctx context.Context, opts backends.RequestOptions) (*backends.Message, error) {
+	r.mu.Lock()
+	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
+	adapter := r.adapter
+	r.mu.Unlock()
+
+	msg, err := backends.Request(ctx, adapter, opts)
+	if err == nil || !isConnectionError(err) {
+		return msg, err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.closed = true
-	if r.adapter != nil {
-		err := r.adapter.Close()
-		r.adapter = nil
-		return err
-	}
-	return nil
+	var result *backends.Message
+	retryErr := r.retryOp(ctx, fmt.Sprintf("request to %s", opts.Address), func() error {
+		var innerErr error
+		result, innerErr = backends.Request(ctx, r.adapter, opts)
+		return innerErr
+	})
+	return result, retryErr
 }
 
 // Browse implements backends.BrowseBackend by delegating to the underlying
@@ -213,85 +313,12 @@ func (r *reconnectingQueue) Browse(ctx context.Context, opts backends.ReceiveOpt
 	return bb.Browse(ctx, opts)
 }
 
-// retryOp reconnects and retries op with exponential backoff. The caller must
-// hold r.mu.
-func (r *reconnectingQueue) retryOp(ctx context.Context, desc string, op func() error) error {
-	b := newBackoffPolicy(r.opts)
-	var lastErr error
-
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if r.closed {
-			return fmt.Errorf("%s: adapter closed", desc)
-		}
-
-		wait := b.NextBackOff()
-		if wait == backoff.Stop {
-			return fmt.Errorf("reconnect exhausted for %s: %w", desc, lastErr)
-		}
-
-		log.Error("connection lost (%s), reconnecting in %s...\n", desc, wait.Round(time.Millisecond))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-		}
-
-		if err := r.reconnect(); err != nil {
-			lastErr = err
-			log.Error("reconnect failed: %s\n", err)
-			continue
-		}
-		log.Verbose("reconnected successfully (%s)", desc)
-
-		err := op()
-		if err == nil || !isConnectionError(err) {
-			return err
-		}
-		lastErr = err
-	}
-}
-
 // --- reconnecting topic adapter ---
 
 // reconnectingTopic wraps a TopicAdapterFactory and transparently reconnects
 // on connection-loss errors.
 type reconnectingTopic struct {
-	mu      sync.Mutex
-	factory TopicAdapterFactory
-	opts    ReconnectOptions
-	adapter backends.TopicBackend
-	closed  bool
-}
-
-func (r *reconnectingTopic) ensureConnected() error {
-	if r.closed {
-		return fmt.Errorf("adapter closed")
-	}
-	if r.adapter != nil {
-		return nil
-	}
-	a, err := r.factory()
-	if err != nil {
-		return err
-	}
-	r.adapter = a
-	return nil
-}
-
-func (r *reconnectingTopic) reconnect() error {
-	if r.adapter != nil {
-		_ = r.adapter.Close()
-		r.adapter = nil
-	}
-	a, err := r.factory()
-	if err != nil {
-		return err
-	}
-	r.adapter = a
-	return nil
+	reconnectingAdapter[backends.TopicBackend]
 }
 
 func (r *reconnectingTopic) Publish(ctx context.Context, opts backends.PublishOptions) error {
@@ -340,73 +367,30 @@ func (r *reconnectingTopic) Subscribe(ctx context.Context, opts backends.Subscri
 	return result, retryErr
 }
 
-func (r *reconnectingTopic) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.closed = true
-	if r.adapter != nil {
-		err := r.adapter.Close()
-		r.adapter = nil
-		return err
-	}
-	return nil
-}
-
-func (r *reconnectingTopic) retryOp(ctx context.Context, desc string, op func() error) error {
-	b := newBackoffPolicy(r.opts)
-	var lastErr error
-
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if r.closed {
-			return fmt.Errorf("%s: adapter closed", desc)
-		}
-
-		wait := b.NextBackOff()
-		if wait == backoff.Stop {
-			return fmt.Errorf("reconnect exhausted for %s: %w", desc, lastErr)
-		}
-
-		log.Error("connection lost (%s), reconnecting in %s...\n", desc, wait.Round(time.Millisecond))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-		}
-
-		if err := r.reconnect(); err != nil {
-			lastErr = err
-			log.Error("reconnect failed: %s\n", err)
-			continue
-		}
-		log.Verbose("reconnected successfully (%s)", desc)
-
-		err := op()
-		if err == nil || !isConnectionError(err) {
-			return err
-		}
-		lastErr = err
-	}
-}
-
 // --- factory wrappers ---
 
 // wrapReconnectQueue returns a new factory that produces a reconnecting queue
 // adapter. The wrapper lazily connects on first use and transparently
 // reconnects with exponential backoff on connection-loss errors.
+// A nil factory (broker without queue support) yields nil, so callers'
+// nil-capability checks keep working on the wrapped factory.
 func wrapReconnectQueue(factory QueueAdapterFactory, opts ReconnectOptions) QueueAdapterFactory {
-	rq := &reconnectingQueue{factory: factory, opts: opts}
+	if factory == nil {
+		return nil
+	}
+	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: opts}}
 	return func() (backends.QueueBackend, error) {
 		return rq, nil
 	}
 }
 
 // wrapReconnectTopic returns a new factory that produces a reconnecting topic
-// adapter.
+// adapter. A nil factory (broker without topic support) yields nil.
 func wrapReconnectTopic(factory TopicAdapterFactory, opts ReconnectOptions) TopicAdapterFactory {
-	rt := &reconnectingTopic{factory: factory, opts: opts}
+	if factory == nil {
+		return nil
+	}
+	rt := &reconnectingTopic{reconnectingAdapter: reconnectingAdapter[backends.TopicBackend]{factory: factory, opts: opts}}
 	return func() (backends.TopicBackend, error) {
 		return rt, nil
 	}
@@ -424,7 +408,7 @@ func conditionalReconnectQueue(factory QueueAdapterFactory, rootCmd *cobra.Comma
 			return factory()
 		}
 		window, _ := rootCmd.Flags().GetDuration("reconnect-window")
-		rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}
+		rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}}
 		return rq, nil
 	}
 }
@@ -441,7 +425,7 @@ func conditionalReconnectTopic(factory TopicAdapterFactory, rootCmd *cobra.Comma
 			return factory()
 		}
 		window, _ := rootCmd.Flags().GetDuration("reconnect-window")
-		rt := &reconnectingTopic{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}
+		rt := &reconnectingTopic{reconnectingAdapter: reconnectingAdapter[backends.TopicBackend]{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}}
 		return rt, nil
 	}
 }

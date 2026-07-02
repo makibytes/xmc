@@ -24,10 +24,11 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "redmc",
-		Short:     "Redis Messaging Client",
-		Long:      "Command-line interface for Redis messaging (Streams)",
-		AIContext: AIDoc("redis"),
+		Use:              "redmc",
+		Short:            "Redis Messaging Client",
+		Long:             "Command-line interface for Redis messaging (Streams)",
+		AIContext:        AIDoc("redis"),
+		UnsupportedFlags: []string{"ttl", "priority", "persistent", "selector"},
 		ResolveTarget: func(t cmd.TargetSpec) (string, error) {
 			return redispkg.ResolveTarget(t.IsTopic, t.To, prefix)
 		},
@@ -37,11 +38,7 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("REDMC_PASSWORD"), "Password for authentication")
 			c.PersistentFlags().StringVar(&prefix, "prefix", "xmc", "Key prefix for Redis streams")
 			c.PersistentFlags().Int64Var(&maxLen, "maxlen", 10000, "Maximum topic stream length (0 = no trim)")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Queue: func() (backends.QueueBackend, error) { return redispkg.NewQueueAdapter(connArgs) },
 		Topic: func() (backends.TopicBackend, error) { return redispkg.NewTopicAdapter(connArgs, maxLen) },
@@ -80,8 +77,10 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 			},
-			Purge:       func(queue string) (int64, error) { return redispkg.PurgeQueue(connArgs, prefix, queue) },
-			Stats:       func(queue string) (*backends.QueueStats, error) { return redispkg.GetQueueStats(connArgs, prefix, queue) },
+			Purge: func(queue string) (int64, error) { return redispkg.PurgeQueue(connArgs, prefix, queue) },
+			Stats: func(queue string) (*backends.QueueStats, error) {
+				return redispkg.GetQueueStats(connArgs, prefix, queue)
+			},
 			CreateQueue: &cmd.ManageAction{Run: func(queue string) error { return redispkg.CreateQueue(connArgs, prefix, queue) }},
 			DeleteQueue: &cmd.ManageAction{Run: func(queue string) error { return redispkg.DeleteQueue(connArgs, prefix, queue) }},
 			CreateTopic: &cmd.ManageAction{Run: func(topic string) error { return redispkg.CreateTopic(connArgs, prefix, topic) }},

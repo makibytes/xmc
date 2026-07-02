@@ -85,34 +85,6 @@ func TestIsDestructive(t *testing.T) {
 	}
 }
 
-func TestIsDrainCommand(t *testing.T) {
-	tests := []struct {
-		cmd  string
-		want bool
-	}{
-		{"receive q -n 0", true},
-		{"receive q --count 0", true},
-		{"move src dst -n 0", true},
-		{"forward src dst -n 0", true},
-		{"subscribe topic -n 0", true},
-		// Positive count — not a drain.
-		{"receive q -n 1", false},
-		{"receive q --count 5", false},
-		// Non-drain verbs with -n 0.
-		{"send q -n 0", false},
-		{"publish t -n 0", false},
-		{"peek q -n 0", false},
-		// Drain flag but no matching verb.
-		{"-n 0", false},
-	}
-	for _, tt := range tests {
-		got := isDrainCommand(tt.cmd)
-		if got != tt.want {
-			t.Errorf("isDrainCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
-		}
-	}
-}
-
 func TestBuildFeedback_Success(t *testing.T) {
 	fb := buildFeedback(nil, "hello world", "")
 	if !strings.Contains(fb, "[execution result] ok") {

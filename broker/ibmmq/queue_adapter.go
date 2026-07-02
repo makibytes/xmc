@@ -4,7 +4,6 @@ package ibmmq
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/ibm-messaging/mq-golang/v5/ibmmq"
@@ -90,15 +89,14 @@ func convertMQMDToBackendMessage(md *ibmmq.MQMD, data []byte, msgHandle ibmmq.MQ
 		InternalMetadata: make(map[string]any),
 	}
 
-	// Extract message metadata
-	msgId := strings.TrimRight(string(md.MsgId[:]), "\x00")
-	if msgId != "" {
-		result.MessageID = fmt.Sprintf("%x", md.MsgId)
+	// Extract message metadata (printable IDs round-trip as-is, binary
+	// broker-generated IDs are hex-encoded — see mqIDToString).
+	if msgId := mqIDToString(md.MsgId[:]); msgId != "" {
+		result.MessageID = msgId
 	}
 
-	correlId := strings.TrimRight(string(md.CorrelId[:]), "\x00")
-	if correlId != "" {
-		result.CorrelationID = fmt.Sprintf("%x", md.CorrelId)
+	if correlId := mqIDToString(md.CorrelId[:]); correlId != "" {
+		result.CorrelationID = correlId
 	}
 
 	if md.ReplyToQ != "" {
@@ -130,6 +128,17 @@ func convertMQMDToBackendMessage(md *ibmmq.MQMD, data []byte, msgHandle ibmmq.MQ
 			}
 		}
 		impo.Options = ibmmq.MQIMPO_INQ_NEXT
+	}
+
+	// content-type rides as a message-handle property (see send.go — MQMD has
+	// no native content-type field); pull it back out into ContentType so it
+	// doesn't show up as an ordinary application property, mirroring how
+	// Kafka/Pulsar/Redis extract their four reserved Prop* headers.
+	if ct, ok := result.Properties[backends.PropContentType]; ok {
+		if s, isStr := ct.(string); isStr {
+			result.ContentType = s
+		}
+		delete(result.Properties, backends.PropContentType)
 	}
 
 	// Add internal metadata for verbose display

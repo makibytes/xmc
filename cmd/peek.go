@@ -7,14 +7,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewPeekCommand creates a peek command for queue-based brokers
-func NewPeekCommand(backend backends.QueueBackend) *cobra.Command {
+// NewPeekCommand creates a peek command for queue-based brokers.
+// Mirrors NewReceiveCommand: the resolver maps bare names to broker addresses
+// (Redis key prefixes, Pulsar persistent:// URLs) and exchRouting registers
+// the --exchange/--queue flags for exchange-routed brokers (e.g. RabbitMQ).
+func NewPeekCommand(backend backends.QueueBackend, resolver TargetResolver, consumeExtra func(*cobra.Command) map[string]string, exchRouting ...bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "peek <queue>",
 		Short: "Peek at a message in the queue without removing it (non-destructive read)",
-		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return doReceive(cmd, args, backend, false, nil, nil)
+			return doReceive(cmd, args, backend, false, resolver, consumeExtra)
 		},
 	}
 
@@ -30,6 +32,20 @@ func NewPeekCommand(backend backends.QueueBackend) *cobra.Command {
 	cmd.Flags().Bool("forever", false, "Stream until interrupted / until xmc quits (no time bound)")
 	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
 	cmd.Flags().IntP("omit", "o", 0, "Skip (offset past) the first N messages before reading")
+
+	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
+	if hasExchRouting {
+		cmd.Use = "peek [--exchange <exchange> [--routing-key <key>] | --queue <queue>] [<to>]"
+		cmd.Flags().String("exchange", "", "Exchange to peek from")
+		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
+		// Long-form only: -q is --quiet on read commands. --queue-name is the
+		// deprecated spelling, kept working via aliasNormalize.
+		cmd.Flags().String("queue", "", "Queue to peek from (AMQP 1.0 v2: /queues/<name>)")
+		cmd.Flags().SetNormalizeFunc(aliasNormalize)
+		cmd.Args = cobra.MaximumNArgs(1)
+	} else {
+		cmd.Args = cobra.MinimumNArgs(1)
+	}
 
 	return cmd
 }

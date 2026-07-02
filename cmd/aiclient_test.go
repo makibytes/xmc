@@ -80,6 +80,70 @@ func TestOpenAIClient_RequestShape(t *testing.T) {
 	}
 }
 
+func TestIsReasoningModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"gpt-4o", false},
+		{"gpt-4-turbo", false},
+		{"gpt-4.1", false},
+		{"chatgpt-4o-latest", false},
+		{"deepseek-reasoner", false},
+		{"o1", true},
+		{"o1-mini", true},
+		{"o1-preview", true},
+		{"o3", true},
+		{"o3-mini", true},
+		{"o4-mini", true},
+		{"gpt-5", true},
+		{"gpt-5-mini", true},
+		{"gpt-5-thinking", true},
+		{"codex-mini-latest", true},
+		{"O1-MINI", true},
+	}
+	for _, tt := range tests {
+		if got := isReasoningModel(tt.model); got != tt.want {
+			t.Errorf("isReasoningModel(%q) = %v, want %v", tt.model, got, tt.want)
+		}
+	}
+}
+
+// TestOpenAIClient_ReasoningModelRequestShape verifies that reasoning models
+// (o1/o3/o4/gpt-5/codex) get max_completion_tokens instead of max_tokens, and
+// no temperature field at all — sending either on these models yields a
+// real-API HTTP 400.
+func TestOpenAIClient_ReasoningModelRequestShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+
+		if _, ok := req["max_tokens"]; ok {
+			t.Error("max_tokens should not be set for a reasoning model")
+		}
+		if _, ok := req["temperature"]; ok {
+			t.Error("temperature should not be set for a reasoning model")
+		}
+		if _, ok := req["max_completion_tokens"]; !ok {
+			t.Error("max_completion_tokens should be set for a reasoning model")
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := &openaiClient{apiKey: "k", model: "o3-mini", baseURL: srv.URL, maxTokens: 4096, temperature: 0.7}
+	_, _, err := c.Complete(context.Background(), "sys", []aiMessage{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGeminiClient_RequestShape(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("key") != "gem-key" {
@@ -688,13 +752,11 @@ func TestDoWithRetry_NonRetryableStatusImmediate(t *testing.T) {
 
 	// 401 is non-retryable: doWithRetry returns a Permanent error wrapping
 	// the status and body for the caller to inspect.
-	resp, err := doWithRetry(context.Background(), func() (*http.Request, error) {
+	_, err := doWithRetry(context.Background(), func() (*http.Request, error) {
 		return http.NewRequestWithContext(context.Background(), "GET", srv.URL, nil)
 	})
 	if err == nil {
 		t.Fatal("doWithRetry should error for 401")
-		resp.Body.Close()
-		return
 	}
 	// Handler must be called exactly once — no retries.
 	if calls != 1 {

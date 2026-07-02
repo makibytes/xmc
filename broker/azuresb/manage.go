@@ -167,6 +167,54 @@ func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 	return purged, nil
 }
 
+// PurgeSubscription drains all messages from a topic's subscription. Azure
+// Service Bus has no native purge API (mirrors PurgeQueue's drain-loop
+// approach), but here the receiver is scoped to (topic, subscription) rather
+// than a queue — a subscription name is only unique within its topic, so both
+// are required to address it.
+func PurgeSubscription(args ConnArguments, topic, subscription string) (int64, error) {
+	client, err := Connect(args)
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close(context.Background()) //nolint:errcheck
+
+	adm, err := AdminClient(args)
+	if err != nil {
+		return 0, err
+	}
+
+	ctx := context.Background()
+	props, err := adm.GetSubscriptionRuntimeProperties(ctx, topic, subscription, nil)
+	var approxCount int64
+	if err == nil {
+		approxCount = int64(props.ActiveMessageCount)
+	}
+
+	recv, err := client.NewReceiverForSubscription(topic, subscription, &azservicebus.ReceiverOptions{
+		ReceiveMode: azservicebus.ReceiveModeReceiveAndDelete,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("creating purge receiver: %w", err)
+	}
+	defer recv.Close(ctx) //nolint:errcheck
+
+	var purged int64
+	for {
+		msgs, err := recv.ReceiveMessages(ctx, 100, nil)
+		if err != nil || len(msgs) == 0 {
+			break
+		}
+		purged += int64(len(msgs))
+	}
+
+	if purged == 0 {
+		purged = approxCount
+	}
+
+	return purged, nil
+}
+
 // CreateQueue creates an Azure Service Bus queue.
 func CreateQueue(args ConnArguments, name string) error {
 	adm, err := AdminClient(args)

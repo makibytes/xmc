@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/kafka"
 	"github.com/makibytes/xmc/cmd"
+	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -29,10 +31,11 @@ func GetRootCommand() *cobra.Command {
 	})
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "kmc",
-		Short:     "Apache Kafka Messaging Client",
-		Long:      "Command-line interface for Apache Kafka messaging",
-		AIContext: AIDoc("kafka"),
+		Use:              "kmc",
+		Short:            "Apache Kafka Messaging Client",
+		Long:             "Command-line interface for Apache Kafka messaging",
+		AIContext:        AIDoc("kafka"),
+		UnsupportedFlags: []string{"priority", "persistent", "selector"},
 		ConsumeFlags: func(c *cobra.Command) {
 			c.Flags().Int("partition", -1, "Read from a specific partition (disables consumer group)")
 			c.Flags().String("offset", "", "Start offset: earliest, latest, or a number (requires --partition)")
@@ -51,11 +54,7 @@ func GetRootCommand() *cobra.Command {
 			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL (kafka://broker1:9092 or kafka://broker1:9092,broker2:9092)")
 			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("KMC_USER"), "Username for SASL authentication")
 			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("KMC_PASSWORD"), "Password for SASL authentication")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Enabled, "tls", false, "Enable TLS connection")
-			c.PersistentFlags().StringVar(&connArgs.TLS.CACert, "ca-cert", "", "Path to CA certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientCert, "cert", "", "Path to client certificate file")
-			c.PersistentFlags().StringVar(&connArgs.TLS.ClientKey, "key-file", "", "Path to client private key file")
-			c.PersistentFlags().BoolVar(&connArgs.TLS.Insecure, "insecure", false, "Skip TLS certificate verification")
+			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Topic: topicFactory,
 		Ping:  func() (cmd.Closeable, error) { return kafka.NewTopicAdapter(connArgs) },
@@ -106,7 +105,25 @@ func GetRootCommand() *cobra.Command {
 			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return kafka.DeleteTopic(connArgs, topic) }},
 		},
 		Extra: []*cobra.Command{
-			cmd.WrapTopicCommand(cmd.NewForwardTopicCommand, topicFactory),
+			mcp.NewCommand(mcp.Deps{
+				ServerName:    "xmc-kafka",
+				ServerVersion: cmd.Version(),
+				Target:        connArgs.Server,
+				NewTopic: func() (backends.TopicBackend, error) {
+					return kafka.NewTopicAdapter(connArgs)
+				},
+				ListTopics: func(_ context.Context) ([]mcp.TopicInfo, error) {
+					topics, err := kafka.ListTopics(connArgs)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]mcp.TopicInfo, len(topics))
+					for i, t := range topics {
+						out[i] = mcp.TopicInfo{Name: t.Name, Partitions: int64(t.PartitionCount)}
+					}
+					return out, nil
+				},
+			}),
 		},
 	})
 }

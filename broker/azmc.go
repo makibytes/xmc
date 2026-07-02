@@ -6,8 +6,8 @@ import (
 	"context"
 	"os"
 
-	"github.com/makibytes/xmc/broker/backends"
 	azpkg "github.com/makibytes/xmc/broker/azuresb"
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/cmd"
 	"github.com/makibytes/xmc/mcp"
 	"github.com/spf13/cobra"
@@ -17,10 +17,11 @@ func GetRootCommand() *cobra.Command {
 	var connArgs azpkg.ConnArguments
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:       "azmc",
-		Short:     "Azure Service Bus Messaging Client",
-		Long:      "Command-line interface for Azure Service Bus messaging",
-		AIContext: AIDoc("azure"),
+		Use:              "azmc",
+		Short:            "Azure Service Bus Messaging Client",
+		Long:             "Command-line interface for Azure Service Bus messaging",
+		AIContext:        AIDoc("azure"),
+		UnsupportedFlags: []string{"priority", "persistent", "selector"},
 		ConsumeFlags: func(c *cobra.Command) {
 			c.Flags().String("subscription", "", "Named subscription for topic consume (overrides -g)")
 		},
@@ -65,7 +66,10 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 			},
-			Purge:       func(queue string) (int64, error) { return azpkg.PurgeQueue(connArgs, queue) },
+			Purge: func(queue string) (int64, error) { return azpkg.PurgeQueue(connArgs, queue) },
+			PurgeSubscription: func(topic, sub string) (int64, error) {
+				return azpkg.PurgeSubscription(connArgs, topic, sub)
+			},
 			Stats:       func(queue string) (*backends.QueueStats, error) { return azpkg.GetQueueStats(connArgs, queue) },
 			CreateQueue: &cmd.ManageAction{Run: func(q string) error { return azpkg.CreateQueue(connArgs, q) }},
 			DeleteQueue: &cmd.ManageAction{Run: func(q string) error { return azpkg.DeleteQueue(connArgs, q) }},

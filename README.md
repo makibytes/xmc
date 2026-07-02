@@ -80,7 +80,7 @@ xmc send -n 100000 --rate 5000 <queue> hi     # load test: 100k messages at 5000
 
 Flags:
 
-```
+```text
   -T, --content-type string    MIME type (default "text/plain")
   -C, --correlation-id string  correlation ID
   -I, --message-id string      message ID
@@ -115,7 +115,7 @@ xmc receive -S "color='red'" <queue>  # filter by selector
 
 Flags:
 
-```
+```text
   -t, --timeout duration   time to wait, e.g. "100ms" (default 100ms)
   -w, --wait               wait endlessly for a message
   -q, --quiet              show data only, suppress properties
@@ -151,7 +151,7 @@ xmc request -J <queue> <message>   # output reply as JSON
 
 Flags:
 
-```
+```text
   -R, --reply-to string    reply queue (default "xmc.reply")
   -t, --timeout duration   time to wait for the reply, e.g. "30s" (default 30s)
   -J, --json               output reply as JSON
@@ -171,9 +171,22 @@ xmc reply <queue> --command "jq .data"  # pipe each request through a command
 xmc reply -n 1 <queue> "pong"           # serve a single request, then exit
 ```
 
+The `--command` process receives the request payload on stdin. When turning it
+into arguments with `xargs`, prefer single quotes around both the request
+payload and the `-x` command:
+
+```sh
+xmc request q 'what is the word?'
+xmc reply q -x 'xargs ./answer.sh' --forever
+```
+
+Note that a payload containing quote characters is still subject to xargs' own
+quote parsing — keep quotes out of payloads when converting them to arguments,
+or use a command that reads stdin directly.
+
 Flags:
 
-```
+```text
   -e, --echo                 echo the request payload back as the response
   -x, --command string       run a shell command per request; its stdout is the reply
   -R, --reply-to string      fallback reply destination if a request carries no reply-to
@@ -202,7 +215,7 @@ xmc move -S "attempts > 3" dlq orders     # move only matching messages
 
 Flags:
 
-```
+```text
   -n, --count int          maximum messages to move (0 = all available)
   -S, --selector string    only move messages matching the selector
   -t, --timeout duration   time to wait for the next source message (default 100ms)
@@ -217,10 +230,13 @@ stdout so it can be recovered, and the command stops.
 
 #### forward
 
-Continuously relay messages from one queue to another on the same broker. Unlike
+Continuously relay messages from one source to another on the same broker. Unlike
 `move`, which drains what is present and stops, `forward` keeps streaming as new
 messages arrive — useful for live bridging, mirroring traffic while debugging, or
-continuously redriving a dead-letter queue:
+continuously redriving a dead-letter queue. Source and destination each default
+to a queue; on brokers that also support topics, `--from-topic`/`--to-topic`
+select a topic endpoint instead, so a relay can cross topologies as well as stay
+within one:
 
 ```sh
 xmc forward <source> <destination>             # relay until interrupted (Ctrl-C)
@@ -228,11 +244,13 @@ xmc forward --for 5m orders orders-backup       # relay for five minutes
 xmc forward -n 100 orders orders-backup         # relay 100 messages then stop
 xmc forward -x "jq -c ." raw normalized         # transform each message in flight
 xmc forward --stats orders mirror               # show live throughput on stderr
+xmc forward orders orders-feed --to-topic       # mirror a queue onto a topic
+xmc forward events events-queue --from-topic    # drain a topic into a queue
 ```
 
 Flags:
 
-```
+```text
   -x, --command string     pipe each message through a shell command; its stdout is forwarded
   -n, --count int          maximum messages to forward (0 = until interrupted)
   -t, --timeout duration   time to wait for the next source message per poll (default 100ms)
@@ -240,12 +258,15 @@ Flags:
       --stats              print live throughput statistics to stderr
   -S, --selector string    only forward messages matching the selector
   -q, --quiet              print only the final summary
+      --from-topic         read the source as a topic instead of a queue (dual-capable brokers only)
+      --to-topic           write the destination as a topic instead of a queue (dual-capable brokers only)
 ```
 
 Like `move`, the relay is destructive on the source and preserves message
 metadata (the destination assigns a fresh message ID). If a transform or send
-fails, the consumed message is written to stdout so it can be recovered. On
-topic-only brokers (Kafka) `forward` relays between topics instead of queues.
+fails, the consumed message is written to stdout so it can be recovered.
+Topic-only brokers (Kafka) force both ends to topics and don't show the
+`--from-topic`/`--to-topic` flags.
 
 ### Topic Commands
 
@@ -260,7 +281,7 @@ xmc publish -n 100 <topic> <message>   # publish 100 times
 
 Same flags as `send`, plus:
 
-```
+```text
   -K, --key string         message key for partitioning (Kafka)
 ```
 
@@ -277,7 +298,7 @@ xmc subscribe -S "type='order'" <topic>  # with selector
 
 Same flags as `receive`, plus:
 
-```
+```text
   -g, --group string       consumer group ID (default "xmc-consumer-group")
   -D, --durable            create a durable subscription
 ```
@@ -305,6 +326,24 @@ rmc manage bind-queue <queue> <exchange>              # bind a queue to an excha
 rmc manage unbind-queue <queue> <exchange>            # unbind a queue from an exchange
 ```
 
+Artemis supports address management and the common queue settings:
+
+```sh
+amc manage create-queue <queue> --address <address>   # bind the queue to an address (default: queue name)
+amc manage create-queue <queue> --filter "type='A'" --max-consumers 5 --routing-type multicast
+amc manage bind-queue <queue> <address>               # same as create-queue --address (queues bind at creation)
+amc manage update-queue <queue> --filter "x=1"        # change settings of an existing queue (--filter "" removes)
+amc manage enable-queue <queue>                       # resume message dispatch
+amc manage disable-queue <queue>                      # stop message dispatch (messages accumulate)
+amc manage create-address <address> --routing-type MULTICAST
+amc manage delete-address <address>
+```
+
+Further create-queue settings: `--durable`, `--purge-on-no-consumers`, `--exclusive`,
+`--last-value` (with `--last-value-key`), `--non-destructive`, `--ring-size`.
+A queue is bound to exactly one address at creation and cannot be re-bound —
+delete it and bind it again to move it.
+
 Kafka topics support additional options:
 
 ```sh
@@ -325,14 +364,14 @@ pmc manage create-topic <topic> --partitions 3
 
 | Broker | list | purge | stats | create | delete |
 | --- | --- | --- | --- | --- | --- |
-| Artemis | queues | yes | yes | queue, topic | queue, topic |
-| AWS SQS+SNS | queues + topics | yes (native) | yes | — | — |
-| Azure Service Bus | queues + topics | yes (drains) | yes | — | — |
-| Google Pub/Sub | topics + subscriptions | — | — | — | — |
-| Kafka | topics | — | — | topic | topic |
-| NATS | streams (queues) | — | — | queue | queue |
+| Artemis | queues + addresses | yes | yes | queue (+settings/bind), topic, address | queue, topic, address |
+| AWS SQS+SNS | queues + topics | yes (native) | yes | queue, topic | queue, topic |
+| Azure Service Bus | queues + topics | yes (drains) | yes | queue, topic | queue, topic |
+| Google Pub/Sub | queues + topics | yes | — (no backlog API) | queue, topic | queue, topic |
+| Kafka | topics + consumer groups | — | — | topic | topic |
+| NATS | streams (queues) | yes | yes | queue | queue |
 | Pulsar | topics | — | — | topic | topic |
-| RabbitMQ | queues | yes | yes | queue, exchange (+bind) | queue, exchange (+unbind) |
+| RabbitMQ | queues + exchanges | yes | yes | queue, exchange (+bind) | queue, exchange (+unbind) |
 | Redis | queues + topics | yes | yes | queue, topic | queue, topic |
 | IBM MQ | — | — | — | — | — |
 | MQTT | — | — | — | — | — |
@@ -376,6 +415,9 @@ $ xmc receive -J test-queue
 {"data":"hello world","messageId":"ID:123","properties":{"env":"prod"}}
 ```
 
+`-J` emits a canonical, portable message shape (payload + transferable metadata).
+Broker-internal debug metadata is intentionally excluded.
+
 ### Custom Output Format
 
 Use `-F`/`--format` with `receive`, `peek`, `subscribe`, and `request` to render
@@ -388,7 +430,7 @@ xmc subscribe -F "tenant=%p{tenant} body=%s\n" events
 
 Format tokens:
 
-```
+```text
   %s        message payload (data)
   %S        payload length in bytes
   %i        message ID
@@ -413,7 +455,8 @@ so include `\n` where you want one.
 newline-delimited JSON — one record per line. Unlike `-J` (a human-readable
 dump), NDJSON is designed to be re-imported: binary payloads are base64-encoded
 and all metadata (message ID, correlation ID, reply-to, content type, priority,
-persistence, and properties) is preserved.
+persistence, and properties) is preserved. Empty/nil-like metadata values are
+pruned, and broker-internal debug metadata is excluded.
 
 Export by consuming with `--ndjson`; import by producing with `--ndjson`:
 
@@ -456,7 +499,7 @@ xmc ping -n 5             # five attempts, one per second
 xmc ping -n 0 -i 2        # keep pinging every 2s until interrupted
 ```
 
-```
+```text
   -n, --count int          number of attempts (0 = until interrupted, default 1)
   -i, --interval duration  time between attempts, e.g. "500ms" (default 1s)
 ```
@@ -529,7 +572,7 @@ xmc supports these AI providers:
 
 | Provider | Environment variable | Default model |
 | --- | --- | --- |
-| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-6 |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-5 |
 | OpenAI | `OPENAI_API_KEY` | gpt-4o |
 | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-2.0-flash |
 | xAI | `XAI_API_KEY` | grok-2-latest |
@@ -569,21 +612,33 @@ The AI Shell has two input modes, toggled with **Esc**:
   **Tab** autocomplete. Useful when you already know the command and want to
   stay in the same TUI.
 
+Commands typed in `xmc>` mode run immediately, with no confirmation step —
+unlike `ask>` mode, where every AI-generated command (destructive or not) is
+shown as a proposal you must accept, edit, or discard first. Use `xmc>` mode
+only when you're confident in the command you're typing.
+
 The right side of the screen shows a sidebar with your broker's objects (queues,
 topics, exchanges) and their message counts, refreshed automatically in the
 background.
 
 Key bindings:
 
-```
+```text
 Esc          toggle between ask> (AI) and xmc> (command) mode
 Enter        execute the proposed command
 Ctrl+C       discard the proposal / cancel thinking
-Tab          autocomplete (command mode)
-Shift+Tab    browse broker objects in the sidebar
-Up/Down      recall command history
+Tab          autocomplete (command mode) · browse sidebar forward (AI mode)
+Shift+Tab    browse sidebar backward
+Up/Down      recall mode-specific history
 PgUp/PgDn    scroll conversation
+m            peek message metadata (where peek is available, includes internal/broker metadata)
+J / Y        switch metadata format for `m` (JSON / YAML; persisted)
 ```
+
+History behavior is shared and persistent:
+
+- Commands executed in shell and AI command mode are written to `~/.xmc/<binary>-sh.log`.
+- AI asks entered in `ask>` mode are stored separately (`~/.xmc/<binary>-ask.log`).
 
 ### Slash Commands
 
@@ -593,13 +648,30 @@ Inside AI Shell, these slash commands are available:
 | --- | --- |
 | `/model` | Pick a model interactively from the provider's model list |
 | `/model <name>` | Switch to a specific model directly (persisted to config) |
-| `/effort low\|med\|high` | Set reasoning effort (temperature) |
+| `/effort` | Pick reasoning effort interactively |
+| `/effort low\|med\|high` | Set reasoning effort (temperature) directly |
 | `/refresh` | Reload broker objects now (one-shot) |
 | `/refresh <dur>` | Set the periodic refresh interval (e.g. `3s`, `3m`; minimum `1s`; persisted to config) |
 | `/refresh off` | Disable periodic sidebar refresh |
+| `/connect` | Reconnect to the broker (enables auto-reconnect) |
+| `/disconnect` | Stop auto-reconnect |
 | `/reset` | Clear conversation history |
 | `/clear` | Clear the display |
+| `/help` | Show available slash commands and keybindings |
 | `/exit` | Quit |
+
+Effort to temperature mapping:
+
+- `low` → `0.0`
+- `medium` → `0.3`
+- `high` → `0.7`
+
+Refresh behavior combines periodic and event-driven updates:
+
+- Periodic: controlled by `/refresh` and `ai.refresh-interval`.
+- Event-driven: object/message windows refresh after successful mutation commands
+  when `ai.auto-update-objects` and/or `ai.auto-update-messages` are enabled.
+  Both flags default to `true`.
 
 ## Config File
 
@@ -622,6 +694,21 @@ select the specific provider and model xmc should use:
 ai:
   provider: opencode
   model: mimo-v2.5-free
+  metadata-format: yaml
+```
+
+Provider selection precedence is:
+
+1. If `ai.provider` is set in YAML, that provider is required.
+2. Otherwise, xmc picks the first provider with a present API key in this order:
+   Anthropic, OpenAI, Gemini, xAI, DeepSeek, Mistral, OpenCode.
+
+AI shell aliases are also supported via YAML and are available in both shell and AI command mode:
+
+```yaml
+aliases:
+  qstat: manage stats $1
+  resend: receive $1 -n $2 --ndjson | send $1 --ndjson
 ```
 
 ### Version
@@ -647,3 +734,5 @@ Please open an issue or submit a pull request. Use the latest version of Go and 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
+
+![Xenomorph working](.github/assets/xenomorph-working.jpg)

@@ -25,11 +25,32 @@ type connectionConfig struct {
 type aiConfig struct {
 	Provider           string `yaml:"provider"`
 	Model              string `yaml:"model"`
-	MaxTokens          int    `yaml:"max-tokens"`            // max output tokens per AI call (default: 4096)
-	AutoUpdateObjects  *bool  `yaml:"auto-update-objects"`   // refresh sidebar on create/delete/bind (default: true)
-	AutoUpdateMessages *bool  `yaml:"auto-update-messages"`  // refresh sidebar on send/publish/receive/purge (default: true)
-	RefreshInterval    string `yaml:"refresh-interval"`      // periodic sidebar refresh interval (e.g. "5s", "3m", "off"; default: "5s")
-	RequestTimeout     string `yaml:"request-timeout"`       // max time for a single AI API call (e.g. "120s", "2m"; default: "120s")
+	MaxTokens          int    `yaml:"max-tokens"`           // max output tokens per AI call (default: 4096)
+	AutoUpdateObjects  *bool  `yaml:"auto-update-objects"`  // refresh sidebar on create/delete/bind (default: true)
+	AutoUpdateMessages *bool  `yaml:"auto-update-messages"` // refresh sidebar on send/publish/receive/purge (default: true)
+	RefreshInterval    string `yaml:"refresh-interval"`     // periodic sidebar refresh interval (e.g. "5s", "3m", "off"; default: "5s")
+	RequestTimeout     string `yaml:"request-timeout"`      // max time for a single AI API call (e.g. "120s", "2m"; default: "120s")
+	MetadataFormat     string `yaml:"metadata-format"`      // AI-shell metadata peek format ("yaml"|"json"; default: "yaml")
+}
+
+type metadataFormat string
+
+const (
+	metadataFormatYAML metadataFormat = "yaml"
+	metadataFormatJSON metadataFormat = "json"
+)
+
+func parseMetadataFormat(s string) metadataFormat {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case string(metadataFormatJSON):
+		return metadataFormatJSON
+	default:
+		return metadataFormatYAML
+	}
+}
+
+func (c aiConfig) metadataFormat() metadataFormat {
+	return parseMetadataFormat(c.MetadataFormat)
 }
 
 // requestTimeoutDuration returns the configured AI request timeout.
@@ -108,6 +129,11 @@ func formatRefreshInterval(d time.Duration, enabled bool) string {
 // saveRefreshInterval persists the refresh-interval value to the config file.
 func saveRefreshInterval(value string) error { return saveAIConfigKey("refresh-interval", value) }
 
+// saveMetadataFormat persists the metadata-format value to the config file.
+func saveMetadataFormat(value metadataFormat) error {
+	return saveAIConfigKey("metadata-format", string(value))
+}
+
 func loadConfig() (*xmcConfig, error) {
 	path, err := configFilePath()
 	if err != nil {
@@ -142,14 +168,14 @@ type providerSpec struct {
 }
 
 type providerDef struct {
-	name       string
-	envKeys    []string
-	baseURL    string
+	name         string
+	envKeys      []string
+	baseURL      string
 	defaultModel string
 }
 
 var providerOrder = []providerDef{
-	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "https://api.anthropic.com", "claude-sonnet-4-6"},
+	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "https://api.anthropic.com", "claude-sonnet-5"},
 	{"openai", []string{"OPENAI_API_KEY"}, "https://api.openai.com", "gpt-4o"},
 	{"gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}, "https://generativelanguage.googleapis.com", "gemini-2.0-flash"},
 	{"xai", []string{"XAI_API_KEY"}, "https://api.x.ai", "grok-2-latest"},

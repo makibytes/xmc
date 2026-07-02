@@ -38,7 +38,13 @@ The response payload can be one of:
 
 The responder runs until interrupted (Ctrl-C) unless --count, --for, or
 --forever sets a different bound. The reply's correlation ID is taken from the
-request's correlation ID, falling back to the request's message ID.`,
+request's correlation ID, falling back to the request's message ID.
+
+The --command process receives the raw request payload on stdin. When turning
+it into arguments with xargs, prefer single quotes around both the request
+payload and the -x command (e.g. -x 'xargs ./answer.sh'). A payload containing
+quote characters is still subject to xargs' own quote parsing — keep quotes out
+of payloads, or use a command that reads stdin directly.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doReply(cmd, args, backend)
@@ -72,6 +78,7 @@ type replyConfig struct {
 	contentType string
 	properties  map[string]any
 	quiet       bool
+	errOut      io.Writer // diagnostics (command stderr, failures); cmd.ErrOrStderr()
 }
 
 func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) error {
@@ -83,18 +90,12 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	timeout := float32(getDuration(cmd, "timeout").Seconds())
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	selector, _ := cmd.Flags().GetString("selector")
-	forStr, _ := cmd.Flags().GetString("for")
-	forever, _ := cmd.Flags().GetBool("forever")
 
-	duration, err := parseDurationFlag(forStr)
+	sf, err := ParseStreamingFlags(cmd)
 	if err != nil {
 		return err
 	}
-	if forever {
-		duration = 0
-	}
-	follow := duration > 0 || forever
-	if (duration > 0 || forever) && !cmd.Flags().Changed("count") {
+	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
 		count = 0
 	}
 
@@ -114,6 +115,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 		contentType: contentType,
 		properties:  properties,
 		quiet:       quiet,
+		errOut:      cmd.ErrOrStderr(),
 	}
 
 	// A fixed response body is only meaningful when not echoing or shelling out.
@@ -126,7 +128,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	}
 
 	parentCtx := cmd.Context()
-	ctx, stop := streamContext(duration, parentCtx)
+	ctx, stop := streamContext(sf.Duration, parentCtx)
 	defer stop()
 
 	// With no timeout we block until each request arrives; ctx cancellation
@@ -152,7 +154,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 		case errors.Is(err, context.Canceled):
 			return finishReply(served)
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
-			if follow || count == 0 {
+			if sf.Follow || count == 0 {
 				continue // keep waiting for the next request
 			}
 			return finishReply(served)
@@ -189,8 +191,10 @@ func respondToRequest(ctx context.Context, backend backends.QueueBackend, reques
 
 	body, err := replyBody(cfg, request)
 	if err != nil {
-		// A failing command should not tear down the whole responder.
-		log.Error("reply command failed: %s\n", err)
+		// A failing command should not tear down the whole responder. Write to
+		// the command's error stream (not the global log) so the message lands
+		// in the background process's captured output in shell/AI mode.
+		fmt.Fprintf(cfg.errOut, "reply command failed: %s\n", err)
 		return nil
 	}
 
@@ -217,19 +221,21 @@ func replyBody(cfg replyConfig, request *backends.Message) ([]byte, error) {
 	case cfg.echo:
 		return request.Data, nil
 	case cfg.command != "":
-		return runShellCommand(cfg.command, request.Data)
+		return runShellCommand(cfg.command, request.Data, cfg.errOut)
 	default:
 		return cfg.staticBody, nil
 	}
 }
 
 // runShellCommand executes command via the system shell, feeding the input to
-// its stdin and returning its stdout. The command's stderr is inherited so its
-// diagnostics are visible. Shared by the reply responder and forward --command.
-func runShellCommand(command string, input []byte) ([]byte, error) {
+// its stdin and returning its stdout. The command's stderr goes to errOut
+// (the calling command's error stream) so its diagnostics are visible — and,
+// in shell/AI mode, captured with the rest of the command's output instead of
+// leaking to the terminal. Shared by the reply responder and forward --command.
+func runShellCommand(command string, input []byte, errOut io.Writer) ([]byte, error) {
 	c := exec.Command("sh", "-c", command)
 	c.Stdin = bytes.NewReader(input)
-	c.Stderr = os.Stderr
+	c.Stderr = errOut
 	return c.Output()
 }
 

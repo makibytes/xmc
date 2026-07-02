@@ -33,7 +33,7 @@ Uses the correlation ID from the request as the message ID for matching.`,
 	cmd.Flags().BoolP("persistent", "d", false, "Make message persistent")
 	cmd.Flags().StringP("reply-to", "R", "", "Reply queue (auto-generated if not specified)")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Message properties in key=value format")
-	cmd.Flags().VarP(newDurationValue(30*time.Second, time.Second), "timeout", "t", "Time to wait for the reply (e.g. \"30s\", \"500ms\")")
+	cmd.Flags().VarP(newDurationValue(60*time.Second, time.Second), "timeout", "t", "Time to wait for the reply (e.g. \"60s\", \"500ms\")")
 	cmd.Flags().BoolP("quiet", "q", false, "Quiet about properties, show data only")
 	cmd.Flags().BoolP("json", "J", false, "Output reply as JSON")
 	cmd.Flags().StringP("format", "F", "", "Output format string, e.g. \"%i %s\\n\" (overrides --json)")
@@ -113,7 +113,7 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 		return displayMessageFormat(dataOut, message, format)
 	}
 	if jsonOutput {
-		return displayMessageJSON(dataOut, message)
+		return displayMessageJSON(dataOut, message, verbosity)
 	}
 	return displayMessage(dataOut, metaOut, message, verbosity)
 }
