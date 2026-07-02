@@ -171,6 +171,19 @@ xmc reply <queue> --command "jq .data"  # pipe each request through a command
 xmc reply -n 1 <queue> "pong"           # serve a single request, then exit
 ```
 
+The `--command` process receives the request payload on stdin. When turning it
+into arguments with `xargs`, prefer single quotes around both the request
+payload and the `-x` command:
+
+```sh
+xmc request q 'what is the word?'
+xmc reply q -x 'xargs ./answer.sh' --forever
+```
+
+Note that a payload containing quote characters is still subject to xargs' own
+quote parsing — keep quotes out of payloads when converting them to arguments,
+or use a command that reads stdin directly.
+
 Flags:
 
 ```text
@@ -313,6 +326,24 @@ rmc manage bind-queue <queue> <exchange>              # bind a queue to an excha
 rmc manage unbind-queue <queue> <exchange>            # unbind a queue from an exchange
 ```
 
+Artemis supports address management and the common queue settings:
+
+```sh
+amc manage create-queue <queue> --address <address>   # bind the queue to an address (default: queue name)
+amc manage create-queue <queue> --filter "type='A'" --max-consumers 5 --routing-type multicast
+amc manage bind-queue <queue> <address>               # same as create-queue --address (queues bind at creation)
+amc manage update-queue <queue> --filter "x=1"        # change settings of an existing queue (--filter "" removes)
+amc manage enable-queue <queue>                       # resume message dispatch
+amc manage disable-queue <queue>                      # stop message dispatch (messages accumulate)
+amc manage create-address <address> --routing-type MULTICAST
+amc manage delete-address <address>
+```
+
+Further create-queue settings: `--durable`, `--purge-on-no-consumers`, `--exclusive`,
+`--last-value` (with `--last-value-key`), `--non-destructive`, `--ring-size`.
+A queue is bound to exactly one address at creation and cannot be re-bound —
+delete it and bind it again to move it.
+
 Kafka topics support additional options:
 
 ```sh
@@ -333,7 +364,7 @@ pmc manage create-topic <topic> --partitions 3
 
 | Broker | list | purge | stats | create | delete |
 | --- | --- | --- | --- | --- | --- |
-| Artemis | queues + addresses | yes | yes | queue, topic | queue, topic |
+| Artemis | queues + addresses | yes | yes | queue (+settings/bind), topic, address | queue, topic, address |
 | AWS SQS+SNS | queues + topics | yes (native) | yes | queue, topic | queue, topic |
 | Azure Service Bus | queues + topics | yes (drains) | yes | queue, topic | queue, topic |
 | Google Pub/Sub | queues + topics | yes | — (no backlog API) | queue, topic | queue, topic |

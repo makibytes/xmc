@@ -45,9 +45,10 @@ type bgProcess struct {
 	cancel    context.CancelFunc // set via procCancelMsg; UI goroutine only thereafter
 	doneCh    chan struct{}       // closed by the background goroutine when it exits
 
-	mu    sync.Mutex
-	out   cappedBuffer // goroutine writes; UI reads via snapshotText()
-	lines int          // count of '\n' in out
+	mu         sync.Mutex
+	out        cappedBuffer // goroutine writes; UI reads via snapshotText()
+	lines      int          // count of '\n' in out
+	stderrSeen bool         // process wrote to stderr since the user last viewed its output
 
 	// Set in handleProcDoneMsg (UI goroutine only):
 	done       bool
@@ -62,17 +63,43 @@ func (p *bgProcess) snapshotText() string {
 	return p.out.String()
 }
 
+// hasUnseenStderr reports whether the process wrote to stderr since the user
+// last viewed its output (Enter in the Processes window clears it).
+func (p *bgProcess) hasUnseenStderr() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stderrSeen
+}
+
 // ---------- procWriter ----------
 
-// procWriter is a thread-safe io.Writer that routes both stdout and stderr
-// of executePipelineIO into a bgProcess's output buffer (interleaved).
-type procWriter struct{ p *bgProcess }
+// procWriter is a thread-safe io.Writer that routes stdout or stderr of
+// executePipelineIO into a bgProcess's output buffer (interleaved). The
+// stderr variant additionally flags the process so the sidebar renders its
+// name in red, and wakes the UI so the highlight appears immediately.
+type procWriter struct {
+	p      *bgProcess
+	stderr bool
+	prog   **tea.Program
+}
 
 func (w procWriter) Write(b []byte) (int, error) {
 	w.p.mu.Lock()
-	defer w.p.mu.Unlock()
 	w.p.lines += bytes.Count(b, []byte{'\n'})
-	return w.p.out.Write(b)
+	n, err := w.p.out.Write(b)
+	notify := false
+	if w.stderr && len(b) > 0 && !w.p.stderrSeen {
+		w.p.stderrSeen = true
+		notify = true
+	}
+	w.p.mu.Unlock()
+	// Send outside the lock: Program.Send may block during shutdown.
+	if notify {
+		if prog := derefProgram(w.prog); prog != nil {
+			prog.Send(procStderrMsg{id: w.p.id})
+		}
+	}
+	return n, err
 }
 
 // ---------- Bubble Tea messages ----------
@@ -89,6 +116,11 @@ type procDoneMsg struct {
 	id  int
 	err error
 }
+
+// procStderrMsg wakes the UI when a background process first writes to
+// stderr, so the red name highlight in the Processes window renders
+// immediately instead of at the next tick or keystroke.
+type procStderrMsg struct{ id int }
 
 // ---------- Pure helpers ----------
 
@@ -267,7 +299,8 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 	pptr := m.program
 	rootCmd := m.rootCmd
 	id := p.id
-	pw := procWriter{p: p}
+	pwOut := procWriter{p: p, prog: pptr}
+	pwErr := procWriter{p: p, stderr: true, prog: pptr}
 
 	// Background processes get their own broker connection rather than
 	// sharing m.session's cached adapter. A long-running stream (receive
@@ -291,7 +324,7 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 		if prog := derefProgram(pptr); prog != nil {
 			prog.Send(procCancelMsg{id: id, cancel: cancel})
 		}
-		err := procSess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), pw, pw)
+		err := procSess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), pwOut, pwErr)
 		cancel()
 		return procDoneMsg{id: id, err: err}
 	}
@@ -485,6 +518,10 @@ func (m *aiTUIModel) updateProcPrompt() {
 // styled like received messages (│ border + ⧉ clipboard markers).
 func (m *aiTUIModel) dumpProcessOutput(p *bgProcess) {
 	text := p.snapshotText()
+	// The user is looking at the output now — clear the red stderr highlight.
+	p.mu.Lock()
+	p.stderrSeen = false
+	p.mu.Unlock()
 	var b strings.Builder
 
 	m.copyItems = append(m.copyItems, p.command)
@@ -600,6 +637,11 @@ func (m aiTUIModel) writeProcessSection(b *strings.Builder, width, bodyLines int
 		runes := []rune(name)
 		if len(runes) > maxName {
 			name = string(runes[:maxName-1]) + "…"
+		}
+		// Unseen stderr output turns the name red until the user views the
+		// process output (Enter).
+		if p.hasUnseenStderr() {
+			name = procErrStyle.Render(name)
 		}
 
 		if focused && i == m.procSel {

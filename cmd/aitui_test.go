@@ -846,10 +846,18 @@ func TestComputeInputLines(t *testing.T) {
 		t.Errorf("short value: got %d, want 1", got)
 	}
 
-	// Value exactly filling one row → 1 line.
+	// Value one rune short of the row width → 1 line.
+	almostRow := strings.Repeat("x", w-1)
+	if got := (&m).computeInputLines(almostRow); got != 1 {
+		t.Errorf("almost-full row: got %d, want 1", got)
+	}
+
+	// Value exactly filling one row → 2 lines: the textarea's wrap appends a
+	// trailing empty row for the cursor when a line is exactly full, so the
+	// widget really renders two rows here.
 	oneRow := strings.Repeat("x", w)
-	if got := (&m).computeInputLines(oneRow); got != 1 {
-		t.Errorf("one-row value: got %d, want 1", got)
+	if got := (&m).computeInputLines(oneRow); got != 2 {
+		t.Errorf("exactly-full row: got %d, want 2", got)
 	}
 
 	// Value that exceeds one row → 2 lines.
@@ -858,10 +866,25 @@ func TestComputeInputLines(t *testing.T) {
 		t.Errorf("two-row value (%d runes, width %d): got %d, want 2", len(twoRows), w, got)
 	}
 
+	// Word wrap: a word that would cross the row boundary moves entirely to
+	// the next row, so the count must be 2 even though the rune count alone
+	// would still fit into one row.
+	wordWrapped := strings.Repeat("x", w-3) + " yyyy"
+	if got := (&m).computeInputLines(wordWrapped); got != 2 {
+		t.Errorf("word-wrapped value: got %d, want 2", got)
+	}
+
 	// Very long value → clamped to maxInputLines.
 	huge := strings.Repeat("x", w*maxInputLines+100)
 	if got := (&m).computeInputLines(huge); got != maxInputLines {
 		t.Errorf("huge value: got %d, want %d (maxInputLines)", got, maxInputLines)
+	}
+
+	// computeInputLines must agree with the widget's own wrapping for a value
+	// set directly into the textarea (LineInfo().Height is the widget's count).
+	m.input.SetValue(wordWrapped)
+	if got, want := (&m).computeInputLines(wordWrapped), m.input.LineInfo().Height; got != want {
+		t.Errorf("computeInputLines = %d, widget LineInfo().Height = %d; must match", got, want)
 	}
 }
 

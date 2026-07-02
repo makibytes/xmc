@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -17,7 +18,9 @@ import (
 	"github.com/chzyer/readline"
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
+	runewidth "github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/rivo/uniseg"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -541,6 +544,11 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case procDoneMsg:
 		return m.handleProcDoneMsg(msg)
 
+	case procStderrMsg:
+		// State already updated by the writer goroutine (bgProcess.stderrSeen);
+		// the message only forces a repaint so the red highlight shows now.
+		return m, nil
+
 	case modelsMsg:
 		return m.handleModelsDone(msg)
 
@@ -924,22 +932,21 @@ func (m *aiTUIModel) recalcLayout() {
 	m.setViewportContent()
 }
 
-// updateInputHeight recomputes how many visual rows the current input text
-// needs (up to maxInputLines), resizes the textarea if needed, and always
-// calls recalcLayout so that viewport height tracks any input-area changes.
 // computeInputLines returns the number of visual rows needed to display value in
 // the textarea, clamped to [1, maxInputLines]. It uses m.input.Width() which
 // reflects the true inner text width that the textarea computed after SetWidth,
-// so measurements are always in sync with the widget's own layout.
+// and textareaWrap, which replicates the widget's own word-wrap, so the count
+// always matches what the widget renders. A plain ceil(runes/width) estimate
+// undercounts as soon as a word soft-wraps, which made the textarea scroll its
+// first line out of view before the height caught up.
 func (m *aiTUIModel) computeInputLines(value string) int {
 	w := m.input.Width() // inner content width (after prompt and reserved margins)
 	if w < 1 {
 		w = 1
 	}
-	runes := []rune(value)
-	n := 1
-	if len(runes) > 0 {
-		n = (len(runes) + w - 1) / w
+	n := 0
+	for _, line := range strings.Split(value, "\n") {
+		n += len(textareaWrap([]rune(line), w))
 	}
 	if n < 1 {
 		n = 1
@@ -950,13 +957,106 @@ func (m *aiTUIModel) computeInputLines(value string) int {
 	return n
 }
 
+// textareaWrap is a verbatim copy of the soft-wrap algorithm inside
+// charmbracelet/bubbles v1.0.0 textarea (wrap(), MIT license). The input area
+// grows with its content instead of scrolling, so the height budget must agree
+// exactly with the widget's internal wrapping — including its quirks (whole
+// words move to the next row; a line that is exactly full gets a trailing
+// empty row for the cursor). Keep in sync when upgrading bubbles.
+func textareaWrap(runes []rune, width int) [][]rune {
+	var (
+		lines  = [][]rune{{}}
+		word   = []rune{}
+		row    int
+		spaces int
+	)
+
+	for _, r := range runes {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+		}
+
+		if spaces > 0 {
+			if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces > width {
+				row++
+				lines = append(lines, []rune{})
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], repeatSpaces(spaces)...)
+			} else {
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], repeatSpaces(spaces)...)
+			}
+			spaces = 0
+			word = nil
+		} else {
+			// A trailing double-width rune may not fit on this line.
+			lastCharLen := runewidth.RuneWidth(word[len(word)-1])
+			if uniseg.StringWidth(string(word))+lastCharLen > width {
+				// If the current line has any content, move to the next line
+				// because the current word fills up the entire line.
+				if len(lines[row]) > 0 {
+					row++
+					lines = append(lines, []rune{})
+				}
+				lines[row] = append(lines[row], word...)
+				word = nil
+			}
+		}
+	}
+
+	if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces >= width {
+		lines = append(lines, []rune{})
+		lines[row+1] = append(lines[row+1], word...)
+		// The extra space accounts for the trailing space at the end of the
+		// previous soft-wrapped lines (cursor navigation consistency).
+		spaces++
+		lines[row+1] = append(lines[row+1], repeatSpaces(spaces)...)
+	} else {
+		lines[row] = append(lines[row], word...)
+		spaces++
+		lines[row] = append(lines[row], repeatSpaces(spaces)...)
+	}
+
+	return lines
+}
+
+func repeatSpaces(n int) []rune {
+	return []rune(strings.Repeat(" ", n))
+}
+
+// updateInputHeight recomputes how many visual rows the current input text
+// needs (up to maxInputLines), resizes the textarea if needed, and always
+// calls recalcLayout so that viewport height tracks any input-area changes.
 func (m *aiTUIModel) updateInputHeight() {
 	n := m.computeInputLines(m.input.Value())
 	if n != m.inputLines {
+		grew := n > m.inputLines
 		m.inputLines = n
 		m.input.SetHeight(n)
+		if grew {
+			m.resetInputScroll()
+		}
 	}
 	m.recalcLayout()
+}
+
+// resetInputScroll clears the textarea's internal viewport offset after the
+// input area has grown. When a keystroke wraps the text to a new visual row
+// while the widget still has its old (smaller) height, the textarea scrolls
+// down to keep the cursor visible — and growing the height afterwards does not
+// scroll back, leaving the first input line hidden. Rebuilding the value goes
+// through Reset(), which is the only exported path to viewport.GotoTop();
+// the cursor column is restored afterwards.
+func (m *aiTUIModel) resetInputScroll() {
+	if m.input.LineCount() != 1 {
+		return // cursor row is not restorable across SetValue; skip the heal
+	}
+	li := m.input.LineInfo()
+	col := li.StartColumn + li.ColumnOffset
+	m.input.SetValue(m.input.Value())
+	m.input.SetCursor(col)
 }
 
 // maxTranscriptBytes is the soft cap on transcript memory. When exceeded, the

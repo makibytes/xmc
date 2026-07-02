@@ -298,7 +298,7 @@ func runCommandOrRecover(command string, data []byte, out, errw io.Writer) ([]by
 	if command == "" {
 		return data, true
 	}
-	result, err := runShellCommand(command, data)
+	result, err := runShellCommand(command, data, errw)
 	if err != nil {
 		fmt.Fprintf(errw, "command failed: %s\n", err)
 		emitUndelivered(out, data)

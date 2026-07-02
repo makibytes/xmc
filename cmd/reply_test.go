@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -168,6 +170,35 @@ func TestReplyCommand_CommandMode(t *testing.T) {
 	}
 	if string(mock.lastSendOpts.Message) != "shell-in" {
 		t.Errorf("command reply = %q, want %q", mock.lastSendOpts.Message, "shell-in")
+	}
+}
+
+func TestReplyCommand_CommandStderrGoesToCommandErrStream(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("command mode uses a POSIX shell")
+	}
+	request := &backends.Message{Data: []byte("boom"), ReplyTo: "r"}
+	mock := &mockQueueBackend{receiveMsg: request}
+	cmd := NewReplyCommand(mock)
+	// The shell command writes to stderr and fails: both its stderr and the
+	// "reply command failed" diagnostic must land on the cobra command's error
+	// stream (captured in shell/AI background-process mode), not os.Stderr.
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs([]string{"requests", "-x", "echo oh-no >&2; exit 3", "-n", "1"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("a failing -x command must not tear down the responder: %v", err)
+	}
+	if mock.sendCount != 0 {
+		t.Errorf("sendCount = %d, want 0 (failed command must not reply)", mock.sendCount)
+	}
+	got := errBuf.String()
+	if !strings.Contains(got, "oh-no") {
+		t.Errorf("command stderr not captured on err stream: %q", got)
+	}
+	if !strings.Contains(got, "reply command failed") {
+		t.Errorf("failure diagnostic not captured on err stream: %q", got)
 	}
 }
 

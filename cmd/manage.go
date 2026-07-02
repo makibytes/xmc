@@ -28,11 +28,22 @@ type ManageAction struct {
 	Run        func(name string) error
 }
 
-// BindAction is a binding subcommand taking <queue> <exchange> (+ optional
-// flags like --routing-key bound in SetupFlags).
+// BindAction is a binding subcommand taking <queue> <target> (+ optional
+// flags like --routing-key bound in SetupFlags). TargetNoun names the second
+// argument in help and success text; it defaults to "exchange" (RabbitMQ) and
+// is "address" for Artemis.
 type BindAction struct {
 	SetupFlags func(c *cobra.Command) // optional
-	Run        func(queue, exchange string) error
+	Run        func(queue, target string) error
+	TargetNoun string // optional; defaults to "exchange"
+}
+
+// targetNoun returns the noun for the bind target, defaulting to "exchange".
+func (a *BindAction) targetNoun() string {
+	if a != nil && a.TargetNoun != "" {
+		return a.TargetNoun
+	}
+	return "exchange"
 }
 
 // ObjectType declares one browsable object type for the AI TUI sidebar. Each
@@ -90,6 +101,9 @@ type ManageSpec struct {
 	// Resource lifecycle operations — all optional.
 	CreateQueue    *ManageAction
 	DeleteQueue    *ManageAction
+	UpdateQueue    *ManageAction // change settings of an existing queue (e.g. Artemis filter)
+	EnableQueue    *ManageAction // enable message dispatch on a queue (Artemis)
+	DisableQueue   *ManageAction // disable message dispatch on a queue (Artemis)
 	CreateTopic    *ManageAction
 	DeleteTopic    *ManageAction
 	CreateAddress  *ManageAction // Artemis-only: bare address (routing namespace)
@@ -204,14 +218,17 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 
 	addManageAction(mgmtCmd, "create-queue", "Create a queue", "<queue>", "Created queue %s\n", spec.CreateQueue)
 	addManageAction(mgmtCmd, "delete-queue", "Delete a queue", "<queue>", "Deleted queue %s\n", spec.DeleteQueue)
+	addManageAction(mgmtCmd, "update-queue", "Update queue settings", "<queue>", "Updated queue %s\n", spec.UpdateQueue)
+	addManageAction(mgmtCmd, "enable-queue", "Enable message dispatch on a queue", "<queue>", "Enabled queue %s\n", spec.EnableQueue)
+	addManageAction(mgmtCmd, "disable-queue", "Disable message dispatch on a queue", "<queue>", "Disabled queue %s\n", spec.DisableQueue)
 	addManageAction(mgmtCmd, "create-topic", "Create a topic", "<topic>", "Created topic %s\n", spec.CreateTopic)
 	addManageAction(mgmtCmd, "delete-topic", "Delete a topic", "<topic>", "Deleted topic %s\n", spec.DeleteTopic)
 	addManageAction(mgmtCmd, "create-address", "Create an address (routing namespace)", "<address>", "Created address %s\n", spec.CreateAddress)
 	addManageAction(mgmtCmd, "delete-address", "Delete an address", "<address>", "Deleted address %s\n", spec.DeleteAddress)
 	addManageAction(mgmtCmd, "create-exchange", "Create an exchange", "<exchange>", "Created exchange %s\n", spec.CreateExchange)
 	addManageAction(mgmtCmd, "delete-exchange", "Delete an exchange", "<exchange>", "Deleted exchange %s\n", spec.DeleteExchange)
-	addBindAction(mgmtCmd, "bind-queue", "Bind a queue to an exchange", "Bound queue %s to exchange %s\n", spec.BindQueue)
-	addBindAction(mgmtCmd, "unbind-queue", "Unbind a queue from an exchange", "Unbound queue %s from exchange %s\n", spec.UnbindQueue)
+	addBindAction(mgmtCmd, "bind-queue", "Bind a queue to an %s", "Bound queue %%s to %s %%s\n", spec.BindQueue)
+	addBindAction(mgmtCmd, "unbind-queue", "Unbind a queue from an %s", "Unbound queue %%s from %s %%s\n", spec.UnbindQueue)
 
 	return mgmtCmd
 }
@@ -241,14 +258,17 @@ func addManageAction(parent *cobra.Command, use, short, argName, successFmt stri
 }
 
 // addBindAction adds a two-arg management subcommand (bind/unbind) if the
-// action is non-nil.
-func addBindAction(parent *cobra.Command, use, short, successFmt string, action *BindAction) {
+// action is non-nil. shortFmt and successFmt contain a %s placeholder for the
+// action's target noun ("exchange" by default, "address" for Artemis).
+func addBindAction(parent *cobra.Command, use, shortFmt, successFmt string, action *BindAction) {
 	if action == nil {
 		return
 	}
+	noun := action.targetNoun()
+	successFmt = fmt.Sprintf(successFmt, noun)
 	c := &cobra.Command{
-		Use:   use + " <queue> <exchange>",
-		Short: short,
+		Use:   fmt.Sprintf("%s <queue> <%s>", use, noun),
+		Short: fmt.Sprintf(shortFmt, noun),
 		Args:  cobra.ExactArgs(2),
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := action.Run(args[0], args[1]); err != nil {
