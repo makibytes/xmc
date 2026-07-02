@@ -20,7 +20,6 @@ func NewPublishCommand(backend backends.TopicBackend, resolver TargetResolver, p
 	}
 
 	registerProduceFlags(cmd)
-	cmd.Flags().StringP("key", "K", "", "Message key for partitioning")
 
 	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
 	if hasExchRouting {
@@ -49,8 +48,6 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend,
 		return err
 	}
 
-	key, _ := cmd.Flags().GetString("key")
-
 	var extra map[string]string
 	if extraFn != nil {
 		extra = extraFn(cmd)
@@ -60,7 +57,7 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend,
 		return backend.Publish(ctx, backends.PublishOptions{
 			Topic:         topic,
 			Message:       data,
-			Key:           key,
+			Key:           pf.key,
 			Properties:    pf.properties,
 			MessageID:     pf.messageID,
 			CorrelationID: pf.correlationID,
@@ -78,14 +75,10 @@ func doPublish(cmd *cobra.Command, args []string, backend backends.TopicBackend,
 		if err != nil {
 			return err
 		}
-		recordKey := rec.Key
-		if recordKey == "" {
-			recordKey = key
-		}
 		return backend.Publish(ctx, backends.PublishOptions{
 			Topic:         topic,
 			Message:       data,
-			Key:           recordKey,
+			Key:           pf.resolveKey(rec.Key),
 			Properties:    rec.Properties,
 			MessageID:     rec.MessageID,
 			CorrelationID: rec.CorrelationID,

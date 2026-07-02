@@ -17,11 +17,7 @@ import (
 // partition/offset, IBM MQ MQMD fields, ...), which never appear in NDJSON
 // export since they aren't portable across brokers.
 func recordForDisplay(msg *backends.Message, includePayload, includeInternalMetadata bool) messageRecord {
-	rec := newMessageRecord(msg)
-	if !includePayload {
-		rec.Data = ""
-		rec.DataBase64 = ""
-	}
+	rec := newMessageRecord(msg, includePayload)
 	if includeInternalMetadata {
 		rec.InternalMetadata = pruneMap(msg.InternalMetadata)
 	}

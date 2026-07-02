@@ -18,7 +18,7 @@ func TestMessageRecord_RoundTripUTF8(t *testing.T) {
 		CorrelationID: "c1",
 		Properties:    map[string]any{"k": "v"},
 	}
-	rec := newMessageRecord(m)
+	rec := newMessageRecord(m, true)
 	if rec.Data != "hëllo" || rec.DataBase64 != "" {
 		t.Fatalf("valid UTF-8 should use Data field, got %+v", rec)
 	}
@@ -30,13 +30,27 @@ func TestMessageRecord_RoundTripUTF8(t *testing.T) {
 
 func TestMessageRecord_RoundTripBinary(t *testing.T) {
 	bin := []byte{0xff, 0xfe, 0x00, 0x01}
-	rec := newMessageRecord(&backends.Message{Data: bin})
+	rec := newMessageRecord(&backends.Message{Data: bin}, true)
 	if rec.DataBase64 == "" || rec.Data != "" {
 		t.Fatalf("binary should use DataBase64, got %+v", rec)
 	}
 	got, err := rec.payload()
 	if err != nil || !bytes.Equal(got, bin) {
 		t.Fatalf("binary round-trip failed: got %v, err %v", got, err)
+	}
+}
+
+// TestMessageRecord_IncludePayloadFalse_OmitsData guards the /simplify fix:
+// newMessageRecord must skip the UTF-8 scan and base64 encode entirely when
+// includePayload is false (used by the AI shell's metadata view, which never
+// wants the payload), rather than doing the conversion and discarding it.
+func TestMessageRecord_IncludePayloadFalse_OmitsData(t *testing.T) {
+	rec := newMessageRecord(&backends.Message{Data: []byte("hello"), MessageID: "id1"}, false)
+	if rec.Data != "" || rec.DataBase64 != "" {
+		t.Fatalf("includePayload=false should omit both payload fields, got %+v", rec)
+	}
+	if rec.MessageID != "id1" {
+		t.Fatalf("metadata fields should still be populated, got %+v", rec)
 	}
 }
 

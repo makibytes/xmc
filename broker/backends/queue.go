@@ -33,7 +33,7 @@ type Message struct {
 	ContentType   string
 	Priority      int
 	Persistent    bool
-	Key           string // Partition/routing key (Kafka); empty for most brokers
+	Key           string // Partition/routing key (Kafka, Pulsar); empty for most brokers
 
 	// Internal metadata (for display purposes)
 	InternalMetadata map[string]any

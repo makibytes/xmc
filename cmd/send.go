@@ -22,7 +22,6 @@ func NewSendCommand(backend backends.QueueBackend, resolver TargetResolver, prod
 	}
 
 	registerProduceFlags(cmd)
-	cmd.Flags().StringP("key", "K", "", "Message key for partitioning (Kafka, Pulsar)")
 
 	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
 	if hasExchRouting {
@@ -52,8 +51,6 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend, re
 		return err
 	}
 
-	key, _ := cmd.Flags().GetString("key")
-
 	var extra map[string]string
 	if extraFn != nil {
 		extra = extraFn(cmd)
@@ -70,7 +67,7 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend, re
 			ContentType:   pf.contentType,
 			Priority:      pf.priority,
 			Persistent:    pf.persistent,
-			Key:           key,
+			Key:           pf.key,
 			TTL:           pf.ttl,
 			Extra:         extra,
 		})
@@ -80,10 +77,6 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend, re
 		data, err := rec.payload()
 		if err != nil {
 			return err
-		}
-		recordKey := rec.Key
-		if recordKey == "" {
-			recordKey = key
 		}
 		return backend.Send(ctx, backends.SendOptions{
 			Queue:         queue,
@@ -95,7 +88,7 @@ func doSend(cmd *cobra.Command, args []string, backend backends.QueueBackend, re
 			ContentType:   rec.ContentType,
 			Priority:      rec.Priority,
 			Persistent:    rec.Persistent,
-			Key:           recordKey,
+			Key:           pf.resolveKey(rec.Key),
 			// messageRecord has no TTL field (TTL is a remaining-lifetime value at
 			// receive time, not portable across a store-and-forward round trip —
 			// see cmd/ndjson.go). Apply the --ttl flag as a per-batch default so

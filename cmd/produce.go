@@ -18,6 +18,7 @@ func registerProduceFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolP("persistent", "d", false, "Make message persistent")
 	cmd.Flags().StringP("reply-to", "R", "", "Reply to address for request/response")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Message properties in key=value format")
+	cmd.Flags().StringP("key", "K", "", "Message key for partitioning (Kafka, Pulsar)")
 	cmd.Flags().IntP("count", "n", 1, "Number of times to send/publish the message")
 	cmd.Flags().VarP(newDurationValue(0, time.Millisecond), "ttl", "E", "Message time-to-live (e.g. \"5s\", \"1m\"; 0 = no expiry)")
 	cmd.Flags().BoolP("lines", "l", false, "Read stdin line by line, send each line as a separate message")
@@ -34,6 +35,7 @@ type produceFlags struct {
 	replyTo       string
 	priority      int
 	persistent    bool
+	key           string
 	count         int
 	ttl           int64
 	lines         bool
@@ -49,6 +51,7 @@ func parseProduceFlags(cmd *cobra.Command) (produceFlags, error) {
 	priority, _ := cmd.Flags().GetInt("priority")
 	persistent, _ := cmd.Flags().GetBool("persistent")
 	replyto, _ := cmd.Flags().GetString("reply-to")
+	key, _ := cmd.Flags().GetString("key")
 	count, _ := cmd.Flags().GetInt("count")
 	ttl := getDuration(cmd, "ttl").Milliseconds()
 	lines, _ := cmd.Flags().GetBool("lines")
@@ -67,6 +70,7 @@ func parseProduceFlags(cmd *cobra.Command) (produceFlags, error) {
 		replyTo:       replyto,
 		priority:      priority,
 		persistent:    persistent,
+		key:           key,
 		count:         count,
 		ttl:           ttl,
 		lines:         lines,
@@ -74,6 +78,16 @@ func parseProduceFlags(cmd *cobra.Command) (produceFlags, error) {
 		properties:    properties,
 		limiter:       newRateLimiter(rate),
 	}, nil
+}
+
+// resolveKey returns recordKey (an NDJSON record's own key) when set, falling
+// back to the --key flag otherwise — the shared --ndjson key-fallback rule
+// used identically by send and publish.
+func (pf produceFlags) resolveKey(recordKey string) string {
+	if recordKey != "" {
+		return recordKey
+	}
+	return pf.key
 }
 
 // emitter is a function that sends a single message payload to the broker.

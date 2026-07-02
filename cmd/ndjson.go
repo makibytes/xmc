@@ -42,7 +42,12 @@ type messageRecord struct {
 }
 
 // newMessageRecord captures a received message as a lossless record.
-func newMessageRecord(m *backends.Message) messageRecord {
+// includePayload controls whether Data/DataBase64 are populated at all — the
+// UTF-8 validity scan and base64 encoding are real work for a large payload,
+// so callers that don't want the payload (the AI shell's metadata view, via
+// recordForDisplay in message_schema.go) skip it rather than doing the
+// conversion and discarding the result.
+func newMessageRecord(m *backends.Message, includePayload bool) messageRecord {
 	rec := messageRecord{
 		Key:           m.Key,
 		MessageID:     m.MessageID,
@@ -53,10 +58,12 @@ func newMessageRecord(m *backends.Message) messageRecord {
 		Persistent:    m.Persistent,
 		Properties:    pruneMap(m.Properties),
 	}
-	if utf8.Valid(m.Data) {
-		rec.Data = string(m.Data)
-	} else {
-		rec.DataBase64 = base64.StdEncoding.EncodeToString(m.Data)
+	if includePayload {
+		if utf8.Valid(m.Data) {
+			rec.Data = string(m.Data)
+		} else {
+			rec.DataBase64 = base64.StdEncoding.EncodeToString(m.Data)
+		}
 	}
 	return rec
 }
@@ -78,7 +85,7 @@ func (r messageRecord) payload() ([]byte, error) {
 // trailing newline is always written so records remain line-delimited
 // regardless of whether stdout is a terminal.
 func displayMessageNDJSON(w io.Writer, message *backends.Message) error {
-	data, err := json.Marshal(newMessageRecord(message))
+	data, err := json.Marshal(newMessageRecord(message, true))
 	if err != nil {
 		return fmt.Errorf("failed to marshal message record: %w", err)
 	}
