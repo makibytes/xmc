@@ -21,7 +21,7 @@ func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions)
 	if opts.Extra != nil && opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]
 	}
-	if err := a.ensureStreamWithName(sn, queueSubject(opts.Queue)); err != nil {
+	if _, err := a.ensureStreamWithName(sn, queueSubject(opts.Queue)); err != nil {
 		return nil, err
 	}
 

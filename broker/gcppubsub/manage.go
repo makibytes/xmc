@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/pubsub"
 	"google.golang.org/api/iterator"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -196,10 +197,30 @@ func PurgeQueue(args ConnArguments, name string) (int64, error) {
 		return 0, err
 	}
 	defer client.Close()
-	sub := client.Subscription("xmc-queue-" + name)
-	if err := sub.SeekToTime(context.Background(), time.Now()); err != nil {
-		return 0, fmt.Errorf("purging queue %s: %w", name, err)
+	return purgeSubscriptionByFullName(context.Background(), client, "xmc-queue-"+name)
+}
+
+// PurgeSubscription seeks an arbitrary subscription (not necessarily an
+// xmc-queue one — e.g. one selected as a Topics-window child in the AI shell
+// sidebar) to the current time, dropping its backlog. topic is accepted for
+// signature parity with Azure's compound-key PurgeSubscription but unused:
+// Pub/Sub resolves a subscription by its own name alone.
+func PurgeSubscription(args ConnArguments, topic, subscription string) (int64, error) {
+	client, err := Connect(context.Background(), args)
+	if err != nil {
+		return 0, err
 	}
-	// Pub/Sub does not report a message count for purge.
+	defer client.Close()
+	return purgeSubscriptionByFullName(context.Background(), client, subscription)
+}
+
+// purgeSubscriptionByFullName seeks the subscription named fullName to the
+// current time, which causes all backlogged messages to be acknowledged
+// (dropped). Pub/Sub does not report a message count for this operation.
+func purgeSubscriptionByFullName(ctx context.Context, client *pubsub.Client, fullName string) (int64, error) {
+	sub := client.Subscription(fullName)
+	if err := sub.SeekToTime(ctx, time.Now()); err != nil {
+		return 0, fmt.Errorf("purging subscription %s: %w", fullName, err)
+	}
 	return 0, nil
 }

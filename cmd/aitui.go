@@ -323,11 +323,21 @@ type aiTUIModel struct {
 	// Interactive picker state (for /model, /effort)
 	picker *pickerState
 
-	// Sidebar inline prompt for create/delete hotkeys
-	promptActive  bool   // true when awaiting input for create/delete
-	promptKind    string // "create" or "delete"
-	promptObjIdx  int    // index into objTypes
-	promptName    string // typed name (create) or object name (delete)
+	// Sidebar inline prompt for create/delete/purge/send hotkeys
+	promptActive   bool   // true when awaiting input
+	promptKind     string // "create", "delete", "purge", or "send"
+	promptObjIdx   int    // index into objTypes
+	promptName     string // typed name (create), object name (delete/purge), or typed payload (send)
+	promptTarget   string // send only: fixed queue/address name (captured when the prompt opens)
+	promptNodeKind string // send only: node.Kind captured when the prompt opens (drives sidebarSendViaTopic)
+
+	// Status bar hint scrolling (only used when the hint line is too wide to
+	// fit; advanced off the existing spinner tick rather than a dedicated
+	// ticker). statusScrollTick counts spinner ticks so the offset advances
+	// every few ticks, not every single one — the spinner ticks fast enough
+	// that advancing on every tick would scroll uncomfortably quickly.
+	statusScrollOffset int
+	statusScrollTick   int
 
 	// Program reference (double pointer for Bubble Tea value copy)
 	program **tea.Program
@@ -501,6 +511,13 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == tuiProposing || m.state == tuiEditing {
 			m.shimmerPhase++
 			m.setViewportContent()
+		}
+		// Advance the status bar hint scroll every few ticks (see field doc).
+		const statusScrollEveryNTicks = 4
+		m.statusScrollTick++
+		if m.statusScrollTick >= statusScrollEveryNTicks {
+			m.statusScrollTick = 0
+			m.statusScrollOffset++
 		}
 
 	case tokenMsg:
@@ -680,19 +697,27 @@ func (m aiTUIModel) paneWidths() (convWidth, sideWidth int) {
 	return
 }
 
-// renderPromptLine renders the inline prompt for sidebar create/delete hotkeys.
+// renderPromptLine renders the inline prompt for sidebar create/delete/purge/send hotkeys.
 func (m aiTUIModel) renderPromptLine() string {
 	wi := m.promptObjIdx
 	if wi < 0 || wi >= len(m.objTypes) {
 		return ""
 	}
 	label := m.objTypes[wi].label
-	if m.promptKind == "create" {
+	switch m.promptKind {
+	case "create":
 		prompt := fmt.Sprintf("Enter name for new %s: %s█", singular(label), m.promptName)
 		return infoStyle.Render(prompt)
+	case "purge", "purge-subscription":
+		prompt := fmt.Sprintf("Purge \"%s\"?  (Enter=confirm, Esc=cancel)", m.promptName)
+		return warnStyle.Render(prompt)
+	case "send", "publish":
+		prompt := fmt.Sprintf("Message payload for \"%s\": %s█", m.promptTarget, m.promptName)
+		return infoStyle.Render(prompt)
+	default: // "delete"
+		prompt := fmt.Sprintf("Delete \"%s\"?  (Enter=confirm, Esc=cancel)", m.promptName)
+		return warnStyle.Render(prompt)
 	}
-	prompt := fmt.Sprintf("Delete \"%s\"?  (Enter=confirm, Esc=cancel)", m.promptName)
-	return warnStyle.Render(prompt)
 }
 
 func (m aiTUIModel) renderMainContent() string {
@@ -745,6 +770,42 @@ func (m aiTUIModel) renderMainContent() string {
 }
 
 func (m aiTUIModel) renderStatusBar() string {
+	right := ""
+	if m.totalIn > 0 || m.totalOut > 0 {
+		right = dimStyle.Render(fmt.Sprintf("%s↓ %s↑", fmtTokens(m.totalIn), fmtTokens(m.totalOut)))
+	}
+	// Available width for the left (hint) segment, reserving space for right
+	// and at least one padding column — used by the object-pane branch below
+	// to decide whether its hint list needs to scroll.
+	hintWidth := m.width - lipgloss.Width(right) - 1
+	if hintWidth < 1 {
+		hintWidth = 1
+	}
+
+	// While a sidebar prompt (create/delete/purge/send/publish) is active,
+	// the object window's hotkeys are not live — only Enter (confirm the
+	// prompt's action) and Esc (cancel) do anything — so the hint line must
+	// reflect that instead of the stale full hotkey list underneath it.
+	if m.promptActive {
+		verb := "confirm" // delete / purge / purge-subscription
+		switch m.promptKind {
+		case "send":
+			verb = "send"
+		case "publish":
+			verb = "publish"
+		case "create":
+			verb = "create"
+		}
+		left := statusKeyStyle.Render("Enter") + statusStyle.Render(" "+verb) +
+			statusStyle.Render("  ") +
+			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
+		pad := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+		if pad < 1 {
+			pad = 1
+		}
+		return left + strings.Repeat(" ", pad) + right
+	}
+
 	var left string
 	switch m.state {
 	case tuiIdle:
@@ -781,38 +842,56 @@ func (m aiTUIModel) renderStatusBar() string {
 				statusKeyStyle.Render("Esc") + statusStyle.Render(" chat")
 		} else if m.focus != focusChat {
 			wi := int(m.focus) - 1
-			treeHint := ""
+			kvs := []hintKV{{"↑↓", "move"}, {"/", "filter"}, {"s", "sort"}}
 			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
-				treeHint = statusStyle.Render("  ") +
-					statusKeyStyle.Render("x") + statusStyle.Render(" tree")
+				kvs = append(kvs, hintKV{"x", "tree"})
 			}
-			createHint := ""
 			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].createAction != nil {
-				createHint = statusStyle.Render("  ") +
-					statusKeyStyle.Render("c") + statusStyle.Render(" create")
+				kvs = append(kvs, hintKV{"c", "create"})
 			}
-			deleteHint := ""
 			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].deleteAction != nil {
-				deleteHint = statusStyle.Render("  ") +
-					statusKeyStyle.Render("d") + statusStyle.Render(" delete")
+				kvs = append(kvs, hintKV{"d", "delete"})
 			}
-			left = statusKeyStyle.Render("↑↓") + statusStyle.Render(" move") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("/") + statusStyle.Render(" filter") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("s") + statusStyle.Render(" sort") +
-				treeHint +
-				createHint +
-				deleteHint +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Space") + statusStyle.Render(" collapse") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Enter") + statusStyle.Render(" use") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Tab") + statusStyle.Render("/") +
-				statusKeyStyle.Render("Shift+Tab") + statusStyle.Render(" next/prev") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Esc") + statusStyle.Render(" chat")
+			srpEligible := wi >= 0 && wi < len(m.objTypes) && sidebarWindowSupportsSRP(m.objTypes[wi].label)
+			// sidebarPurgeReceiveAllowed with a zero-value node gives the
+			// window-level answer: for Queues/Streams it's always true
+			// (Kind-independent); for Artemis Addresses it's always false
+			// (never allowed, regardless of node) — so the hint is never
+			// misleading, unlike per-node gating that could vary by selection.
+			purgeReceiveEligible := srpEligible && wi >= 0 && wi < len(m.objTypes) &&
+				sidebarPurgeReceiveAllowed(m.objTypes[wi].label, backends.ObjectNode{})
+			if purgeReceiveEligible && m.session != nil && m.session.spec.ManageSpec != nil && m.session.spec.ManageSpec.Purge != nil {
+				kvs = append(kvs, hintKV{"P", "purge"})
+			}
+			if srpEligible {
+				kvs = append(kvs, hintKV{"S", "send"})
+			}
+			if purgeReceiveEligible {
+				kvs = append(kvs, hintKV{"R", "receive"})
+			}
+			// Topics windows: P means publish on a top-level topic, but
+			// purge on a selected Subscription child (Azure/Google) — the
+			// hint must track which one the current selection resolves to,
+			// unlike the window-level hints above, since the two meanings
+			// would otherwise both claim the same key in the same bar.
+			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].label == "Topics" {
+				if _, ok := m.selectedTopLevelNode(); ok {
+					kvs = append(kvs, hintKV{"P", "publish"})
+				} else if child, _, ok := m.selectedChildNode(); ok && sidebarSubscriptionEligible("Topics", child.Kind) {
+					kvs = append(kvs, hintKV{"p", "peek"})
+					if m.session != nil && m.session.spec.ManageSpec != nil && m.session.spec.ManageSpec.PurgeSubscription != nil {
+						kvs = append(kvs, hintKV{"P", "purge"})
+					}
+					kvs = append(kvs, hintKV{"R", "receive"})
+				}
+			}
+			kvs = append(kvs,
+				hintKV{"Space", "collapse"},
+				hintKV{"Enter", "use"},
+				hintKV{"Tab/Shift+Tab", "next/prev"},
+				hintKV{"Esc", "chat"},
+			)
+			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else {
 			browseHint := ""
 			if len(m.objTypes) > 0 {
@@ -883,17 +962,77 @@ func (m aiTUIModel) renderStatusBar() string {
 			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
 	}
 
-	right := ""
-	if m.totalIn > 0 || m.totalOut > 0 {
-		right = dimStyle.Render(fmt.Sprintf("%s↓ %s↑", fmtTokens(m.totalIn), fmtTokens(m.totalOut)))
-	}
-
 	pad := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if pad < 1 {
 		pad = 1
 	}
 
 	return left + strings.Repeat(" ", pad) + right
+}
+
+// hintKV is one "key label" pair in a status bar hint line, e.g. {"P", "purge"}.
+type hintKV struct{ key, label string }
+
+// plainHintLine joins kvs into the unstyled text used both for width
+// measurement and as the scrolling source text.
+func plainHintLine(kvs []hintKV) string {
+	parts := make([]string, len(kvs))
+	for i, kv := range kvs {
+		parts[i] = kv.key + " " + kv.label
+	}
+	return strings.Join(parts, "  ")
+}
+
+// styledHintLine renders kvs with the normal two-color (key/label) styling,
+// matching the hand-rolled hint lines elsewhere in this file exactly.
+func styledHintLine(kvs []hintKV) string {
+	var b strings.Builder
+	for i, kv := range kvs {
+		if i > 0 {
+			b.WriteString(statusStyle.Render("  "))
+		}
+		b.WriteString(statusKeyStyle.Render(kv.key))
+		b.WriteString(statusStyle.Render(" " + kv.label))
+	}
+	return b.String()
+}
+
+// renderHintList renders kvs as a status bar hint line within width columns:
+// the normal styled two-color rendering when it fits, or — when the full
+// list is too wide for the terminal — a single-color horizontally-scrolling
+// window into the plain text (see scrollingText), advanced by offset. The
+// per-key/label color distinction is intentionally dropped only in the
+// scrolling case, where animating styled ANSI text is not worth the added
+// fragility; the common (fits) case is visually unchanged from before.
+func renderHintList(kvs []hintKV, width, offset int) string {
+	plain := plainHintLine(kvs)
+	if lipgloss.Width(plain) <= width {
+		return styledHintLine(kvs)
+	}
+	return dimStyle.Render(scrollingText(plain, width, offset))
+}
+
+// scrollingText returns a width-rune window into full, treated as a
+// repeating loop (with a small gap between the end and the restart),
+// starting at offset — a horizontally-scrolling "ticker" view used when full
+// doesn't fit within width. If full already fits, it is returned unchanged.
+func scrollingText(full string, width, offset int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(full)
+	if len(runes) <= width {
+		return full
+	}
+	const gap = "    "
+	loop := append(append([]rune{}, runes...), []rune(gap)...)
+	n := len(loop)
+	start := ((offset % n) + n) % n // safe for any offset, including negative
+	out := make([]rune, width)
+	for i := range width {
+		out[i] = loop[(start+i)%n]
+	}
+	return string(out)
 }
 
 func fmtTokens(n int) string {

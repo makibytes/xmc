@@ -83,14 +83,15 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	}
 
 	opts := backends.SubscribeOptions{
-		Topic:     topic,
-		GroupID:   groupID,
-		Timeout:   timeout,
-		Wait:      wait,
-		Verbosity: commandVerbosity(quiet),
-		Selector:  selector,
-		Durable:   durable,
-		Extra:     extra,
+		Topic:       topic,
+		GroupID:     groupID,
+		Timeout:     timeout,
+		Wait:        wait,
+		Verbosity:   commandVerbosity(quiet),
+		Selector:    selector,
+		Durable:     durable,
+		Acknowledge: true,
+		Extra:       extra,
 	}
 
 	parentCtx := cmd.Context()

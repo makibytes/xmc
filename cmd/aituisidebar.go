@@ -338,44 +338,29 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		return lines + 1
 	}
 
-	// Build display rows. In expanded hierarchical mode, flatten parent+children.
+	// Build display rows from the same flattened list used for selection
+	// (sidebarRows) — rendering order and selection order can never drift
+	// apart, and sel is a direct row index, no item↔row translation needed.
+	sRows := m.sidebarRows(idx)
 	type displayRow struct {
-		name    string
-		metric  string
-		indent  bool
-		itemIdx int // index in the items slice (-1 for children)
+		name   string
+		metric string
+		indent bool
 	}
-	var rows []displayRow
-	if w.treeView && w.hierarchical {
-		for i, node := range items {
-			rows = append(rows, displayRow{name: node.Name, metric: fmtNodeDetail(node), itemIdx: i})
-			for _, child := range node.Children {
-				label := child.Name
-				if child.Kind != "" {
-					label = child.Kind + " " + child.Name
-				}
-				rows = append(rows, displayRow{name: label, metric: fmtNodeMetric(child), indent: true, itemIdx: -1})
-			}
+	rows := make([]displayRow, len(sRows))
+	for i, r := range sRows {
+		if r.parentName == "" {
+			rows[i] = displayRow{name: r.node.Name, metric: fmtNodeDetail(r.node)}
+			continue
 		}
-	} else {
-		for i, node := range items {
-			rows = append(rows, displayRow{name: node.Name, metric: fmtNodeDetail(node), itemIdx: i})
+		label := r.node.Name
+		if r.node.Kind != "" {
+			label = r.node.Kind + " " + r.node.Name
 		}
+		rows[i] = displayRow{name: label, metric: fmtNodeMetric(r.node), indent: true}
 	}
 
-	// Windowed rendering over rows. Selection applies to items, not rows.
-	// Map selection to row index.
-	selRow := 0
-	if !w.treeView || !w.hierarchical {
-		selRow = w.sel
-	} else {
-		for ri, r := range rows {
-			if r.itemIdx == w.sel {
-				selRow = ri
-				break
-			}
-		}
-	}
+	selRow := w.sel
 
 	start, end := computeWindow(len(rows), selRow, bodyLines)
 
@@ -414,7 +399,14 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 			name = string(nameRunes[:maxName-1]) + "…"
 		}
 
-		if focused && !r.indent && r.itemIdx == w.sel {
+		if focused && ri == w.sel && r.indent {
+			marker := "▸ └ "
+			pad := width - len(marker) - 2 - len(name) - len(metricStr)
+			if pad < 1 {
+				pad = 1
+			}
+			b.WriteString(sidebarSelStyle.Render(fmt.Sprintf("%s%s%s%s", marker, name, strings.Repeat(" ", pad), metricStr)))
+		} else if focused && ri == w.sel {
 			pad := width - 4 - len(name) - len(metricStr)
 			if pad < 1 {
 				pad = 1

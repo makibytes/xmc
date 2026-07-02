@@ -31,7 +31,7 @@ func (a *QueueAdapter) Request(ctx context.Context, opts backends.RequestOptions
 	// Create the reply stream before sending the request: if the responder
 	// answers before the requestor is ready, the reply must not be dropped
 	// for lack of a stream routing the reply subject.
-	if err := a.ensureStreamWithName(streamName(replyTo), queueSubject(replyTo)); err != nil {
+	if _, err := a.ensureStreamWithName(streamName(replyTo), queueSubject(replyTo)); err != nil {
 		return nil, &backends.RequestSendError{Err: err}
 	}
 	if private {
@@ -81,5 +81,5 @@ func (a *QueueAdapter) dropReplyQueue(queue string) {
 		delete(a.consumers, queue)
 	}
 	a.js.DeleteStream(streamName(queue)) //nolint:errcheck
-	delete(a.ensured, streamName(queue))
+	delete(a.ensuredSubjects, streamName(queue))
 }

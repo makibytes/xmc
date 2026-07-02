@@ -92,6 +92,14 @@ type ManageSpec struct {
 	// Purge removes all messages from a queue and returns the count removed
 	// (or 0 when the broker does not report a count).
 	Purge func(queue string) (int64, error)
+	// PurgeSubscription removes all messages from a topic's subscription
+	// (a genuine message-storing object, not a routing pointer — currently
+	// Azure Service Bus and Google Pub/Sub only) and returns the count
+	// removed (or 0 when the broker does not report a count). topic is the
+	// parent topic's name; some brokers need it to resolve the subscription
+	// (Azure — same subscription name may exist under different topics),
+	// others ignore it (Google — subscription names are globally unique).
+	PurgeSubscription func(topic, subscription string) (int64, error)
 	// Stats returns detailed statistics for a single queue.
 	Stats func(queue string) (*backends.QueueStats, error)
 	// SetupFlags registers additional persistent flags on the manage command

@@ -64,7 +64,10 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 			},
-			Purge:       func(queue string) (int64, error) { return gcppkg.PurgeQueue(connArgs, queue) },
+			Purge: func(queue string) (int64, error) { return gcppkg.PurgeQueue(connArgs, queue) },
+			PurgeSubscription: func(topic, sub string) (int64, error) {
+				return gcppkg.PurgeSubscription(connArgs, topic, sub)
+			},
 			CreateQueue: &cmd.ManageAction{Run: func(q string) error { return gcppkg.CreateQueue(connArgs, q) }},
 			DeleteQueue: &cmd.ManageAction{Run: func(q string) error { return gcppkg.DeleteQueue(connArgs, q) }},
 			CreateTopic: &cmd.ManageAction{Run: func(t string) error { return gcppkg.CreateTopic(connArgs, t) }},

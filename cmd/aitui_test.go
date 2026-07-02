@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/makibytes/xmc/broker/backends"
 )
 
@@ -1036,5 +1038,1129 @@ func TestAppendTranscript_Cap(t *testing.T) {
 	(&m).appendTranscript("recent message\n")
 	if !strings.Contains(m.transcript.String(), "recent message") {
 		t.Error("most recently appended text should be retained after cap")
+	}
+}
+
+// ---------- P/S/R sidebar hotkeys (purge/send/receive) ----------
+
+func TestSidebarWindowSupportsSRP(t *testing.T) {
+	cases := []struct {
+		label string
+		want  bool
+	}{
+		{"Queues", true},
+		{"Streams", true},
+		{"Addresses", true},
+		{"Exchanges", true},
+		{"Topics", false},
+		{"Consumer Groups", false},
+	}
+	for _, c := range cases {
+		if got := sidebarWindowSupportsSRP(c.label); got != c.want {
+			t.Errorf("sidebarWindowSupportsSRP(%q) = %v, want %v", c.label, got, c.want)
+		}
+	}
+}
+
+func TestSidebarPurgeReceiveAllowed(t *testing.T) {
+	cases := []struct {
+		label string
+		kind  string
+		want  bool
+	}{
+		// Artemis Addresses never allow Purge/Receive, regardless of Kind: an
+		// address has no reliable 1:1 mapping to a same-named queue.
+		{"Addresses", "multicast", false},
+		{"Addresses", "anycast", false},
+		{"Addresses", "any/multi", false},
+		{"Addresses", "", false},
+		// RabbitMQ Exchanges never allow Purge/Receive either, for the same
+		// reason: an exchange routes to whatever its bindings name, not a
+		// same-named queue.
+		{"Exchanges", "topic", false},
+		{"Exchanges", "", false},
+		{"Queues", "multicast", true}, // label alone gates Queues/Streams; Kind is irrelevant there
+		{"Streams", "", true},
+	}
+	for _, c := range cases {
+		node := backends.ObjectNode{Kind: c.kind}
+		if got := sidebarPurgeReceiveAllowed(c.label, node); got != c.want {
+			t.Errorf("sidebarPurgeReceiveAllowed(%q, Kind=%q) = %v, want %v", c.label, c.kind, got, c.want)
+		}
+	}
+}
+
+func TestSidebarSendViaTopic(t *testing.T) {
+	cases := []struct {
+		label string
+		kind  string
+		want  bool
+	}{
+		{"Addresses", "multicast", true},
+		{"Addresses", "anycast", false},
+		{"Addresses", "any/multi", false},
+		{"Addresses", "", false},
+		{"Exchanges", "topic", true},   // always publishes, regardless of exchange type
+		{"Exchanges", "fanout", true},
+		{"Exchanges", "", true},
+		{"Queues", "multicast", false}, // never topic-routed outside Addresses/Exchanges
+	}
+	for _, c := range cases {
+		if got := sidebarSendViaTopic(c.label, c.kind); got != c.want {
+			t.Errorf("sidebarSendViaTopic(%q, %q) = %v, want %v", c.label, c.kind, got, c.want)
+		}
+	}
+}
+
+// newTestModelWithQueueWindow builds a model with one "Queues" window (one node
+// "orders") plus optional queue/topic adapters and a Purge func for dispatch tests.
+func newTestModelWithQueueWindow(qb backends.QueueBackend, tb backends.TopicBackend, purge func(string) (int64, error)) aiTUIModel {
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label: "Queues",
+			List: func() ([]backends.ObjectNode, error) {
+				return []backends.ObjectNode{{Name: "orders"}}, nil
+			},
+		}},
+		Purge: purge,
+	}
+	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}}
+	if qb != nil {
+		session.queueFactory = func() (backends.QueueBackend, error) { return qb, nil }
+	}
+	if tb != nil {
+		session.topicFactory = func() (backends.TopicBackend, error) { return tb, nil }
+	}
+	m := newAITUIModel(&aiSession{}, session, nil, "test", "localhost:5672")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{{Name: "orders"}}
+	m.focus = 1
+	return m
+}
+
+// newTestModelWithAddressesWindow builds a model with one "Addresses" window
+// containing a single node of the given Kind ("anycast", "multicast", "any/multi").
+func newTestModelWithAddressesWindow(kind string, qb backends.QueueBackend, tb backends.TopicBackend, purge func(string) (int64, error)) aiTUIModel {
+	node := backends.ObjectNode{Name: "orders", Kind: kind}
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label: "Addresses",
+			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
+		}},
+		Purge: purge,
+	}
+	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}}
+	if qb != nil {
+		session.queueFactory = func() (backends.QueueBackend, error) { return qb, nil }
+	}
+	if tb != nil {
+		session.topicFactory = func() (backends.TopicBackend, error) { return tb, nil }
+	}
+	m := newAITUIModel(&aiSession{}, session, nil, "test", "localhost:5672")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{node}
+	m.focus = 1
+	return m
+}
+
+// newTestModelWithExchangesWindow builds a model with one "Exchanges" window
+// (RabbitMQ-shaped) containing a single node.
+func newTestModelWithExchangesWindow(qb backends.QueueBackend, tb backends.TopicBackend, purge func(string) (int64, error)) aiTUIModel {
+	node := backends.ObjectNode{Name: "orders-exchange", Kind: "topic"}
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label:        "Exchanges",
+			Hierarchical: true,
+			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
+		}},
+		Purge: purge,
+	}
+	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}}
+	if qb != nil {
+		session.queueFactory = func() (backends.QueueBackend, error) { return qb, nil }
+	}
+	if tb != nil {
+		session.topicFactory = func() (backends.TopicBackend, error) { return tb, nil }
+	}
+	m := newAITUIModel(&aiSession{}, session, nil, "test", "localhost:5672")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{node}
+	m.focus = 1
+	return m
+}
+
+func noopPurge(count int64) func(string) (int64, error) {
+	return func(string) (int64, error) { return count, nil }
+}
+
+func TestAITUI_PurgeHotkey_ShowsConfirmPrompt(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, noopPurge(0))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if !model.promptActive || model.promptKind != "purge" {
+		t.Fatalf("promptActive=%v promptKind=%q, want active purge prompt", model.promptActive, model.promptKind)
+	}
+	if model.promptName != "orders" {
+		t.Errorf("promptName = %q, want %q", model.promptName, "orders")
+	}
+	if !strings.Contains(model.renderPromptLine(), "Purge \"orders\"?") {
+		t.Errorf("prompt line = %q, want a purge confirmation", model.renderPromptLine())
+	}
+}
+
+func TestAITUI_PurgeHotkey_NoPurgeFunc_NoOp(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, nil) // no Purge
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if model.promptActive {
+		t.Error("purge hotkey should no-op when ManageSpec.Purge is nil")
+	}
+}
+
+func TestAITUI_PurgeHotkey_MulticastAddress_NoOp(t *testing.T) {
+	m := newTestModelWithAddressesWindow("multicast", &mockQueueBackend{}, &mockTopicBackend{}, noopPurge(0))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if model.promptActive {
+		t.Error("purge hotkey should no-op on a pure-multicast Artemis address")
+	}
+}
+
+func TestAITUI_PurgeHotkey_AnycastAddress_NoOp(t *testing.T) {
+	// An anycast address is not purgeable by address name either — it has no
+	// reliable 1:1 mapping to a queue of the same name. Use the Queues window.
+	m := newTestModelWithAddressesWindow("anycast", &mockQueueBackend{}, &mockTopicBackend{}, noopPurge(0))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if model.promptActive {
+		t.Error("purge hotkey should no-op on an Artemis address, even an anycast one")
+	}
+}
+
+func TestAITUI_SendHotkey_ShowsPayloadPrompt(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, nil)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	model := updated.(aiTUIModel)
+	if !model.promptActive || model.promptKind != "send" {
+		t.Fatalf("promptActive=%v promptKind=%q, want active send prompt", model.promptActive, model.promptKind)
+	}
+	if model.promptTarget != "orders" {
+		t.Errorf("promptTarget = %q, want %q", model.promptTarget, "orders")
+	}
+	if model.promptName != "" {
+		t.Errorf("promptName should start empty, got %q", model.promptName)
+	}
+}
+
+func TestAITUI_SendPrompt_AccumulatesAndBackspaces(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, nil)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	model := updated.(aiTUIModel)
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model = updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	model = updated.(aiTUIModel)
+	if model.promptName != "hi" {
+		t.Fatalf("promptName = %q, want %q", model.promptName, "hi")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updated.(aiTUIModel)
+	if model.promptName != "h" {
+		t.Errorf("after backspace, promptName = %q, want %q", model.promptName, "h")
+	}
+}
+
+func TestAITUI_ReceiveHotkey_WrongWindow_NoOp(t *testing.T) {
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label: "Topics",
+			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
+		}},
+	}
+	m := newAITUIModel(&aiSession{}, &shellSession{spec: BrokerSpec{ManageSpec: ms}}, nil, "test", "")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{{Name: "events"}}
+	m.focus = 1
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	model := updated.(aiTUIModel)
+	if model.state != tuiIdle {
+		t.Errorf("state = %v, want tuiIdle (no-op on a Topics window)", model.state)
+	}
+	if cmd != nil {
+		t.Error("receive hotkey should return a nil cmd on a non-queue-shaped window")
+	}
+	if model.transcript.Len() != 0 {
+		t.Errorf("transcript should stay empty, got %q", model.transcript.String())
+	}
+}
+
+func TestAITUI_StatusBar_ShowsPSRHints_OnQueuesWindow(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, noopPurge(0))
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(aiTUIModel)
+	bar := m.renderStatusBar()
+	for _, want := range []string{"P", "purge", "S", "send", "R", "receive"} {
+		if !strings.Contains(bar, want) {
+			t.Errorf("status bar missing %q, got: %s", want, bar)
+		}
+	}
+}
+
+func TestAITUI_StatusBar_HidesPurgeReceiveButShowsSend_OnAddressesWindow(t *testing.T) {
+	// Addresses never allow P purge / R receive (§Phase 2 bugfix), but S
+	// send/publish is still valid there — the hint line must reflect this
+	// exactly, not the window-level "SRP eligible" tri-state it used before.
+	m := newTestModelWithAddressesWindow("anycast", &mockQueueBackend{}, &mockTopicBackend{}, noopPurge(0))
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(aiTUIModel)
+	bar := m.renderStatusBar()
+	if strings.Contains(bar, "purge") {
+		t.Errorf("status bar should not show 'purge' on an Addresses window, got: %s", bar)
+	}
+	if strings.Contains(bar, "receive") {
+		t.Errorf("status bar should not show 'receive' on an Addresses window, got: %s", bar)
+	}
+	if !strings.Contains(bar, "send") {
+		t.Errorf("status bar should still show 'send' on an Addresses window, got: %s", bar)
+	}
+}
+
+func TestAITUI_StatusBar_HidesPSRHints_OnTopicsWindow(t *testing.T) {
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label: "Topics",
+			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
+		}},
+	}
+	m := newAITUIModel(&aiSession{}, &shellSession{spec: BrokerSpec{ManageSpec: ms}}, nil, "test", "")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{{Name: "events"}}
+	m.focus = 1
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(aiTUIModel)
+	bar := m.renderStatusBar()
+	if strings.Contains(bar, "purge") || strings.Contains(bar, "send") || strings.Contains(bar, "receive") {
+		t.Errorf("status bar should hide P/S/R hints on a Topics window, got: %s", bar)
+	}
+}
+
+func TestAITUI_ReceiveHotkey_AcksMessage(t *testing.T) {
+	qb := &mockQueueBackend{receiveMsg: &backends.Message{Data: []byte("payload")}}
+	m := newTestModelWithQueueWindow(qb, nil, nil)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	model := updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from the receive hotkey")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+
+	if !qb.lastReceiveOpts.Acknowledge {
+		t.Error("R (receive) must set Acknowledge: true — that's what distinguishes it from peek")
+	}
+	if !strings.Contains(model.transcript.String(), "payload") {
+		t.Errorf("transcript should show the received payload, got: %s", model.transcript.String())
+	}
+}
+
+func TestAITUI_ReceiveHotkey_NoOpOnAnyArtemisAddress(t *testing.T) {
+	for _, kind := range []string{"anycast", "multicast", "any/multi", ""} {
+		qb := &mockQueueBackend{receiveMsg: &backends.Message{Data: []byte("x")}}
+		m := newTestModelWithAddressesWindow(kind, qb, &mockTopicBackend{}, nil)
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+		model := updated.(aiTUIModel)
+		if model.state != tuiIdle || cmd != nil {
+			t.Errorf("receive hotkey should no-op on an Artemis address of Kind %q (an address has no reliable queue mapping)", kind)
+		}
+	}
+}
+
+func TestAITUI_SendHotkey_UsesQueueBackend_ForAnycastAddress(t *testing.T) {
+	qb := &mockQueueBackend{}
+	tb := &mockTopicBackend{}
+	m := newTestModelWithAddressesWindow("anycast", qb, tb, nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	model := updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model = updated.(aiTUIModel)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from send Enter")
+	}
+	cmd()
+
+	if qb.sendCount != 1 {
+		t.Errorf("QueueBackend.Send call count = %d, want 1 (anycast address must send via QueueBackend)", qb.sendCount)
+	}
+	if tb.publishCount != 0 {
+		t.Errorf("TopicBackend.Publish call count = %d, want 0", tb.publishCount)
+	}
+	if qb.lastSendOpts.Queue != "orders" {
+		t.Errorf("Send target = %q, want %q", qb.lastSendOpts.Queue, "orders")
+	}
+}
+
+func TestAITUI_SendHotkey_UsesTopicBackend_ForMulticastAddress(t *testing.T) {
+	qb := &mockQueueBackend{}
+	tb := &mockTopicBackend{}
+	m := newTestModelWithAddressesWindow("multicast", qb, tb, nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	model := updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model = updated.(aiTUIModel)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from send Enter")
+	}
+	cmd()
+
+	if tb.publishCount != 1 {
+		t.Errorf("TopicBackend.Publish call count = %d, want 1 (multicast address must publish via TopicBackend)", tb.publishCount)
+	}
+	if qb.sendCount != 0 {
+		t.Errorf("QueueBackend.Send call count = %d, want 0", qb.sendCount)
+	}
+	if tb.lastPublishOpts.Topic != "orders" {
+		t.Errorf("Publish target = %q, want %q", tb.lastPublishOpts.Topic, "orders")
+	}
+}
+
+func TestAITUI_SendHotkey_OnExchangesWindow_ShowsPayloadPrompt(t *testing.T) {
+	m := newTestModelWithExchangesWindow(&mockQueueBackend{}, &mockTopicBackend{}, nil)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	model := updated.(aiTUIModel)
+	if !model.promptActive || model.promptKind != "send" {
+		t.Fatalf("promptActive=%v promptKind=%q, want active send prompt", model.promptActive, model.promptKind)
+	}
+	if model.promptTarget != "orders-exchange" {
+		t.Errorf("promptTarget = %q, want %q", model.promptTarget, "orders-exchange")
+	}
+}
+
+func TestAITUI_SendHotkey_UsesTopicBackend_ForExchange(t *testing.T) {
+	qb := &mockQueueBackend{}
+	tb := &mockTopicBackend{}
+	m := newTestModelWithExchangesWindow(qb, tb, nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	model := updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model = updated.(aiTUIModel)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from send Enter")
+	}
+	cmd()
+
+	if tb.publishCount != 1 {
+		t.Errorf("TopicBackend.Publish call count = %d, want 1 (exchanges must publish via TopicBackend)", tb.publishCount)
+	}
+	if qb.sendCount != 0 {
+		t.Errorf("QueueBackend.Send call count = %d, want 0", qb.sendCount)
+	}
+	if tb.lastPublishOpts.Topic != "orders-exchange" {
+		t.Errorf("Publish target = %q, want %q", tb.lastPublishOpts.Topic, "orders-exchange")
+	}
+}
+
+func TestAITUI_PurgeHotkey_OnExchangesWindow_NoOp(t *testing.T) {
+	m := newTestModelWithExchangesWindow(&mockQueueBackend{}, &mockTopicBackend{}, noopPurge(0))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if model.promptActive {
+		t.Error("purge hotkey should no-op on a RabbitMQ Exchanges window")
+	}
+}
+
+func TestAITUI_ReceiveHotkey_OnExchangesWindow_NoOp(t *testing.T) {
+	m := newTestModelWithExchangesWindow(&mockQueueBackend{}, &mockTopicBackend{}, nil)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	model := updated.(aiTUIModel)
+	if model.state != tuiIdle {
+		t.Errorf("state = %v, want tuiIdle (receive should no-op on Exchanges)", model.state)
+	}
+}
+
+func TestAITUI_StatusBar_ShowsSendButHidesPurgeReceive_OnExchangesWindow(t *testing.T) {
+	m := newTestModelWithExchangesWindow(&mockQueueBackend{}, &mockTopicBackend{}, noopPurge(0))
+	bar := m.renderStatusBar()
+	if !strings.Contains(bar, "S") || !strings.Contains(bar, "send") {
+		t.Errorf("status bar = %q, want it to show the S/send hint on an Exchanges window", bar)
+	}
+	if strings.Contains(bar, "purge") {
+		t.Errorf("status bar = %q, should not show a purge hint on an Exchanges window", bar)
+	}
+	if strings.Contains(bar, "receive") {
+		t.Errorf("status bar = %q, should not show a receive hint on an Exchanges window", bar)
+	}
+}
+
+func TestAITUI_SendPrompt_KeySpace_AppendsSpace(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, nil)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	model := updated.(aiTUIModel)
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	model = updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	model = updated.(aiTUIModel)
+
+	if model.promptName != "a b" {
+		t.Errorf("promptName = %q, want %q (Space must work in the send payload prompt)", model.promptName, "a b")
+	}
+}
+
+func TestAITUI_PublishPrompt_KeySpace_AppendsSpace(t *testing.T) {
+	m := newTestModelWithTopicsWindow(&mockTopicBackend{})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if model.promptKind != "publish" {
+		t.Fatalf("promptKind = %q, want %q", model.promptKind, "publish")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	model = updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	model = updated.(aiTUIModel)
+
+	if model.promptName != "a b" {
+		t.Errorf("promptName = %q, want %q (Space must work in the publish payload prompt)", model.promptName, "a b")
+	}
+}
+
+func TestAITUI_StatusBar_PromptActive_ShowsOnlyEnterEsc(t *testing.T) {
+	cases := []struct {
+		promptKind string
+		wantVerb   string
+	}{
+		{"send", "send"},
+		{"publish", "publish"},
+		{"create", "create"},
+		{"delete", "confirm"},
+		{"purge", "confirm"},
+		{"purge-subscription", "confirm"},
+	}
+	for _, c := range cases {
+		m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, noopPurge(0))
+		m.promptActive = true
+		m.promptKind = c.promptKind
+		m.promptObjIdx = 0
+
+		bar := m.renderStatusBar()
+		if !strings.Contains(bar, "Enter") || !strings.Contains(bar, c.wantVerb) {
+			t.Errorf("promptKind=%q: status bar = %q, want it to contain Enter/%s", c.promptKind, bar, c.wantVerb)
+		}
+		if !strings.Contains(bar, "Esc") || !strings.Contains(bar, "cancel") {
+			t.Errorf("promptKind=%q: status bar = %q, want it to contain Esc/cancel", c.promptKind, bar)
+		}
+		// None of the object-window hotkeys (sort, filter, create, delete,
+		// purge, send, receive, tree) should leak through while a prompt is up.
+		for _, stale := range []string{"sort", "filter", "tree", "collapse", "next/prev"} {
+			if strings.Contains(bar, stale) {
+				t.Errorf("promptKind=%q: status bar = %q, should not contain stale hint %q while prompt is active", c.promptKind, bar, stale)
+			}
+		}
+	}
+}
+
+func TestAITUI_PurgeHotkey_InvokesManageSpecPurge(t *testing.T) {
+	var gotName string
+	purge := func(name string) (int64, error) {
+		gotName = name
+		return 3, nil
+	}
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, purge)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from purge Enter")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+
+	if gotName != "orders" {
+		t.Errorf("ManageSpec.Purge called with %q, want %q", gotName, "orders")
+	}
+	if !strings.Contains(model.transcript.String(), "purged 3 messages") {
+		t.Errorf("transcript should report the purged count, got: %s", model.transcript.String())
+	}
+}
+
+// ---------- sidebarRows selection model (child-row navigation) ----------
+
+// newTestModelWithExchangeChildren builds a RabbitMQ-style hierarchical
+// "Exchanges" window with one exchange node having one binding-style child.
+func newTestModelWithExchangeChildren(purge func(string) (int64, error), deleteAction *ManageAction) aiTUIModel {
+	node := backends.ObjectNode{
+		Name: "amq.topic",
+		Children: []backends.ObjectNode{
+			{Name: "my-queue", Kind: "binding key=#"},
+		},
+	}
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label:        "Exchanges",
+			Hierarchical: true,
+			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
+		}},
+		Purge:       purge,
+		DeleteQueue: deleteAction,
+	}
+	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}}
+	m := newAITUIModel(&aiSession{}, session, nil, "test", "")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{node}
+	m.objTypes[0].createAction = ms.CreateQueue
+	m.objTypes[0].deleteAction = deleteAction
+	m.focus = 1
+	return m
+}
+
+func TestSidebarRows_FlatWindow_MatchesTopLevelNodes(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, nil)
+	rows := m.sidebarRows(0)
+	if len(rows) != 1 || rows[0].node.Name != "orders" || rows[0].parentName != "" {
+		t.Errorf("sidebarRows for flat window = %+v, want one top-level row named orders", rows)
+	}
+}
+
+func TestSidebarRows_TreeViewOff_ChildrenExcluded(t *testing.T) {
+	m := newTestModelWithExchangeChildren(nil, nil)
+	rows := m.sidebarRows(0)
+	if len(rows) != 1 {
+		t.Errorf("sidebarRows with treeView off = %d rows, want 1 (children hidden)", len(rows))
+	}
+}
+
+func TestSidebarRows_TreeViewOn_IncludesChildrenWithParentName(t *testing.T) {
+	m := newTestModelWithExchangeChildren(nil, nil)
+	m.objTypes[0].treeView = true
+	rows := m.sidebarRows(0)
+	if len(rows) != 2 {
+		t.Fatalf("sidebarRows with treeView on = %d rows, want 2 (parent+child)", len(rows))
+	}
+	if rows[0].parentName != "" {
+		t.Errorf("row 0 (parent) parentName = %q, want empty", rows[0].parentName)
+	}
+	if rows[1].node.Name != "my-queue" || rows[1].parentName != "amq.topic" {
+		t.Errorf("row 1 (child) = %+v, want Name=my-queue parentName=amq.topic", rows[1])
+	}
+}
+
+func TestAITUI_ChildRowSelectable_NavigatesAndHighlights(t *testing.T) {
+	m := newTestModelWithExchangeChildren(nil, nil)
+	m.objTypes[0].treeView = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model := updated.(aiTUIModel)
+	if model.objTypes[0].sel != 1 {
+		t.Fatalf("sel after Down = %d, want 1 (the child row)", model.objTypes[0].sel)
+	}
+	node, parent, ok := model.selectedChildNode()
+	if !ok || node.Name != "my-queue" || parent != "amq.topic" {
+		t.Errorf("selectedChildNode() = (%+v, %q, %v), want (my-queue, amq.topic, true)", node, parent, ok)
+	}
+	if _, ok := model.selectedTopLevelNode(); ok {
+		t.Error("selectedTopLevelNode() should fail when a child row is selected")
+	}
+
+	sidebar, _ := model.renderSidebar(40, 20)
+	if !strings.Contains(sidebar, "▸") {
+		t.Errorf("selected child row should render a selection marker, got:\n%s", sidebar)
+	}
+}
+
+func TestAITUI_TreeToggle_PreservesSelectionByIdentity(t *testing.T) {
+	m := newTestModelWithExchangeChildren(nil, nil)
+	// Select the (only) top-level node, then toggle tree view on: the node's
+	// row index doesn't change here (children only ever insert AFTER their
+	// parent), but this guards the general mechanism regardless.
+	if m.objTypes[0].sel != 0 {
+		t.Fatalf("initial sel = %d, want 0", m.objTypes[0].sel)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model := updated.(aiTUIModel)
+	node, ok := model.selectedTopLevelNode()
+	if !ok || node.Name != "amq.topic" {
+		t.Errorf("selection should still be amq.topic after tree toggle, got (%+v, %v)", node, ok)
+	}
+}
+
+func TestAITUI_DeleteHotkey_NoOpsOnChildRow(t *testing.T) {
+	var deleteCalls []string
+	action := &ManageAction{Run: func(name string) error {
+		deleteCalls = append(deleteCalls, name)
+		return nil
+	}}
+	m := newTestModelWithExchangeChildren(nil, action)
+	m.objTypes[0].treeView = true
+
+	// Move onto the child row, then press 'd' — must NOT fire delete using
+	// the child's name (this is exactly the regression the sidebarRows
+	// refactor must guard against for RabbitMQ Exchanges / NATS Streams).
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model := updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = updated.(aiTUIModel)
+
+	if model.promptActive {
+		t.Error("'d' on a child row should not open a delete prompt")
+	}
+	if len(deleteCalls) != 0 {
+		t.Errorf("delete action should not have been invoked, got calls: %v", deleteCalls)
+	}
+}
+
+func TestAITUI_PurgeSendReceiveHotkeys_NoOpOnChildRow(t *testing.T) {
+	qb := &mockQueueBackend{}
+	purge := func(string) (int64, error) { return 0, nil }
+	m := newTestModelWithExchangeChildren(purge, nil)
+	m.objTypes[0].treeView = true
+	m.session.queueFactory = func() (backends.QueueBackend, error) { return qb, nil }
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model := updated.(aiTUIModel)
+
+	for _, key := range []string{"P", "S", "R"} {
+		updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		model = updated.(aiTUIModel)
+		if model.promptActive {
+			t.Errorf("%q on a child row should not open a prompt", key)
+			model.promptActive = false
+		}
+		if cmd != nil {
+			// R fires a tea.Cmd directly (no prompt); executing it must not
+			// have been reachable in the first place.
+			t.Errorf("%q on a child row should return a nil cmd, got non-nil", key)
+		}
+	}
+}
+
+// ---------- P = publish on Topics top-level nodes ----------
+
+func newTestModelWithTopicsWindow(tb backends.TopicBackend) aiTUIModel {
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label: "Topics",
+			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
+		}},
+	}
+	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}}
+	if tb != nil {
+		session.topicFactory = func() (backends.TopicBackend, error) { return tb, nil }
+	}
+	m := newAITUIModel(&aiSession{}, session, nil, "test", "")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{{Name: "events"}}
+	m.focus = 1
+	return m
+}
+
+func TestAITUI_PublishHotkey_ShowsPayloadPrompt(t *testing.T) {
+	m := newTestModelWithTopicsWindow(&mockTopicBackend{})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if !model.promptActive || model.promptKind != "publish" {
+		t.Fatalf("promptActive=%v promptKind=%q, want active publish prompt", model.promptActive, model.promptKind)
+	}
+	if model.promptTarget != "events" {
+		t.Errorf("promptTarget = %q, want %q", model.promptTarget, "events")
+	}
+}
+
+func TestAITUI_PublishHotkey_DispatchesToTopicBackend(t *testing.T) {
+	tb := &mockTopicBackend{}
+	m := newTestModelWithTopicsWindow(tb)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model = updated.(aiTUIModel)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from publish Enter")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+
+	if tb.publishCount != 1 {
+		t.Errorf("Publish call count = %d, want 1", tb.publishCount)
+	}
+	if tb.lastPublishOpts.Topic != "events" {
+		t.Errorf("Publish target = %q, want %q", tb.lastPublishOpts.Topic, "events")
+	}
+	if !strings.Contains(model.transcript.String(), "▶ publish Topic \"events\"") {
+		t.Errorf("transcript should show the publish verb, got: %s", model.transcript.String())
+	}
+	if !strings.Contains(model.transcript.String(), "published") {
+		t.Errorf("transcript should confirm publish, got: %s", model.transcript.String())
+	}
+}
+
+func TestAITUI_PurgeHotkey_OnTopicsWindow_PublishesInstead(t *testing.T) {
+	// P on Queues/Streams/Addresses means purge; on a Topics window it means
+	// publish instead — regression check that the two don't cross-fire, e.g.
+	// that a Topics window never opens a purge confirm.
+	m := newTestModelWithTopicsWindow(&mockTopicBackend{})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if model.promptKind == "purge" {
+		t.Error("P on a Topics window should never open a purge prompt")
+	}
+}
+
+func TestAITUI_StatusBar_ShowsPublishHint_OnTopicsWindow(t *testing.T) {
+	m := newTestModelWithTopicsWindow(&mockTopicBackend{})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(aiTUIModel)
+	bar := m.renderStatusBar()
+	if !strings.Contains(bar, "P") || !strings.Contains(bar, "publish") {
+		t.Errorf("status bar should show 'P publish' on a Topics window, got: %s", bar)
+	}
+	if strings.Contains(bar, "purge") {
+		t.Errorf("status bar should not show 'purge' on a Topics window, got: %s", bar)
+	}
+}
+
+// ---------- Subscription children on Topics windows (P purge / p peek / R receive) ----------
+
+func TestSidebarSubscriptionEligible(t *testing.T) {
+	cases := []struct {
+		label string
+		kind  string
+		want  bool
+	}{
+		{"Topics", "subscription", true}, // Azure/Google
+		{"Topics", "sqs", false},         // AWS: routing pointer, Kind is the SNS protocol
+		{"Topics", "http", false},        // AWS: another protocol
+		{"Topics", "", false},
+		{"Exchanges", "subscription", false}, // wrong window
+		{"Queues", "subscription", false},
+	}
+	for _, c := range cases {
+		if got := sidebarSubscriptionEligible(c.label, c.kind); got != c.want {
+			t.Errorf("sidebarSubscriptionEligible(%q, %q) = %v, want %v", c.label, c.kind, got, c.want)
+		}
+	}
+}
+
+// newTestModelWithTopicSubscriptions builds a Topics window with one topic
+// node having one "subscription"-kind child, mirroring Azure/Google's
+// ListTopicsWithSubscriptions shape.
+func newTestModelWithTopicSubscriptions(tb backends.TopicBackend, purgeSub func(topic, sub string) (int64, error)) aiTUIModel {
+	node := backends.ObjectNode{
+		Name: "orders-topic",
+		Children: []backends.ObjectNode{
+			{Name: "orders-sub", Kind: "subscription"},
+		},
+	}
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label:        "Topics",
+			Hierarchical: true,
+			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
+		}},
+		PurgeSubscription: purgeSub,
+	}
+	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}}
+	if tb != nil {
+		session.topicFactory = func() (backends.TopicBackend, error) { return tb, nil }
+	}
+	m := newAITUIModel(&aiSession{}, session, nil, "test", "")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{node}
+	m.objTypes[0].treeView = true
+	m.focus = 1
+	return m
+}
+
+func selectSubscriptionChild(t *testing.T, m aiTUIModel) aiTUIModel {
+	t.Helper()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model := updated.(aiTUIModel)
+	if _, _, ok := model.selectedChildNode(); !ok {
+		t.Fatal("expected the child (subscription) row to be selected after Down")
+	}
+	return model
+}
+
+func TestAITUI_PeekHotkey_OnSubscriptionChild_Google(t *testing.T) {
+	tb := &mockTopicBackend{subscribeMsg: &backends.Message{Data: []byte("payload")}}
+	m := newTestModelWithTopicSubscriptions(tb, nil)
+	m = selectSubscriptionChild(t, m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model := updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from peek on a subscription child")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+
+	if tb.subscribeCount != 1 {
+		t.Fatalf("Subscribe call count = %d, want 1", tb.subscribeCount)
+	}
+	if tb.lastSubscribeOpts.Acknowledge {
+		t.Error("peek must set Acknowledge: false (non-destructive)")
+	}
+	if tb.lastSubscribeOpts.Topic != "orders-topic" {
+		t.Errorf("Subscribe topic = %q, want %q", tb.lastSubscribeOpts.Topic, "orders-topic")
+	}
+	if tb.lastSubscribeOpts.Extra["subscription"] != "orders-sub" {
+		t.Errorf("Subscribe Extra[subscription] = %q, want %q", tb.lastSubscribeOpts.Extra["subscription"], "orders-sub")
+	}
+	if !strings.Contains(model.transcript.String(), "payload") {
+		t.Errorf("transcript should show the peeked payload, got: %s", model.transcript.String())
+	}
+}
+
+func TestAITUI_ReceiveHotkey_OnSubscriptionChild_Google(t *testing.T) {
+	tb := &mockTopicBackend{subscribeMsg: &backends.Message{Data: []byte("payload")}}
+	m := newTestModelWithTopicSubscriptions(tb, nil)
+	m = selectSubscriptionChild(t, m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	model := updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from receive on a subscription child")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	_ = updated.(aiTUIModel)
+
+	if !tb.lastSubscribeOpts.Acknowledge {
+		t.Error("R (receive) must set Acknowledge: true")
+	}
+	if tb.lastSubscribeOpts.Extra["subscription"] != "orders-sub" {
+		t.Errorf("Subscribe Extra[subscription] = %q, want %q", tb.lastSubscribeOpts.Extra["subscription"], "orders-sub")
+	}
+}
+
+func TestAITUI_PurgeHotkey_OnSubscriptionChild_ShowsConfirmPrompt(t *testing.T) {
+	purge := func(topic, sub string) (int64, error) { return 0, nil }
+	m := newTestModelWithTopicSubscriptions(&mockTopicBackend{}, purge)
+	m = selectSubscriptionChild(t, m)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if !model.promptActive || model.promptKind != "purge-subscription" {
+		t.Fatalf("promptActive=%v promptKind=%q, want active purge-subscription prompt", model.promptActive, model.promptKind)
+	}
+	if model.promptName != "orders-sub" || model.promptTarget != "orders-topic" {
+		t.Errorf("promptName=%q promptTarget=%q, want orders-sub / orders-topic", model.promptName, model.promptTarget)
+	}
+}
+
+func TestAITUI_PurgeHotkey_OnSubscriptionChild_InvokesPurgeSubscriptionWithCompoundKey(t *testing.T) {
+	var gotTopic, gotSub string
+	purge := func(topic, sub string) (int64, error) {
+		gotTopic, gotSub = topic, sub
+		return 5, nil
+	}
+	m := newTestModelWithTopicSubscriptions(&mockTopicBackend{}, purge)
+	m = selectSubscriptionChild(t, m)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(aiTUIModel)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from purge-subscription Enter")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	model = updated.(aiTUIModel)
+
+	if gotTopic != "orders-topic" || gotSub != "orders-sub" {
+		t.Errorf("PurgeSubscription called with (%q, %q), want (orders-topic, orders-sub)", gotTopic, gotSub)
+	}
+	if !strings.Contains(model.transcript.String(), "purged 5 messages") {
+		t.Errorf("transcript should report the purged count, got: %s", model.transcript.String())
+	}
+}
+
+func TestAITUI_PurgeHotkey_OnSubscriptionChild_NoOpWhenPurgeSubscriptionNil(t *testing.T) {
+	m := newTestModelWithTopicSubscriptions(&mockTopicBackend{}, nil) // no PurgeSubscription wired
+	m = selectSubscriptionChild(t, m)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	model := updated.(aiTUIModel)
+	if model.promptActive {
+		t.Error("P on a subscription child should no-op when ManageSpec.PurgeSubscription is nil")
+	}
+}
+
+func TestAITUI_SubscriptionHotkeys_NoOpOnNonSubscriptionChild(t *testing.T) {
+	// AWS-style child: Kind is the SNS protocol, not "subscription" — must
+	// not be treated as a purgeable/receivable subscription.
+	node := backends.ObjectNode{
+		Name:     "orders-topic",
+		Children: []backends.ObjectNode{{Name: "orders-queue", Kind: "sqs"}},
+	}
+	ms := &ManageSpec{
+		Objects: []ObjectType{{
+			Label:        "Topics",
+			Hierarchical: true,
+			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
+		}},
+		PurgeSubscription: func(string, string) (int64, error) { return 0, nil },
+	}
+	tb := &mockTopicBackend{}
+	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}, topicFactory: func() (backends.TopicBackend, error) { return tb, nil }}
+	m := newAITUIModel(&aiSession{}, session, nil, "test", "")
+	m.loadingObjects = false
+	m.objTypes[0].nodes = []backends.ObjectNode{node}
+	m.objTypes[0].treeView = true
+	m.focus = 1
+	m = selectSubscriptionChild(t, m)
+
+	for _, key := range []string{"P", "p", "R"} {
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		model := updated.(aiTUIModel)
+		if model.promptActive {
+			t.Errorf("%q on an AWS-style (non-subscription) child should not open a prompt", key)
+		}
+		if cmd != nil {
+			t.Errorf("%q on an AWS-style (non-subscription) child should return a nil cmd", key)
+		}
+	}
+	if tb.subscribeCount != 0 {
+		t.Errorf("Subscribe should never have been called, got %d calls", tb.subscribeCount)
+	}
+}
+
+func TestAITUI_StatusBar_TracksSelectionDepth_OnTopicsWindow(t *testing.T) {
+	m := newTestModelWithTopicSubscriptions(&mockTopicBackend{}, func(string, string) (int64, error) { return 0, nil })
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(aiTUIModel)
+
+	// Top-level topic selected: only "P publish".
+	bar := m.renderStatusBar()
+	if !strings.Contains(bar, "publish") {
+		t.Errorf("top-level selection: status bar should show 'publish', got: %s", bar)
+	}
+	if strings.Contains(bar, "peek") || strings.Contains(bar, "receive") {
+		t.Errorf("top-level selection: status bar should not show peek/receive, got: %s", bar)
+	}
+
+	// Subscription child selected: "P purge", "p peek", "R receive".
+	m = selectSubscriptionChild(t, m)
+	bar = m.renderStatusBar()
+	for _, want := range []string{"purge", "peek", "receive"} {
+		if !strings.Contains(bar, want) {
+			t.Errorf("child selection: status bar missing %q, got: %s", want, bar)
+		}
+	}
+	if strings.Contains(bar, "publish") {
+		t.Errorf("child selection: status bar should not show 'publish', got: %s", bar)
+	}
+}
+
+// ---------- Status bar horizontal scrolling ----------
+
+func TestScrollingText_FitsWithinWidth_ReturnedUnchanged(t *testing.T) {
+	got := scrollingText("P purge  S send", 40, 0)
+	if got != "P purge  S send" {
+		t.Errorf("scrollingText(fits) = %q, want unchanged", got)
+	}
+}
+
+func TestScrollingText_Overflow_ReturnsWindowOfCorrectLength(t *testing.T) {
+	full := "P purge  S send  R receive  x tree  c create  d delete"
+	got := scrollingText(full, 10, 0)
+	if len([]rune(got)) != 10 {
+		t.Errorf("scrollingText window length = %d, want 10", len([]rune(got)))
+	}
+	if got != "P purge  S" {
+		t.Errorf("scrollingText(offset=0) = %q, want the first 10 runes", got)
+	}
+}
+
+func TestScrollingText_AdvancesWithOffset(t *testing.T) {
+	full := "P purge  S send  R receive"
+	first := scrollingText(full, 8, 0)
+	second := scrollingText(full, 8, 3)
+	if first == second {
+		t.Error("scrollingText should produce a different window as offset advances")
+	}
+	// Advancing by 3 should shift the window by exactly 3 runes.
+	if scrollingText(full, 8, 3) != string([]rune(full)[3:11]) {
+		t.Errorf("scrollingText(offset=3) = %q, want a 3-rune shift", second)
+	}
+}
+
+func TestScrollingText_WrapsAroundTheLoop(t *testing.T) {
+	full := "ABCDE" // short text, easy to reason about wrap-around
+	// Loop = "ABCDE    " (5 + 4-space gap = 9 runes). At offset 7, window of
+	// width 5 should wrap from the gap back to the start of "ABCDE".
+	got := scrollingText(full, 5, 7)
+	if len([]rune(got)) != 5 {
+		t.Fatalf("scrollingText wrap window length = %d, want 5", len([]rune(got)))
+	}
+	// Confirm it actually wrapped (contains a character from the start of
+	// the loop, not just trailing gap spaces).
+	if !strings.ContainsAny(got, "ABCDE") {
+		t.Errorf("scrollingText(wrap) = %q, expected it to wrap back into the source text", got)
+	}
+}
+
+func TestScrollingText_ZeroWidth_ReturnsEmpty(t *testing.T) {
+	if got := scrollingText("anything", 0, 0); got != "" {
+		t.Errorf("scrollingText(width=0) = %q, want empty", got)
+	}
+}
+
+func TestRenderHintList_Fits_UsesStyledTwoColorRendering(t *testing.T) {
+	kvs := []hintKV{{"P", "purge"}, {"S", "send"}}
+	got := renderHintList(kvs, 80, 0)
+	// The styled rendering embeds ANSI codes; plain text alone would not
+	// round-trip through lipgloss styling, so just confirm both fragments'
+	// plain text are present and it matches the styled builder directly.
+	want := styledHintLine(kvs)
+	if got != want {
+		t.Errorf("renderHintList(fits) = %q, want styled line %q", got, want)
+	}
+}
+
+func TestRenderHintList_Overflow_Scrolls(t *testing.T) {
+	kvs := []hintKV{{"P", "purge"}, {"S", "send"}, {"R", "receive"}, {"x", "tree"}}
+	narrow := lipgloss.Width(plainHintLine(kvs)) - 5 // force overflow
+	got := renderHintList(kvs, narrow, 0)
+	if lipgloss.Width(got) > narrow {
+		t.Errorf("renderHintList(overflow) width = %d, want <= %d", lipgloss.Width(got), narrow)
+	}
+}
+
+func TestAITUI_StatusBar_ScrollOffsetAdvances_OnSpinnerTick(t *testing.T) {
+	m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, noopPurge(0))
+	before := m.statusScrollOffset
+	// Fire enough spinner ticks to cross the advance threshold.
+	for range 5 {
+		updated, _ := m.Update(spinner.TickMsg{ID: m.spinner.ID()})
+		m = updated.(aiTUIModel)
+	}
+	if m.statusScrollOffset <= before {
+		t.Errorf("statusScrollOffset should advance after spinner ticks, got %d (was %d)", m.statusScrollOffset, before)
 	}
 }

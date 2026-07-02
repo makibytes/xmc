@@ -80,6 +80,22 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	receiveCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	if !opts.Acknowledge {
+		// Non-destructive: PeekMessages never acks/completes, mirroring the
+		// queue-side peek() path — genuinely no consumption, not Nack-based.
+		msgs, err := recv.PeekMessages(receiveCtx, 1, nil)
+		if err != nil {
+			if receiveCtx.Err() != nil {
+				return nil, backends.ErrNoMessageAvailable
+			}
+			return nil, fmt.Errorf("peeking subscription %s/%s: %w", opts.Topic, subName, err)
+		}
+		if len(msgs) == 0 {
+			return nil, backends.ErrNoMessageAvailable
+		}
+		return sbToBackendMessage(msgs[0]), nil
+	}
+
 	msgs, err := recv.ReceiveMessages(receiveCtx, 1, nil)
 	if err != nil {
 		if receiveCtx.Err() != nil {
@@ -108,4 +124,3 @@ func (a *TopicAdapter) Close() error {
 	a.closeSenders(ctx)
 	return a.senderCache.client.Close(ctx)
 }
-

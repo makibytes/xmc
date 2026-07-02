@@ -564,9 +564,14 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loadingObjects = true
 			return m, m.startLoadObjects()
 		case "x":
-			// x toggles the hierarchical tree-view (show/hide children).
+			// x toggles the hierarchical tree-view (show/hide children). Toggling
+			// changes which row index sel points at (children insert rows between
+			// top-level items), so re-resolve sel by node identity afterward
+			// instead of leaving the raw index pointing at a now-different row.
 			if m.objTypes[wi].hierarchical {
+				selectedName := m.selectedName()
 				m.objTypes[wi].treeView = !m.objTypes[wi].treeView
+				m.objTypes[wi].sel = indexOfRowNamed(m.sidebarRows(wi), selectedName)
 			}
 			return m, nil
 		case "c":
@@ -575,14 +580,47 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "d":
-			name := m.selectedName()
-			if name != "" && m.objTypes[wi].deleteAction != nil {
-				m.startPrompt("delete", wi, name)
+			node, ok := m.selectedTopLevelNode()
+			if ok && node.Name != "" && m.objTypes[wi].deleteAction != nil {
+				m.startPrompt("delete", wi, node.Name)
 			}
 			return m, nil
 		case "p":
-			name := m.selectedName()
-			if name == "" {
+			if child, parentName, ok := m.selectedChildNode(); ok {
+				if !sidebarSubscriptionEligible(m.objTypes[wi].label, child.Kind) || child.Name == "" {
+					return m, nil
+				}
+				desc := fmt.Sprintf("▶ peek Subscription \"%s\"", child.Name)
+				m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+				m.state = tuiExecuting
+				topic, sub, session := parentName, child.Name, m.session
+				return m, func() tea.Msg {
+					ta, err := session.getTopicAdapter()
+					if err != nil {
+						return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					msg, err := ta.Subscribe(ctx, backends.SubscribeOptions{
+						Topic:       topic,
+						Extra:       map[string]string{"subscription": sub},
+						Acknowledge: false,
+						Timeout:     1,
+						Wait:        false,
+					})
+					if err != nil {
+						if errors.Is(err, backends.ErrNoMessageAvailable) {
+							return sideActionMsg{action: "   └ (no messages available)"}
+						}
+						return sideActionMsg{err: err}
+					}
+					result := formatMessagePayload(msg)
+					return sideActionMsg{action: result}
+				}
+			}
+
+			node, ok := m.selectedTopLevelNode()
+			if !ok || node.Name == "" {
 				return m, nil
 			}
 			switch m.objTypes[wi].label {
@@ -590,6 +628,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			default:
 				return m, nil
 			}
+			name := node.Name
 			desc := fmt.Sprintf("▶ peek %s \"%s\"", singular(m.objTypes[wi].label), name)
 			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 			m.state = tuiExecuting
@@ -614,7 +653,121 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					return sideActionMsg{err: err}
 				}
-				result := formatPeekMessage(msg)
+				result := formatMessagePayload(msg)
+				return sideActionMsg{action: result}
+			}
+		case "P":
+			label := m.objTypes[wi].label
+			if label == "Topics" {
+				// On a Topics window, P means publish to the selected
+				// top-level topic — a different meaning of the same key than
+				// on Queues/Streams (purge), disambiguated by what's
+				// selected: a top-level Topics row is never purgeable
+				// (there's no queue-like storage on a topic itself), while a
+				// selected Subscription child (Azure/Google only) IS
+				// purgeable — see the child-row branch below.
+				if child, parentName, ok := m.selectedChildNode(); ok {
+					if !sidebarSubscriptionEligible(label, child.Kind) || child.Name == "" {
+						return m, nil
+					}
+					if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
+						return m, nil
+					}
+					m.promptTarget = parentName
+					m.startPrompt("purge-subscription", wi, child.Name)
+					return m, nil
+				}
+				if node, ok := m.selectedTopLevelNode(); ok && node.Name != "" {
+					m.promptTarget = node.Name
+					m.startPrompt("publish", wi, "")
+				}
+				return m, nil
+			}
+			node, ok := m.selectedTopLevelNode()
+			if !ok || node.Name == "" || !sidebarWindowSupportsSRP(label) {
+				return m, nil
+			}
+			if !sidebarPurgeReceiveAllowed(label, node) {
+				return m, nil
+			}
+			if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
+				return m, nil
+			}
+			m.startPrompt("purge", wi, node.Name)
+			return m, nil
+		case "S":
+			node, ok := m.selectedTopLevelNode()
+			if !ok || node.Name == "" || !sidebarWindowSupportsSRP(m.objTypes[wi].label) {
+				return m, nil
+			}
+			m.promptTarget = node.Name
+			m.promptNodeKind = node.Kind
+			m.startPrompt("send", wi, "")
+			return m, nil
+		case "R":
+			if child, parentName, ok := m.selectedChildNode(); ok {
+				if !sidebarSubscriptionEligible(m.objTypes[wi].label, child.Kind) || child.Name == "" {
+					return m, nil
+				}
+				desc := fmt.Sprintf("▶ receive Subscription \"%s\"", child.Name)
+				m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+				m.state = tuiExecuting
+				topic, sub, session := parentName, child.Name, m.session
+				return m, func() tea.Msg {
+					ta, err := session.getTopicAdapter()
+					if err != nil {
+						return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					msg, err := ta.Subscribe(ctx, backends.SubscribeOptions{
+						Topic:       topic,
+						Extra:       map[string]string{"subscription": sub},
+						Acknowledge: true,
+						Timeout:     1,
+						Wait:        false,
+					})
+					if err != nil {
+						if errors.Is(err, backends.ErrNoMessageAvailable) {
+							return sideActionMsg{action: "   └ (no messages available)"}
+						}
+						return sideActionMsg{err: err}
+					}
+					result := formatMessagePayload(msg)
+					return sideActionMsg{action: result}
+				}
+			}
+			node, ok := m.selectedTopLevelNode()
+			if !ok || node.Name == "" || !sidebarWindowSupportsSRP(m.objTypes[wi].label) {
+				return m, nil
+			}
+			if !sidebarPurgeReceiveAllowed(m.objTypes[wi].label, node) {
+				return m, nil
+			}
+			desc := fmt.Sprintf("▶ receive %s \"%s\"", singular(m.objTypes[wi].label), node.Name)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.state = tuiExecuting
+			queue := node.Name
+			return m, func() tea.Msg {
+				qa, err := m.session.getQueueAdapter()
+				if err != nil {
+					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				msg, err := qa.Receive(ctx, backends.ReceiveOptions{
+					Queue:       queue,
+					Acknowledge: true,
+					Timeout:     1,
+					Wait:        false,
+				})
+				if err != nil {
+					if errors.Is(err, backends.ErrNoMessageAvailable) {
+						return sideActionMsg{action: "   └ (no messages available)"}
+					}
+					return sideActionMsg{err: err}
+				}
+				result := formatMessagePayload(msg)
 				return sideActionMsg{action: result}
 			}
 		}
@@ -731,6 +884,160 @@ func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return sideActionMsg{err: err}
 			}
 		}
+
+	case "purge":
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.promptActive = false
+			m.input.Focus()
+			return m, nil
+		case tea.KeyEnter:
+			if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
+				m.promptActive = false
+				m.input.Focus()
+				return m, nil
+			}
+			name := m.promptName
+			desc := fmt.Sprintf("▶ purge %s \"%s\"", singular(ow.label), name)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.promptActive = false
+			m.state = tuiExecuting
+			purge := m.session.spec.ManageSpec.Purge
+			return m, func() tea.Msg {
+				count, err := purge(name)
+				if err != nil {
+					return sideActionMsg{err: err}
+				}
+				if count > 0 {
+					return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
+				}
+				return sideActionMsg{action: "   └ purged"}
+			}
+		}
+
+	case "purge-subscription":
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.promptActive = false
+			m.input.Focus()
+			return m, nil
+		case tea.KeyEnter:
+			if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
+				m.promptActive = false
+				m.input.Focus()
+				return m, nil
+			}
+			sub := m.promptName
+			topic := m.promptTarget
+			desc := fmt.Sprintf("▶ purge Subscription \"%s\"", sub)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.promptActive = false
+			m.state = tuiExecuting
+			purge := m.session.spec.ManageSpec.PurgeSubscription
+			return m, func() tea.Msg {
+				count, err := purge(topic, sub)
+				if err != nil {
+					return sideActionMsg{err: err}
+				}
+				if count > 0 {
+					return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
+				}
+				return sideActionMsg{action: "   └ purged"}
+			}
+		}
+
+	case "send":
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.promptActive = false
+			m.input.Focus()
+			return m, nil
+		case tea.KeyEnter:
+			payload := m.promptName
+			if payload == "" {
+				return m, nil
+			}
+			target := m.promptTarget
+			useTopic := sidebarSendViaTopic(ow.label, m.promptNodeKind)
+			verb := "send"
+			if useTopic {
+				verb = "publish"
+			}
+			desc := fmt.Sprintf("▶ %s %s \"%s\"", verb, singular(ow.label), target)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.promptActive = false
+			m.state = tuiExecuting
+			session := m.session
+			return m, func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if useTopic {
+					ta, err := session.getTopicAdapter()
+					if err != nil {
+						return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+					}
+					if err := ta.Publish(ctx, backends.PublishOptions{Topic: target, Message: []byte(payload)}); err != nil {
+						return sideActionMsg{err: err}
+					}
+					return sideActionMsg{action: "   └ published"}
+				}
+				qa, err := session.getQueueAdapter()
+				if err != nil {
+					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+				}
+				if err := qa.Send(ctx, backends.SendOptions{Queue: target, Message: []byte(payload)}); err != nil {
+					return sideActionMsg{err: err}
+				}
+				return sideActionMsg{action: "   └ sent"}
+			}
+		case tea.KeyBackspace:
+			if len(m.promptName) > 0 {
+				m.promptName = m.promptName[:len(m.promptName)-1]
+			}
+			return m, nil
+		case tea.KeyRunes, tea.KeySpace:
+			m.promptName += msg.String()
+			return m, nil
+		}
+
+	case "publish":
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.promptActive = false
+			m.input.Focus()
+			return m, nil
+		case tea.KeyEnter:
+			payload := m.promptName
+			if payload == "" {
+				return m, nil
+			}
+			target := m.promptTarget
+			desc := fmt.Sprintf("▶ publish %s \"%s\"", singular(ow.label), target)
+			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+			m.promptActive = false
+			m.state = tuiExecuting
+			session := m.session
+			return m, func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				ta, err := session.getTopicAdapter()
+				if err != nil {
+					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+				}
+				if err := ta.Publish(ctx, backends.PublishOptions{Topic: target, Message: []byte(payload)}); err != nil {
+					return sideActionMsg{err: err}
+				}
+				return sideActionMsg{action: "   └ published"}
+			}
+		case tea.KeyBackspace:
+			if len(m.promptName) > 0 {
+				m.promptName = m.promptName[:len(m.promptName)-1]
+			}
+			return m, nil
+		case tea.KeyRunes, tea.KeySpace:
+			m.promptName += msg.String()
+			return m, nil
+		}
 	}
 	return m, nil
 }
@@ -759,8 +1066,9 @@ func initManageAction(a *ManageAction) {
 	a.SetupFlags(&cobra.Command{})
 }
 
-// formatPeekMessage formats a peeked message payload for display in the TUI transcript.
-func formatPeekMessage(msg *backends.Message) string {
+// formatMessagePayload formats a message payload (from peek or receive) for
+// display in the TUI transcript.
+func formatMessagePayload(msg *backends.Message) string {
 	if len(msg.Data) == 0 {
 		return ""
 	}
@@ -881,9 +1189,9 @@ func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Clamp selection.
-		filtered := m.getFilteredSortedNodes(i)
-		if m.objTypes[i].sel >= len(filtered) {
-			m.objTypes[i].sel = max(0, len(filtered)-1)
+		rows := m.sidebarRows(i)
+		if m.objTypes[i].sel >= len(rows) {
+			m.objTypes[i].sel = max(0, len(rows)-1)
 		}
 	}
 
@@ -938,30 +1246,176 @@ func (m *aiTUIModel) cycleFocus(forward bool) {
 	}
 }
 
+// sidebarRow is one navigable row in a sidebar window: a top-level node, or a
+// child row (with its parent's name, needed for compound-key dispatch such as
+// Azure Service Bus's topic+subscription addressing).
+type sidebarRow struct {
+	node       backends.ObjectNode
+	parentName string // "" for top-level rows
+}
+
+// sidebarRows returns the flattened, navigable rows for window idx, in the
+// exact order writeObjectSection renders them: top-level nodes alone normally,
+// or top-level+children interleaved when tree view is active for a
+// hierarchical window. This is the single source of truth for both selection
+// (moveSel, selectedNode and friends) and rendering, so the two can never
+// drift apart the way a separately-maintained row list could.
+func (m aiTUIModel) sidebarRows(idx int) []sidebarRow {
+	if idx < 0 || idx >= len(m.objTypes) {
+		return nil
+	}
+	items := m.getFilteredSortedNodes(idx)
+	w := m.objTypes[idx]
+	rows := make([]sidebarRow, 0, len(items))
+	for _, node := range items {
+		rows = append(rows, sidebarRow{node: node})
+		if w.treeView && w.hierarchical {
+			for _, child := range node.Children {
+				rows = append(rows, sidebarRow{node: child, parentName: node.Name})
+			}
+		}
+	}
+	return rows
+}
+
+// indexOfRowNamed returns the index of the first row in rows whose node has
+// the given name, or 0 if not found (an empty/not-found name also lands on 0,
+// which is always a safe selection when rows is non-empty).
+func indexOfRowNamed(rows []sidebarRow, name string) int {
+	if name != "" {
+		for i, r := range rows {
+			if r.node.Name == name {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
 // moveSel moves the selection in the focused pane by delta.
 func (m *aiTUIModel) moveSel(delta int) {
 	wi := int(m.focus) - 1
 	if wi < 0 || wi >= len(m.objTypes) {
 		return
 	}
-	items := m.getFilteredSortedNodes(wi)
-	if len(items) == 0 {
+	rows := m.sidebarRows(wi)
+	if len(rows) == 0 {
 		return
 	}
-	m.objTypes[wi].sel = clampInt(m.objTypes[wi].sel+delta, 0, len(items)-1)
+	m.objTypes[wi].sel = clampInt(m.objTypes[wi].sel+delta, 0, len(rows)-1)
 }
 
-// selectedName returns the name of the currently selected item in the focused pane.
-func (m *aiTUIModel) selectedName() string {
+// selectedNode returns the full ObjectNode for the currently selected row in
+// the focused pane — top-level or child (ok=false when nothing is selected or
+// the pane is empty). Most callers that dispatch an action keyed by window
+// label (not node kind) should use selectedTopLevelNode instead, since a
+// child row's name is not a valid target for those actions.
+func (m *aiTUIModel) selectedNode() (backends.ObjectNode, bool) {
 	wi := int(m.focus) - 1
 	if wi < 0 || wi >= len(m.objTypes) {
+		return backends.ObjectNode{}, false
+	}
+	rows := m.sidebarRows(wi)
+	if m.objTypes[wi].sel < len(rows) {
+		return rows[m.objTypes[wi].sel].node, true
+	}
+	return backends.ObjectNode{}, false
+}
+
+// selectedName returns the name of the currently selected row in the focused pane.
+func (m *aiTUIModel) selectedName() string {
+	node, ok := m.selectedNode()
+	if !ok {
 		return ""
 	}
-	items := m.getFilteredSortedNodes(wi)
-	if m.objTypes[wi].sel < len(items) {
-		return items[m.objTypes[wi].sel].Name
+	return node.Name
+}
+
+// selectedTopLevelNode returns the currently selected node only when it is a
+// top-level row (ok=false for a child row). Use this for any action keyed by
+// window label rather than node kind — e.g. create/delete/purge/send/receive
+// dispatch via ManageSpec or the queue/topic adapters, where a child row's
+// name (a RabbitMQ binding, a NATS consumer, ...) is never a valid target.
+func (m *aiTUIModel) selectedTopLevelNode() (backends.ObjectNode, bool) {
+	wi := int(m.focus) - 1
+	if wi < 0 || wi >= len(m.objTypes) {
+		return backends.ObjectNode{}, false
 	}
-	return ""
+	rows := m.sidebarRows(wi)
+	if m.objTypes[wi].sel >= len(rows) {
+		return backends.ObjectNode{}, false
+	}
+	row := rows[m.objTypes[wi].sel]
+	if row.parentName != "" {
+		return backends.ObjectNode{}, false
+	}
+	return row.node, true
+}
+
+// selectedChildNode returns the currently selected node and its parent's name
+// only when the selection is a child row (ok=false for a top-level row).
+func (m *aiTUIModel) selectedChildNode() (node backends.ObjectNode, parentName string, ok bool) {
+	wi := int(m.focus) - 1
+	if wi < 0 || wi >= len(m.objTypes) {
+		return backends.ObjectNode{}, "", false
+	}
+	rows := m.sidebarRows(wi)
+	if m.objTypes[wi].sel >= len(rows) {
+		return backends.ObjectNode{}, "", false
+	}
+	row := rows[m.objTypes[wi].sel]
+	if row.parentName == "" {
+		return backends.ObjectNode{}, "", false
+	}
+	return row.node, row.parentName, true
+}
+
+// sidebarWindowSupportsSRP reports whether Purge/Send/Receive apply, in
+// principle, to a window with this label. Per-node Kind gating (Artemis
+// Addresses) is applied separately via sidebarPurgeReceiveAllowed/sidebarSendViaTopic.
+func sidebarWindowSupportsSRP(label string) bool {
+	switch label {
+	case "Queues", "Streams", "Addresses", "Exchanges":
+		return true
+	}
+	return false
+}
+
+// sidebarPurgeReceiveAllowed reports whether Purge/Receive apply to node.
+// Artemis's Addresses window and RabbitMQ's Exchanges window never allow
+// them, regardless of Kind: both are routing entities with no reliable 1:1
+// mapping to a queue of the same name — an address is merely the default
+// when a queue is created without an explicit --address (and may equally be
+// bound to differently-named or multiple queues), and an exchange routes to
+// whatever queues its bindings name. Purging/receiving "by address/exchange
+// name" would then silently target the wrong queue (or nothing). Use the
+// Queues window, which purges/receives by an actual queue name, instead.
+func sidebarPurgeReceiveAllowed(label string, _ backends.ObjectNode) bool {
+	if label == "Addresses" || label == "Exchanges" {
+		return false
+	}
+	return true // Queues/Streams — already gated by sidebarWindowSupportsSRP
+}
+
+// sidebarSendViaTopic reports whether Send should dispatch through
+// TopicBackend.Publish instead of QueueBackend.Send. True for a
+// pure-MULTICAST Artemis address (no anycast component) or any RabbitMQ
+// exchange (always routing-only); everything else (Queues, Streams,
+// anycast/any-multi/unknown-Kind Addresses) sends via the queue adapter.
+func sidebarSendViaTopic(label, kind string) bool {
+	return (label == "Addresses" && kind == "multicast") || label == "Exchanges"
+}
+
+// sidebarSubscriptionEligible reports whether a Topics-window child node is a
+// genuine message-storing subscription (Purge/peek/Receive apply), as opposed
+// to a routing pointer. Azure and Google both tag real subscriptions with
+// Kind == "subscription"; AWS's SNS subscription children use Kind == <SNS
+// protocol> (e.g. "sqs") instead, so this naturally and correctly excludes
+// them without any broker-identity check — their backing SQS queue is
+// already independently reachable (and already S/R/P-enabled) via the flat
+// Queues window.
+func sidebarSubscriptionEligible(label, kind string) bool {
+	return label == "Topics" && kind == "subscription"
 }
 
 // cycleSort advances the sort mode for the focused pane.

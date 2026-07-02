@@ -183,12 +183,13 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 	if fromTopic {
 		readFn = func(ctx context.Context) (*backends.Message, error) {
 			return topicBackend.Subscribe(ctx, backends.SubscribeOptions{
-				Topic:     source,
-				GroupID:   groupID,
-				Timeout:   timeout,
-				Wait:      true,
-				Verbosity: backends.VerbosityNormal,
-				Selector:  selector,
+				Topic:       source,
+				GroupID:     groupID,
+				Timeout:     timeout,
+				Wait:        true,
+				Verbosity:   backends.VerbosityNormal,
+				Selector:    selector,
+				Acknowledge: true,
 			})
 		}
 	} else {
