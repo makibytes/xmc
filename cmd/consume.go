@@ -179,7 +179,7 @@ func commandVerbosity(quiet bool) backends.Verbosity {
 
 func displayMessage(dataOut, metaOut io.Writer, message *backends.Message, verbosity backends.Verbosity) error {
 	if verbosity >= backends.VerbosityVerbose {
-		if err := writeKeyValueMap(metaOut, message.InternalMetadata, "", ": %v\n"); err != nil {
+		if err := writeKeyValueMap(metaOut, message.InternalMetadata, "", "%s: %v\n"); err != nil {
 			return err
 		}
 	}

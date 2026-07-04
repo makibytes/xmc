@@ -12,6 +12,7 @@ import (
 
 	"github.com/makibytes/xmc/broker/backends"
 	integration "github.com/makibytes/xmc/test/integration"
+	kafkago "github.com/segmentio/kafka-go"
 )
 
 var testBroker string // just "host:port"
@@ -283,5 +284,209 @@ func TestKafka_TopicSubscribe_Timeout(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
+	}
+}
+
+// TestKafka_DeleteConsumerGroup verifies that a materialized consumer group
+// can be deleted and disappears from ListConsumerGroups, and that deleting a
+// group that never existed returns a clear "does not exist" error.
+func TestKafka_DeleteConsumerGroup(t *testing.T) {
+	t.Parallel()
+	topic := "test-delete-consumer-group"
+	group := "test-group-to-delete"
+
+	adapter, err := NewTopicAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter: %v", err)
+	}
+
+	// Materialize the group the same way TestKafka_TopicSubscribe_ConsumerGroup
+	// does: a real publish/subscribe round-trip.
+	errCh := make(chan error, 1)
+	doneCh := make(chan struct{})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, err := adapter.Subscribe(ctx, backends.SubscribeOptions{
+			Topic:   topic,
+			GroupID: group,
+			Timeout: 25,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		close(doneCh)
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+	if err := adapter.Publish(context.Background(), backends.PublishOptions{
+		Topic:   topic,
+		Message: []byte("materialize group"),
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Subscribe error: %v", err)
+	case <-doneCh:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+
+	// While our own reader is still a member, Kafka must refuse to delete the
+	// group (requires state "Empty") with a clear message.
+	if err := DeleteConsumerGroup(makeConnArgs(), group); err == nil {
+		t.Fatal("expected error deleting a group with an active member, got nil")
+	} else if !strings.Contains(err.Error(), "not empty") {
+		t.Errorf("expected error to mention \"not empty\", got: %v", err)
+	}
+
+	// Close the adapter (and thus its cached reader) so the member leaves the
+	// group, then it should become deletable.
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("adapter.Close: %v", err)
+	}
+
+	// The coordinator may take a moment to register the member's departure
+	// after a graceful leave; retry briefly rather than racing it.
+	for i := 0; i < 10; i++ {
+		err = DeleteConsumerGroup(makeConnArgs(), group)
+		if err == nil {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("DeleteConsumerGroup: %v", err)
+	}
+
+	groups, err := ListConsumerGroups(makeConnArgs())
+	if err != nil {
+		t.Fatalf("ListConsumerGroups: %v", err)
+	}
+	for _, g := range groups {
+		if g.Name == group {
+			t.Fatalf("group %s still present after delete: %v", group, groups)
+		}
+	}
+
+	err = DeleteConsumerGroup(makeConnArgs(), "no-such-group-ever-existed")
+	if err == nil {
+		t.Fatal("expected error deleting a nonexistent group, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("expected error to mention \"does not exist\", got: %v", err)
+	}
+}
+
+// TestKafka_UpdateTopic_Partitions verifies that UpdateTopic can increase a
+// topic's partition count.
+func TestKafka_UpdateTopic_Partitions(t *testing.T) {
+	t.Parallel()
+	topic := "test-update-topic-partitions"
+
+	if err := CreateTopic(makeConnArgs(), topic, 1, 1, nil); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	if err := UpdateTopic(makeConnArgs(), topic, 3, nil); err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+
+	// Partition metadata can take a moment to propagate; retry briefly.
+	var topics []TopicInfo
+	var err error
+	for i := 0; i < 5; i++ {
+		topics, err = ListTopics(makeConnArgs())
+		if err != nil {
+			t.Fatalf("ListTopics: %v", err)
+		}
+		for _, tp := range topics {
+			if tp.Name == topic && tp.PartitionCount == 3 {
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("expected %s to have 3 partitions after update, got: %v", topic, topics)
+}
+
+// TestKafka_UpdateTopic_Config verifies that UpdateTopic can set a topic-level
+// config and that it's visible via DescribeConfigs afterward.
+func TestKafka_UpdateTopic_Config(t *testing.T) {
+	t.Parallel()
+	topic := "test-update-topic-config"
+
+	if err := CreateTopic(makeConnArgs(), topic, 1, 1, nil); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	if err := UpdateTopic(makeConnArgs(), topic, 0, map[string]string{"retention.ms": "3600000"}); err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+
+	client, brokers, err := newAdminClient(makeConnArgs())
+	if err != nil {
+		t.Fatalf("newAdminClient: %v", err)
+	}
+	resp, err := client.DescribeConfigs(context.Background(), &kafkago.DescribeConfigsRequest{
+		Addr: kafkago.TCP(brokers[0]),
+		Resources: []kafkago.DescribeConfigRequestResource{
+			{ResourceType: kafkago.ResourceTypeTopic, ResourceName: topic, ConfigNames: []string{"retention.ms"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DescribeConfigs: %v", err)
+	}
+	if len(resp.Resources) != 1 {
+		t.Fatalf("expected 1 resource in DescribeConfigs response, got %d", len(resp.Resources))
+	}
+	found := false
+	for _, entry := range resp.Resources[0].ConfigEntries {
+		if entry.ConfigName == "retention.ms" {
+			found = true
+			if entry.ConfigValue != "3600000" {
+				t.Errorf("expected retention.ms=3600000, got %s", entry.ConfigValue)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("retention.ms not found in config entries: %v", resp.Resources[0].ConfigEntries)
+	}
+}
+
+// TestKafka_TopicStats verifies that TopicStats reports the correct message
+// count after publishing a known number of messages.
+func TestKafka_TopicStats(t *testing.T) {
+	t.Parallel()
+	topic := "test-topic-stats"
+	const messageCount = 5
+
+	adapter, err := NewTopicAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter: %v", err)
+	}
+	defer adapter.Close()
+
+	for i := 0; i < messageCount; i++ {
+		if err := adapter.Publish(context.Background(), backends.PublishOptions{
+			Topic:   topic,
+			Message: []byte(fmt.Sprintf("stats message %d", i)),
+		}); err != nil {
+			t.Fatalf("Publish %d: %v", i, err)
+		}
+	}
+
+	stats, err := TopicStats(makeConnArgs(), topic)
+	if err != nil {
+		t.Fatalf("TopicStats: %v", err)
+	}
+	if stats.Name != topic {
+		t.Errorf("expected Name=%s, got %s", topic, stats.Name)
+	}
+	if stats.MessageCount != messageCount {
+		t.Errorf("expected MessageCount=%d, got %d", messageCount, stats.MessageCount)
 	}
 }

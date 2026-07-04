@@ -56,6 +56,12 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	groupID, _ := cmd.Flags().GetString("group")
 	timeout := float32(getDuration(cmd, "timeout").Seconds())
 	wait, _ := cmd.Flags().GetBool("wait")
+	// --wait defaults to true on subscribe (unlike receive/peek), so an explicit
+	// --timeout with no explicit --wait would otherwise be silently ignored.
+	// Honour the user's explicit timeout unless they also explicitly asked to wait.
+	if cmd.Flags().Changed("timeout") && !cmd.Flags().Changed("wait") {
+		wait = false
+	}
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	count, _ := cmd.Flags().GetInt("count")
 	jsonOutput, _ := cmd.Flags().GetBool("json")

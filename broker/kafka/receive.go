@@ -11,13 +11,12 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// SubscribeMessage receives messages from a Kafka topic
-func SubscribeMessage(ctx context.Context, connArgs ConnArguments, args ReceiveArguments) (*kafka.Message, error) {
-	brokers, tlsConfig, err := parseKafkaURL(connArgs.Server, connArgs.TLS)
-	if err != nil {
-		return nil, err
-	}
-
+// fetchMessage fetches a single message from reader, which the caller owns and
+// may reuse across calls (see TopicAdapter.getReader) — consumer-group joins are
+// comparatively expensive (often 1-3s), and forward/bridge/drain-mode subscribe
+// call this in a tight poll loop, so a fresh Reader per call would spend most of
+// its time rejoining the group instead of fetching.
+func fetchMessage(ctx context.Context, reader *kafka.Reader, args ReceiveArguments, brokers []string) (*kafka.Message, error) {
 	// Apply timeout if specified
 	if args.Timeout > 0 && !args.Wait {
 		var cancel context.CancelFunc
@@ -25,32 +24,10 @@ func SubscribeMessage(ctx context.Context, connArgs ConnArguments, args ReceiveA
 		defer cancel()
 	}
 
-	log.Verbose("📥 creating Kafka reader...")
-
-	readerConfig := kafka.ReaderConfig{
-		Brokers:  brokers,
-		Topic:    args.Topic,
-		MinBytes: 10e3, // 10KB
-		MaxBytes: 10e6, // 10MB
-		Dialer:   buildDialer(connArgs, tlsConfig),
-	}
-
-	if args.Partition >= 0 {
-		readerConfig.Partition = args.Partition
-		if args.Offset >= 0 {
-			readerConfig.StartOffset = args.Offset
-		}
-	} else {
-		readerConfig.GroupID = args.GroupID
-	}
-
-	reader := kafka.NewReader(readerConfig)
-	defer reader.Close()
-
 	log.Verbose("📩 subscribing to topic %s...", args.Topic)
 	message, err := reader.FetchMessage(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch message: %w", err)
+		return nil, hintAdvertisedListeners(fmt.Errorf("failed to fetch message: %w", err), brokers)
 	}
 
 	// Commit the message (acknowledge)

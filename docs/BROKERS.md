@@ -57,6 +57,34 @@ send and is never populated on receive — it will not appear in `-J`/`--ndjson`
 round-trip through `forward`/`bridge`. Only Artemis, RabbitMQ, and IBM MQ currently honor
 both in both directions.
 
+## Metadata Field Mapping
+
+xmc's canonical `Message` fields (`MessageID`, `CorrelationID`, `ReplyTo`, `ContentType`,
+plus `Priority`/`Persistent`/`TTL`/`Key`) are mapped **native-first**: whenever a broker's
+wire protocol has a dedicated slot for a field, the adapter maps to/from that slot. The
+`PropContentType`/`PropCorrelationID`/`PropMessageID`/`PropReplyTo` keys
+(`broker/backends/properties.go`) exist only as the interchange convention for brokers
+that have no such slot — see the policy comment there. This table is the audit record;
+update it when adding a broker or a new canonical field.
+
+| Field | Artemis / RabbitMQ (AMQP) | IBM MQ | Azure SB | Kafka / Pulsar / NATS / Redis / Google / AWS | MQTT |
+| --- | --- | --- | --- | --- | --- |
+| MessageID | native `Properties.MessageID` | native `MQMD.MsgId` | native `MessageID` | `PropMessageID` (no native slot) | unsupported |
+| CorrelationID | native `Properties.CorrelationID` | native `MQMD.CorrelId` | native `CorrelationID` | `PropCorrelationID` | unsupported |
+| ReplyTo | native `Properties.ReplyTo` | native `MQMD.ReplyToQ` | native `ReplyTo` | `PropReplyTo` | unsupported |
+| ContentType | native `Properties.ContentType` | message-handle property under `PropContentType` (MQMD has no content-type slot) | native `ContentType` | `PropContentType` | unsupported |
+| Priority | native `Header.Priority` | native `MQMD.Priority` | unsupported | unsupported | unsupported |
+| Persistent | native `Header.Durable` | native `MQMD.Persistence` | unsupported | unsupported | Yes (QoS 1, protocol-level, not a `Message` field) |
+| TTL | AMQP header | native `MQMD.Expiry` | native `TimeToLive` | internal transport header, Kafka/Pulsar only (stripped back out on receive, not user-visible); unsupported elsewhere | unsupported |
+| Key (partition/routing) | n/a | n/a | n/a | native on Kafka/Pulsar; dropped (not mapped to `OrderingKey`/`MessageGroupId`) on NATS/Redis/Google/AWS | n/a |
+
+Two gaps are noted here as deliberate, tracked non-goals rather than bugs: xmc does not
+currently (1) populate `MessageID` from a broker-assigned server-side ID on receive when
+the sender left it blank (Kafka/Pulsar/Google all generate one), or (2) map `Key` onto
+Google Pub/Sub's `OrderingKey` or AWS SQS/SNS's `MessageGroupId` (both are ordering
+concepts adjacent to, but not identical with, a partition key). Either could be revisited
+as an explicit, separately-decided enhancement.
+
 ## Traditional Message Brokers
 
 ### Apache Artemis
@@ -127,6 +155,16 @@ flowchart LR
 - Consumer groups for parallel processing (`--group/-g`)
 - Message keys for partitioning (`--key/-K`)
 - Management: Topic listing, create/delete topic via admin client (`--partitions`, `--replication-factor`, `--config`)
+- **Gotcha**: `-s` is only the bootstrap URL. `publish`/`subscribe`/`manage list`
+  (consumer groups) reconnect to each broker's *advertised* address from cluster
+  metadata, not `-s`. A broker started with a container hostname but no explicit
+  advertised listener (e.g. `--hostname kafka` without
+  `KAFKA_ADVERTISED_LISTENERS`) will advertise `kafka:9092`, which is unreachable
+  from the host — `manage create/delete-topic` and `manage list` (topics) still
+  work because they use a single connection to the bootstrap URL, but
+  publish/subscribe/consumer-group listing fail with a DNS error. Fix by setting
+  `KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092` (or the reachable
+  hostname) on the broker.
 
 ```mermaid
 flowchart LR

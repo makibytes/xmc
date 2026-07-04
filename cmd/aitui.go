@@ -936,68 +936,15 @@ func (m aiTUIModel) renderStatusBar() string {
 			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
 				kvs = append(kvs, hintKV{"x", "tree"})
 			}
-			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].createAction != nil {
-				kvs = append(kvs, hintKV{"c", "create"})
-			}
-			// childNode/childSelected identify a tree-view child row (RabbitMQ
-			// binding, NATS consumer, Azure/Google subscription, ...); computed
-			// once and reused below (including inside the Topics branch)
-			// rather than re-derived per hotkey — selectedChildNode re-sorts
-			// and re-filters the window's node list on every call, and the
-			// selection can't change mid-render.
-			//
-			// d/p/m/P(non-Topics)/S/R all dispatch via selectedTopLevelNode(),
-			// which returns ok=false for a child row — so on a child row of a
-			// hierarchical window they would be dead keys; hide them all at
-			// once instead of advertising a key that does nothing when
-			// pressed. The Topics branch further down handles its own
-			// child-eligible p/m/P/R separately. c (create) never depends on
-			// selection, so it's exempt above.
-			childNode, _, childSelected := m.selectedChildNode()
-			srpEligible := wi >= 0 && wi < len(m.objTypes) && sidebarWindowSupportsSRP(m.objTypes[wi].label)
-			// sidebarPurgeReceiveAllowed with a zero-value node gives the
-			// window-level answer: for Queues/Streams it's always true
-			// (Kind-independent); for Artemis Addresses it's always false
-			// (never allowed, regardless of node) — so the hint is never
-			// misleading, unlike per-node gating that could vary by selection.
-			purgeReceiveEligible := srpEligible && wi >= 0 && wi < len(m.objTypes) &&
-				sidebarPurgeReceiveAllowed(m.objTypes[wi].label, backends.ObjectNode{})
-			if !childSelected {
-				if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].deleteAction != nil {
-					kvs = append(kvs, hintKV{"d", "delete"})
-				}
-				if purgeReceiveEligible && m.session != nil && m.session.spec.ManageSpec != nil && m.session.spec.ManageSpec.Purge != nil {
-					kvs = append(kvs, hintKV{"P", "purge"})
-				}
-				if wi >= 0 && wi < len(m.objTypes) {
-					switch m.objTypes[wi].label {
-					case "Queues", "Streams":
-						kvs = append(kvs, hintKV{"p", "peek"}, hintKV{"m", "metadata"})
-					}
-				}
-				if srpEligible {
-					kvs = append(kvs, hintKV{"S", "send"})
-				}
-				if purgeReceiveEligible {
-					kvs = append(kvs, hintKV{"R", "receive"})
-				}
-			}
-			// Topics windows: P means publish on a top-level topic, but
-			// purge on a selected Subscription child (Azure/Google) — the
-			// hint must track which one the current selection resolves to,
-			// unlike the window-level hints above, since the two meanings
-			// would otherwise both claim the same key in the same bar.
-			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].label == "Topics" {
-				if !childSelected {
-					if _, ok := m.selectedTopLevelNode(); ok {
-						kvs = append(kvs, hintKV{"P", "publish"})
-					}
-				} else if sidebarSubscriptionEligible("Topics", childNode.Kind) {
-					kvs = append(kvs, hintKV{"p", "peek"}, hintKV{"m", "metadata"})
-					if m.session != nil && m.session.spec.ManageSpec != nil && m.session.spec.ManageSpec.PurgeSubscription != nil {
-						kvs = append(kvs, hintKV{"P", "purge"})
-					}
-					kvs = append(kvs, hintKV{"R", "receive"})
+			// Each selection-dependent object hotkey (c/d/p/m/P/S/R) is
+			// resolved through the same table the key dispatcher uses
+			// (cmd/aisidebaractions.go), so the hint bar can never advertise
+			// a key that the dispatcher would then ignore, or vice versa —
+			// this used to be two hand-kept-in-sync copies of the same
+			// eligibility logic.
+			for _, a := range sidebarActions() {
+				if hint, _, ok := a.resolve(&m, wi); ok {
+					kvs = append(kvs, hintKV{a.key, hint})
 				}
 			}
 			kvs = append(kvs,

@@ -20,6 +20,8 @@ func GetRootCommand() *cobra.Command {
 	var partitions int
 	var replicationFactor int
 	var configEntries []string
+	var updateTopicCmd *cobra.Command
+	var updateConfigEntries []string
 
 	defaultServer := os.Getenv("KMC_SERVER")
 	if defaultServer == "" {
@@ -103,6 +105,38 @@ func GetRootCommand() *cobra.Command {
 				},
 			},
 			DeleteTopic: &cmd.ManageAction{Run: func(topic string) error { return kafka.DeleteTopic(connArgs, topic) }},
+			UpdateTopic: &cmd.ManageAction{
+				SetupFlags: func(c *cobra.Command) {
+					updateTopicCmd = c
+					c.Flags().Int("partitions", 0, "New total partition count (can only increase)")
+					c.Flags().StringArrayVar(&updateConfigEntries, "config", nil, "Topic config entries to set (key=value, repeatable)")
+				},
+				Run: func(topic string) error {
+					f := updateTopicCmd.Flags()
+					var newPartitions int
+					if f.Changed("partitions") {
+						newPartitions, _ = f.GetInt("partitions")
+					}
+					configs := make(map[string]string)
+					for _, entry := range updateConfigEntries {
+						k, v, ok := strings.Cut(entry, "=")
+						if !ok {
+							return fmt.Errorf("invalid config entry %q (expected key=value)", entry)
+						}
+						configs[k] = v
+					}
+					if !f.Changed("partitions") && len(configs) == 0 {
+						return fmt.Errorf("no settings given; pass --partitions and/or --config")
+					}
+					return kafka.UpdateTopic(connArgs, topic, newPartitions, configs)
+				},
+			},
+			Stats: func(topic string) (*backends.QueueStats, error) {
+				return kafka.TopicStats(connArgs, topic)
+			},
+			DeleteConsumerGroup: &cmd.ManageAction{
+				Run: func(group string) error { return kafka.DeleteConsumerGroup(connArgs, group) },
+			},
 		},
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{

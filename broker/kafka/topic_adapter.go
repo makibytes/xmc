@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -31,7 +33,12 @@ func (b *keyAwareBalancer) Balance(msg kafka.Message, partitions ...int) int {
 // TopicAdapter adapts Kafka to the TopicBackend interface
 type TopicAdapter struct {
 	connArgs ConnArguments
+	brokers  []string
 	writer   *kafka.Writer
+
+	readerMu  sync.Mutex
+	reader    *kafka.Reader
+	readerKey string
 }
 
 // NewTopicAdapter creates a new Kafka topic adapter
@@ -48,7 +55,7 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	})
 	writer.AllowAutoTopicCreation = true
 
-	return &TopicAdapter{connArgs: connArgs, writer: writer}, nil
+	return &TopicAdapter{connArgs: connArgs, brokers: brokers, writer: writer}, nil
 }
 
 // Publish implements backends.TopicBackend
@@ -79,7 +86,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 
 	log.Verbose("💌 publishing message to topic %s...", opts.Topic)
 	if err := a.writer.WriteMessages(ctx, message); err != nil {
-		return fmt.Errorf("failed to publish message: %w", err)
+		return hintAdvertisedListeners(fmt.Errorf("failed to publish message: %w", err), a.brokers)
 	}
 	return nil
 }
@@ -120,7 +127,12 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		}
 	}
 
-	message, err := SubscribeMessage(ctx, a.connArgs, args)
+	reader, err := a.getReader(args)
+	if err != nil {
+		return nil, err
+	}
+
+	message, err := fetchMessage(ctx, reader, args, a.brokers)
 	if err != nil {
 		return nil, err
 	}
@@ -131,12 +143,86 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	return convertKafkaToBackendMessage(message, opts.Verbosity >= backends.VerbosityVerbose), nil
 }
 
+// receiveArgsKey identifies which (topic, group, partition, offset) a Reader was
+// built for, so getReader knows whether it can reuse the cached one or must
+// build a fresh one for different subscribe parameters.
+func receiveArgsKey(args ReceiveArguments) string {
+	if args.Partition >= 0 {
+		return fmt.Sprintf("topic=%s|partition=%d|offset=%d", args.Topic, args.Partition, args.Offset)
+	}
+	return fmt.Sprintf("topic=%s|group=%s", args.Topic, args.GroupID)
+}
+
+// getReader returns a Reader for args, reusing the previous one when the
+// subscription target (topic/group/partition) hasn't changed. Callers such as
+// forward/bridge/drain-mode subscribe invoke Subscribe repeatedly in a tight
+// poll loop; a fresh Reader per call would force a full consumer-group join on
+// every iteration, which typically costs far more than the poll interval itself.
+func (a *TopicAdapter) getReader(args ReceiveArguments) (*kafka.Reader, error) {
+	key := receiveArgsKey(args)
+
+	a.readerMu.Lock()
+	defer a.readerMu.Unlock()
+
+	if a.reader != nil && a.readerKey == key {
+		return a.reader, nil
+	}
+
+	if a.reader != nil {
+		a.reader.Close()
+	}
+
+	brokers, tlsConfig, err := parseKafkaURL(a.connArgs.Server, a.connArgs.TLS)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Verbose("📥 creating Kafka reader...")
+
+	readerConfig := kafka.ReaderConfig{
+		Brokers: brokers,
+		Topic:   args.Topic,
+		// MinBytes: 1 (kafka-go's own default) so the broker answers as soon as
+		// any data is available, instead of holding the fetch open until MaxWait
+		// elapses — this CLI deals in individual small messages, not high-volume
+		// batches, so latency matters more than request-count efficiency.
+		MinBytes: 1,
+		MaxBytes: 10e6,        // 10MB
+		MaxWait:  time.Second, // cap the broker long-poll so an empty partition keeps --timeout responsive
+		Dialer:   buildDialer(a.connArgs, tlsConfig),
+	}
+
+	if args.Partition >= 0 {
+		readerConfig.Partition = args.Partition
+		if args.Offset >= 0 {
+			readerConfig.StartOffset = args.Offset
+		}
+	} else {
+		readerConfig.GroupID = args.GroupID
+	}
+
+	a.reader = kafka.NewReader(readerConfig)
+	a.readerKey = key
+	return a.reader, nil
+}
+
 // Close implements backends.TopicBackend
 func (a *TopicAdapter) Close() error {
-	if a.writer != nil {
-		return a.writer.Close()
+	a.readerMu.Lock()
+	reader := a.reader
+	a.reader = nil
+	a.readerMu.Unlock()
+
+	var err error
+	if reader != nil {
+		err = reader.Close()
 	}
-	return nil
+	if a.writer != nil {
+		if werr := a.writer.Close(); werr != nil && err == nil {
+			err = werr
+		}
+	}
+	return err
 }
 
 func convertKafkaToBackendMessage(msg *kafka.Message, withMetadata bool) *backends.Message {

@@ -32,7 +32,11 @@ bridge orders --to 'rmc send orders-mirror'
 
 ## Manage commands
 
-`list`, `create-topic <name> --partitions N --replication-factor N --config key=value`, `delete-topic <name>`.
+`list`, `create-topic <name> --partitions N --replication-factor N --config key=value`, `delete-topic <name>`, `update-topic <name> [--partitions N] [--config key=value]` (only given settings change; partitions can only increase), `stats <name>` (message count, summed across partitions), `delete-consumer-group <name>` (group must have no active members).
+
+No `create-consumer-group`: Kafka creates a group implicitly the moment a consumer with that `group.id` first joins — there is no admin API to pre-create one.
+
+No `purge`: Kafka's topic-truncate equivalent (`DeleteRecords`) has no client wrapper in the Go library this tool uses, only the raw protocol API key.
 
 ## Supported features
 

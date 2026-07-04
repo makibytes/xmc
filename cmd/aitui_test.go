@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -2529,4 +2530,77 @@ func TestAITUI_StatusBar_ScrollOffsetAdvances_OnSpinnerTick(t *testing.T) {
 	if m.statusScrollOffset <= before {
 		t.Errorf("statusScrollOffset should advance after spinner ticks, got %d (was %d)", m.statusScrollOffset, before)
 	}
+}
+
+// TestSidebarActions_ResolveMatchesExpectedEligibility guards the
+// cmd/aisidebaractions.go table directly: the status-bar hint renderer and
+// the key dispatcher both call sidebarActions()[i].resolve, so asserting the
+// resolved key/hint set here for representative selections exercises both at
+// once and pins down the actual (not just internally-consistent) behavior.
+func TestSidebarActions_ResolveMatchesExpectedEligibility(t *testing.T) {
+	resolvedHints := func(m aiTUIModel, wi int) map[string]string {
+		got := map[string]string{}
+		for _, a := range sidebarActions() {
+			if hint, _, ok := a.resolve(&m, wi); ok {
+				got[a.key] = hint
+			}
+		}
+		return got
+	}
+
+	t.Run("Queues top-level with purge configured", func(t *testing.T) {
+		m := newTestModelWithQueueWindow(&mockQueueBackend{}, nil, noopPurge(0))
+		got := resolvedHints(m, 0)
+		want := map[string]string{
+			"P": "purge", "p": "peek", "m": "metadata", "S": "send", "R": "receive",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Queues top-level resolve = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("Topics top-level", func(t *testing.T) {
+		m := newTestModelWithTopicsWindow(&mockTopicBackend{})
+		got := resolvedHints(m, 0)
+		want := map[string]string{"P": "publish"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Topics top-level resolve = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("Topics subscription child", func(t *testing.T) {
+		m := newTestModelWithTopicSubscriptions(&mockTopicBackend{}, func(string, string) (int64, error) { return 0, nil })
+		m.objTypes[0].treeView = true
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model := updated.(aiTUIModel)
+		if _, _, ok := model.selectedChildNode(); !ok {
+			t.Fatal("setup: expected a child (subscription) row selected")
+		}
+		got := resolvedHints(model, 0)
+		want := map[string]string{"p": "peek", "m": "metadata", "P": "purge", "R": "receive"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Topics subscription-child resolve = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("RabbitMQ exchange binding child", func(t *testing.T) {
+		action := &ManageAction{Run: func(string) error { return nil }}
+		m := newTestModelWithExchangeChildren(noopPurge(0), action)
+		m.objTypes[0].createAction = action
+		m.objTypes[0].treeView = true
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model := updated.(aiTUIModel)
+		if _, _, ok := model.selectedChildNode(); !ok {
+			t.Fatal("setup: expected a child (binding) row selected")
+		}
+		got := resolvedHints(model, 0)
+		// Only "create" survives on a child row — d/p/m/P/S/R are all dead
+		// there (no reliable action on a binding), matching
+		// TestAITUI_PurgeSendReceiveHotkeys_NoOpOnChildRow /
+		// TestAITUI_DeleteHotkey_NoOpsOnChildRow above.
+		want := map[string]string{"c": "create"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Exchange binding-child resolve = %v, want %v", got, want)
+		}
+	})
 }
