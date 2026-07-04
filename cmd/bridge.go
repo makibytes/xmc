@@ -139,7 +139,13 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 	st, stopStats := startForwardStats(sf.Stats, errw)
 	defer stopStats()
 
-	proc, stdinPipe, err := startTargetProcess(ctx, target, out, errw)
+	// Use cmd.Context() (interrupt-only), not the --for-bounded ctx: exec.CommandContext
+	// kills the process the instant its context is done, which would abort the target
+	// mid-drain the moment --for expires, dropping whatever it hadn't yet published from
+	// its stdin buffer. The bounded ctx still governs the read loop below; once it ends,
+	// the deferred stdinPipe.Close()+proc.Wait() lets the target finish gracefully via EOF.
+	// A real interrupt (Ctrl-C) still kills it immediately, since that cancels cmd.Context() too.
+	proc, stdinPipe, err := startTargetProcess(cmd.Context(), target, out, errw)
 	if err != nil {
 		return err
 	}

@@ -16,9 +16,25 @@ const (
 )
 
 // Standard message metadata property names shared by header-based brokers.
-// Each broker places these on its native wire format (Kafka headers,
-// Pulsar message properties, etc.) — so the strings are the interchange
-// contract between publishers and subscribers using xmc.
+//
+// POLICY (native-first): these four keys exist only for brokers whose wire
+// protocol has NO dedicated slot for the corresponding Message field
+// (MessageID/CorrelationID/ReplyTo/ContentType) — Kafka headers, Pulsar/NATS/
+// Redis/Google/AWS message properties or attributes. A broker adapter for a
+// protocol that DOES have a native slot (AMQP's Properties.MessageID/
+// CorrelationID/ReplyTo/ContentType, IBM MQ's MQMD.MsgId/CorrelId/ReplyToQ,
+// Azure Service Bus's MessageID/CorrelationID/ReplyTo/ContentType fields)
+// MUST map to/from that native slot on Send/Receive and MUST NOT place the
+// field in the application-property map under these keys — doing so would
+// both duplicate the native slot and risk colliding with a user's own
+// same-named application property. IBM MQ's ContentType is the one partial
+// exception: MQMD itself has no content-type slot, so it rides as a message-
+// handle property under PropContentType (see broker/ibmmq/send.go), exactly
+// like the header-based brokers.
+//
+// See docs/BROKERS.md's "Metadata Field Mapping" table for the current
+// per-broker native-slot-vs-PropX audit; keep it updated when adding a
+// broker or a new canonical field.
 const (
 	PropContentType   = "content-type"
 	PropCorrelationID = "correlation-id"

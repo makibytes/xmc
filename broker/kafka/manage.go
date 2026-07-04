@@ -96,7 +96,7 @@ func ListConsumerGroups(connArgs ConnArguments) ([]backends.ObjectNode, error) {
 		Addr: kafkago.TCP(brokers[0]),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list consumer groups: %w", err)
+		return nil, hintAdvertisedListeners(fmt.Errorf("failed to list consumer groups: %w", err), brokers)
 	}
 	if resp.Error != nil {
 		return nil, fmt.Errorf("list consumer groups: %w", resp.Error)
