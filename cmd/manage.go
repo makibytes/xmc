@@ -65,6 +65,8 @@ type ObjectType struct {
 //	"Addresses" → CreateAddress / DeleteAddress
 //	"Exchanges" → CreateExchange / DeleteExchange
 //	"Streams" → CreateQueue / DeleteQueue (NATS)
+//	"Consumer Groups" → nil / DeleteConsumerGroup (Kafka; groups are created
+//	  implicitly by the first consumer to join, so there is no create action)
 func (s *ManageSpec) SidebarActions(label string) (create, delete *ManageAction) {
 	switch label {
 	case "Queues":
@@ -77,6 +79,8 @@ func (s *ManageSpec) SidebarActions(label string) (create, delete *ManageAction)
 		return s.CreateExchange, s.DeleteExchange
 	case "Streams":
 		return s.CreateQueue, s.DeleteQueue
+	case "Consumer Groups":
+		return nil, s.DeleteConsumerGroup
 	}
 	return nil, nil
 }
@@ -114,12 +118,18 @@ type ManageSpec struct {
 	DisableQueue   *ManageAction // disable message dispatch on a queue (Artemis)
 	CreateTopic    *ManageAction
 	DeleteTopic    *ManageAction
+	UpdateTopic    *ManageAction // change settings of an existing topic (e.g. Kafka partitions/config)
 	CreateAddress  *ManageAction // Artemis-only: bare address (routing namespace)
 	DeleteAddress  *ManageAction // Artemis-only: bare address
 	CreateExchange *ManageAction
 	DeleteExchange *ManageAction
 	BindQueue      *BindAction
 	UnbindQueue    *BindAction
+
+	// DeleteConsumerGroup deletes an inactive consumer group (Kafka). There is
+	// no matching create action: Kafka creates groups implicitly the moment a
+	// consumer with that group.id first joins, and has no API to pre-create one.
+	DeleteConsumerGroup *ManageAction
 }
 
 // NewManageCommand builds a standardised "manage" command tree from spec,
@@ -231,12 +241,14 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 	addManageAction(mgmtCmd, "disable-queue", "Disable message dispatch on a queue", "<queue>", "Disabled queue %s\n", spec.DisableQueue)
 	addManageAction(mgmtCmd, "create-topic", "Create a topic", "<topic>", "Created topic %s\n", spec.CreateTopic)
 	addManageAction(mgmtCmd, "delete-topic", "Delete a topic", "<topic>", "Deleted topic %s\n", spec.DeleteTopic)
+	addManageAction(mgmtCmd, "update-topic", "Update topic settings", "<topic>", "Updated topic %s\n", spec.UpdateTopic)
 	addManageAction(mgmtCmd, "create-address", "Create an address (routing namespace)", "<address>", "Created address %s\n", spec.CreateAddress)
 	addManageAction(mgmtCmd, "delete-address", "Delete an address", "<address>", "Deleted address %s\n", spec.DeleteAddress)
 	addManageAction(mgmtCmd, "create-exchange", "Create an exchange", "<exchange>", "Created exchange %s\n", spec.CreateExchange)
 	addManageAction(mgmtCmd, "delete-exchange", "Delete an exchange", "<exchange>", "Deleted exchange %s\n", spec.DeleteExchange)
 	addBindAction(mgmtCmd, "bind-queue", "Bind a queue to an %s", "Bound queue %%s to %s %%s\n", spec.BindQueue)
 	addBindAction(mgmtCmd, "unbind-queue", "Unbind a queue from an %s", "Unbound queue %%s from %s %%s\n", spec.UnbindQueue)
+	addManageAction(mgmtCmd, "delete-consumer-group", "Delete a consumer group", "<group>", "Deleted consumer group %s\n", spec.DeleteConsumerGroup)
 
 	return mgmtCmd
 }
