@@ -15,6 +15,7 @@ import (
 type TopicAdapter struct {
 	connArgs ConnArguments
 	client   pahomqtt.Client
+	subs     subscriptionCache
 }
 
 // NewTopicAdapter creates a connected TopicAdapter.
@@ -27,19 +28,18 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 }
 
 // Publish implements backends.TopicBackend.
-// Publishes to the topic with the configured QoS (falls back to 1, or 0 if not
-// persistent) and retain flag.
+// Publishes to the topic with the configured QoS (--qos, default 1) and
+// retain flag.
 func (a *TopicAdapter) Publish(_ context.Context, opts backends.PublishOptions) error {
 	qos := byte(1)
-	if !opts.Persistent {
-		qos = 0
-	}
 	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
 		qos = byte(v)
 	}
 	retain := opts.Extra["retain"] == "true"
 	token := a.client.Publish(opts.Topic, qos, retain, opts.Message)
-	token.Wait()
+	if !token.WaitTimeout(tokenTimeout) {
+		return fmt.Errorf("MQTT publish to %q timed out", opts.Topic)
+	}
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("MQTT publish to %q: %w", opts.Topic, err)
 	}
@@ -47,8 +47,10 @@ func (a *TopicAdapter) Publish(_ context.Context, opts backends.PublishOptions) 
 }
 
 // Subscribe implements backends.TopicBackend.
-// Subscribes to the topic (or a shared subscription when GroupID is set)
-// and returns the first message received.
+// Subscribes to the topic (or a shared subscription when GroupID is set) and
+// returns the first message received. The subscription is kept open for the
+// adapter's lifetime so consecutive reads (-n, --for) don't drop messages
+// that arrive between calls.
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	topic := opts.Topic
 	if opts.GroupID != "" {
@@ -60,19 +62,10 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		qos = byte(v)
 	}
 
-	msgCh := make(chan pahomqtt.Message, 1)
-	token := a.client.Subscribe(topic, qos, func(_ pahomqtt.Client, msg pahomqtt.Message) {
-		select {
-		case msgCh <- msg:
-		default:
-		}
-	})
-	token.Wait()
-	if err := token.Error(); err != nil {
-		return nil, fmt.Errorf("MQTT subscribe to %q: %w", topic, err)
+	msgCh, err := a.subs.channelFor(a.client, topic, qos)
+	if err != nil {
+		return nil, err
 	}
-	defer a.client.Unsubscribe(topic) //nolint:errcheck
-
 	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait)
 }
 

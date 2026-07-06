@@ -60,9 +60,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	args := ReceiveArguments{
 		Acknowledge: opts.Acknowledge,
-		Durable:     false,
 		Multicast:   false, // Queue = ANYCAST
-		Number:      1,
 		Queue:       opts.Queue,
 		Selector:    opts.Selector,
 		Timeout:     opts.Timeout,

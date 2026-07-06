@@ -12,19 +12,13 @@ type SendArguments struct {
 	Durable       bool
 	Properties    map[string]any
 	ReplyTo       string
-	Subject       string
-	To            string
 	TTL           int64 // Time-to-live in milliseconds
 }
 
 type ReceiveArguments struct {
-	Queue               string
-	Acknowledge         bool
-	Durable             bool
-	DurableSubscription bool
-	Number              int
-	Selector            string
-	SubscriptionName    string
-	Timeout             float32
-	Wait                bool
+	Queue       string
+	Acknowledge bool
+	Selector    string
+	Timeout     float32
+	Wait        bool
 }

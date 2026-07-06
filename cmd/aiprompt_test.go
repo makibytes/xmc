@@ -380,4 +380,3 @@ func TestExtractCommandWithVerbs_NilVerbSet(t *testing.T) {
 		t.Errorf("got %q, want 'receive q -n 5'", got)
 	}
 }
-

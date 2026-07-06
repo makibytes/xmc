@@ -30,10 +30,11 @@ func TestMain(m *testing.M) {
 }
 
 func makeConnArgs() ConnArguments {
-	return ConnArguments{
-		Server:   testServer,
+	args := ConnArguments{
 		ClientID: "xmc-test-" + randomSuffix(),
 	}
+	args.Server = testServer
+	return args
 }
 
 func randomSuffix() string { return fmt.Sprintf("%d", rand.Int63()) } //nolint:gosec

@@ -4,6 +4,7 @@ package gcppubsub
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"cloud.google.com/go/pubsub"
@@ -12,8 +13,10 @@ import (
 )
 
 type TopicAdapter struct {
-	client    *pubsub.Client
-	ephemeral []string
+	client        *pubsub.Client
+	cache         ensureCache
+	ephemeral     []string
+	ephemeralName string // per-adapter name for group-less subscriptions
 }
 
 func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
@@ -21,11 +24,14 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{client: client}, nil
+	return &TopicAdapter{
+		client:        client,
+		ephemeralName: "xmc-sub-" + backends.RandomSuffix(),
+	}, nil
 }
 
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	topic, err := ensureTopic(ctx, a.client, opts.Topic)
+	topic, err := a.cache.topic(ctx, a.client, opts.Topic)
 	if err != nil {
 		return err
 	}
@@ -42,7 +48,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 }
 
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	topic, err := ensureTopic(ctx, a.client, opts.Topic)
+	topic, err := a.cache.topic(ctx, a.client, opts.Topic)
 	if err != nil {
 		return nil, err
 	}
@@ -52,15 +58,23 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	if opts.Extra != nil && opts.Extra["subscription"] != "" {
 		subName = opts.Extra["subscription"]
 	} else {
-		subName, ephemeral = backends.SubscriptionName(opts)
+		// Scope the group form by topic: Pub/Sub subscription names are
+		// project-global, and ensureSubscription rejects a same-named
+		// subscription bound to another topic.
+		subName, ephemeral = backends.ScopedSubscriptionName(opts, "-")
 		if ephemeral {
-			a.ephemeral = append(a.ephemeral, subName)
+			// One stable name per adapter, so repeated reads (-n, --for)
+			// reuse a single subscription instead of creating one per call.
+			subName = a.ephemeralName
 		}
 	}
 
-	sub, err := ensureSubscription(ctx, a.client, subName, topic)
+	sub, err := a.cache.subscription(ctx, a.client, subName, topic)
 	if err != nil {
 		return nil, err
+	}
+	if ephemeral && !slices.Contains(a.ephemeral, subName) {
+		a.ephemeral = append(a.ephemeral, subName)
 	}
 	sub.ReceiveSettings.MaxOutstandingMessages = 1
 	sub.ReceiveSettings.NumGoroutines = 1

@@ -19,9 +19,9 @@ subscribe events --subscription existing-sub -n 0   # target pre-existing subscr
 
 ## Consumer groups
 
-`-g <group>`: named subscription; same group = competing, different groups = fan-out.
+`-g <group>`: subscription `<group>-<topic>` (scoped by topic — Pub/Sub subscription names are project-global); same group = competing, different groups = fan-out.
 `-D`: durable (`xmc-durable-<topic>`). No `-g`, no `-D`: ephemeral (deleted on close).
-`--subscription <name>`: override to target a specific pre-existing subscription (overrides `-g`).
+`--subscription <name>`: override to target a specific pre-existing subscription (overrides `-g`). If a named subscription exists but is bound to a different topic, the command fails with a clear error instead of delivering the wrong topic's messages.
 
 ## Manage
 

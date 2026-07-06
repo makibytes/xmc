@@ -51,8 +51,10 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	msg := natsclient.NewMsg(subject)
 	msg.Data = opts.Message
 
+	// Deliberately NOT mapped to Nats-Msg-Id: that header triggers JetStream's
+	// duplicate-window dedup, which would silently drop repeat sends carrying
+	// the same --message-id (e.g. send -n 5) — no other broker behaves that way.
 	if opts.MessageID != "" {
-		msg.Header.Set(natsclient.MsgIdHdr, opts.MessageID)
 		msg.Header.Set(backends.PropMessageID, opts.MessageID)
 	}
 	if opts.CorrelationID != "" {

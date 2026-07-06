@@ -19,11 +19,11 @@ subscribe "sensors/#"              # MQTT wildcard
 - `+` matches one level: `sensors/+/temperature`
 - `#` matches all remaining levels: `sensors/#`
 
-## QoS and persistence
+## QoS and retain
 
-- Queue send/receive: always QoS 1 (at least once)
-- Topic publish: QoS 1 with `-d` (persistent), QoS 0 without
-- QoS 2 is not available in xmc
+- `--qos 0|1|2` on send/publish/receive/subscribe (default 1, at least once)
+- `--retain` on publish stores the message as the topic's retained message
+- Subscriptions stay open for the whole command, so streaming reads (`-n 0`, `--for`) don't lose messages between reads
 
 ## Consumer groups (topic)
 

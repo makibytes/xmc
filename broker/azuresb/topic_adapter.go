@@ -20,6 +20,35 @@ type TopicAdapter struct {
 	senderCache
 	adm           *admin.Client
 	ephemeralSubs []ephemeralSub
+	ensured       map[string]struct{} // topics/subscriptions confirmed to exist
+	ephemeralName string              // per-adapter name for group-less subscriptions
+}
+
+// ensureTopicCached ensures the topic exists once per adapter.
+func (a *TopicAdapter) ensureTopicCached(ctx context.Context, topic string) error {
+	if _, ok := a.ensured[topic]; ok {
+		return nil
+	}
+	if err := ensureTopic(ctx, a.adm, topic); err != nil {
+		return err
+	}
+	a.ensured[topic] = struct{}{}
+	return nil
+}
+
+// ensureTopicAndSubCached ensures the (topic, subscription) pair exists once
+// per adapter.
+func (a *TopicAdapter) ensureTopicAndSubCached(ctx context.Context, topic, sub string) error {
+	key := topic + "|" + sub
+	if _, ok := a.ensured[key]; ok {
+		return nil
+	}
+	if err := ensureTopicAndSub(ctx, a.adm, topic, sub); err != nil {
+		return err
+	}
+	a.ensured[key] = struct{}{}
+	a.ensured[topic] = struct{}{}
+	return nil
 }
 
 func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
@@ -33,13 +62,15 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 		return nil, err
 	}
 	return &TopicAdapter{
-		senderCache: newSenderCache(client),
-		adm:         adm,
+		senderCache:   newSenderCache(client),
+		adm:           adm,
+		ensured:       make(map[string]struct{}),
+		ephemeralName: "xmc-sub-" + backends.RandomSuffix(),
 	}, nil
 }
 
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	if err := ensureTopic(ctx, a.adm, opts.Topic); err != nil {
+	if err := a.ensureTopicCached(ctx, opts.Topic); err != nil {
 		return err
 	}
 
@@ -61,12 +92,21 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		subName = opts.Extra["subscription"]
 	} else {
 		subName, ephemeral = backends.SubscriptionName(opts)
+		if ephemeral {
+			// One stable name per adapter, so repeated reads (-n, --for)
+			// reuse a single subscription instead of creating one per call.
+			subName = a.ephemeralName
+		}
 	}
 
-	if err := ensureTopicAndSub(ctx, a.adm, opts.Topic, subName); err != nil {
+	firstUse := false
+	if _, ok := a.ensured[opts.Topic+"|"+subName]; !ok {
+		firstUse = true
+	}
+	if err := a.ensureTopicAndSubCached(ctx, opts.Topic, subName); err != nil {
 		return nil, err
 	}
-	if ephemeral {
+	if ephemeral && firstUse {
 		a.ephemeralSubs = append(a.ephemeralSubs, ephemeralSub{topic: opts.Topic, sub: subName})
 	}
 

@@ -4,6 +4,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -41,6 +42,7 @@ func TestMain(m *testing.M) {
 
 	testServer, testUser, testPassword = parseRabbitMQURL(broker.URL)
 	testMgmtURL = broker.ManagementURL
+	managementBaseOverride = testMgmtURL + "/api"
 
 	err = integration.WaitForBroker(func() error {
 		conn := ConnArguments{
@@ -287,28 +289,21 @@ func TestRabbitMQ_QueueSendReceive_CorrelationID(t *testing.T) {
 	}
 }
 
-// TestRabbitMQ_TopicPublishSubscribe verifies publish and subscribe via the amq.topic exchange.
-// RabbitMQ 4.x requires a queue bound to the exchange for AMQP 1.0 subscriptions.
+// TestRabbitMQ_TopicPublishSubscribe verifies publish and subscribe via the
+// amq.topic exchange, using TopicAdapter.Subscribe's subscription-queue path
+// (RabbitMQ 4.x AMQP 1.0 cannot consume from an exchange directly; Subscribe
+// declares and binds the backing queue itself).
 func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	topic := "test.topic.pubsub"
-	subQueue := "test.topic.pubsub.sub"
 	payload := []byte("topic message")
 
-	if err := integration.DeclareRabbitMQQueue(testMgmtURL, testUser, testPassword, subQueue); err != nil {
-		t.Fatalf("declare subscriber queue: %v", err)
-	}
-	if err := integration.BindRabbitMQQueue(testMgmtURL, testUser, testPassword, subQueue, "amq.topic", topic); err != nil {
-		t.Fatalf("bind subscriber queue: %v", err)
-	}
-
-	// Start the subscriber on the bound queue.
-	receiver, err := NewQueueAdapter(newConnArgs())
+	subscriber, err := NewTopicAdapter(newConnArgs())
 	if err != nil {
-		t.Fatalf("NewQueueAdapter (subscriber): %v", err)
+		t.Fatalf("NewTopicAdapter (subscriber): %v", err)
 	}
-	defer receiver.Close()
+	defer subscriber.Close()
 
 	type result struct {
 		msg *backends.Message
@@ -317,8 +312,9 @@ func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
 	ch := make(chan result, 1)
 
 	go func() {
-		msg, err := receiver.Receive(ctx, backends.ReceiveOptions{
-			Queue:       subQueue,
+		msg, err := subscriber.Subscribe(ctx, backends.SubscribeOptions{
+			Topic:       topic,
+			GroupID:     "test-pubsub-group",
 			Acknowledge: true,
 			Timeout:     10,
 			Wait:        true,
@@ -326,8 +322,8 @@ func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
 		ch <- result{msg, err}
 	}()
 
-	// Give subscriber time to set up before publishing.
-	time.Sleep(500 * time.Millisecond)
+	// Give subscriber time to declare and bind its queue before publishing.
+	time.Sleep(1 * time.Second)
 
 	publisher, err := NewTopicAdapter(newConnArgs())
 	if err != nil {
@@ -352,5 +348,75 @@ func TestRabbitMQ_TopicPublishSubscribe(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for subscribed message")
+	}
+}
+
+// TestRabbitMQ_TopicSubscribe_Ephemeral verifies that a group-less
+// subscription creates an ephemeral queue and deletes it on Close.
+func TestRabbitMQ_TopicSubscribe_Ephemeral(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	topic := "test.topic.ephemeral"
+	payload := []byte("ephemeral message")
+
+	subscriber, err := NewTopicAdapter(newConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter (subscriber): %v", err)
+	}
+
+	// First subscribe declares + binds the ephemeral queue (no message yet, so
+	// the read itself times out).
+	_, err = subscriber.Subscribe(ctx, backends.SubscribeOptions{
+		Topic:       topic,
+		Acknowledge: true,
+		Timeout:     1,
+	})
+	if err != nil && !errors.Is(err, backends.ErrNoMessageAvailable) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("initial Subscribe: %v", err)
+	}
+	if len(subscriber.ephemeral) != 1 {
+		t.Fatalf("expected 1 ephemeral queue, got %d", len(subscriber.ephemeral))
+	}
+	subQueue := subscriber.ephemeral[0]
+
+	publisher, err := NewTopicAdapter(newConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter (publisher): %v", err)
+	}
+	defer publisher.Close()
+
+	if err := publisher.Publish(ctx, backends.PublishOptions{
+		Topic:   topic,
+		Message: payload,
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	msg, err := subscriber.Subscribe(ctx, backends.SubscribeOptions{
+		Topic:       topic,
+		Acknowledge: true,
+		Timeout:     10,
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if string(msg.Data) != string(payload) {
+		t.Errorf("expected %q, got %q", payload, msg.Data)
+	}
+
+	if err := subscriber.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The ephemeral queue must be gone after Close.
+	mgmt := ManagementArgs{Server: testServer, User: testUser, Password: testPassword}
+	queues, err := ListQueues(mgmt)
+	if err != nil {
+		t.Fatalf("ListQueues: %v", err)
+	}
+	for _, q := range queues {
+		if q.Name == subQueue {
+			t.Errorf("ephemeral queue %s still exists after Close", subQueue)
+		}
 	}
 }

@@ -20,16 +20,16 @@
 | TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | - | - | - |
 | Message selectors | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
 | Durable subscriptions | Yes | Yes | - | - | - | - | Yes | Yes | Yes | Yes | Yes |
-| TTL / expiry | Yes | Yes | Yes | Yes | - | - | Partial | - | - | - | Yes |
-| Application properties | Yes | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes |
+| TTL / expiry | Yes | Yes | Partial | Yes | - | - | Partial | - | - | - | Yes |
+| Application properties | Yes | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
 | Message priority | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
 | Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) | Yes (Streams) | Yes | Yes | Yes |
 | Management: list | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes | Yes |
-| Management: purge | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes (drain) |
-| Management: stats | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes |
-| Management: create | queue, topic | queue, exchange | topic | - | - | queue | topic | queue, topic | - | - | - |
-| Management: delete | queue, topic | queue, exchange | topic | - | - | queue | topic | queue, topic | - | - | - |
-| Management: bind | - | queue↔exchange | - | - | - | - | - | - | - | - | - |
+| Management: purge | Yes | Yes | - | - | - | Yes | - | Yes | Yes (seek) | Yes | Yes (drain) |
+| Management: stats | Yes | Yes | Yes (topic) | - | - | Yes | - | Yes | - | Yes | Yes |
+| Management: create | queue, topic, address | queue, exchange | topic | - | - | queue | topic | queue, topic | queue, topic | queue, topic | queue, topic |
+| Management: delete | queue, topic, address | queue, exchange | topic | - | - | queue | topic | queue, topic | queue, topic | queue, topic | queue, topic |
+| Management: bind | queue↔address | queue↔exchange | - | - | - | - | - | - | - | - | - |
 
 The `reply`, `move` and `-F`/`--format` features live in the generic command layer
 (`cmd/`) on top of the queue/topic interfaces, so they are available for every broker
@@ -115,10 +115,11 @@ flowchart LR
 - Queues must be pre-declared (RabbitMQ does not auto-create queues over AMQP 1.0)
 - Smart addressing defaults: `send` → `/queues/<name>`, `publish` → `/exchanges/amq.topic/<name>`
 - Explicit routing: `-e <exchange>` sets the exchange (with optional routing key as `<to>`), `-q <queue>` forces queue routing
-- Full v2 addresses (starting with `/`) are always used verbatim (highest precedence)
+- Full v2 addresses (starting with `/`) are always used verbatim (highest precedence); reserved characters in names/keys are percent-encoded like the official RabbitMQ clients
+- `subscribe`: AMQP 1.0 v2 forbids exchange sources, so xmc declares a backing queue via the Management API (`<group>.<key>` durable for groups, `xmc-durable-<key>` for `--durable`, expiring `xmc-sub-<random>` for group-less runs), binds it with the topic as binding key, and consumes from it
 - Choose between `fanout`, `direct`, `topic` and `headers` exchange types
 - Selectors: Supported via AMQP source filters
-- Management: RabbitMQ Management API on HTTP port 15672 (list, purge, stats, create/delete queue, create/delete exchange, bind/unbind queue)
+- Management: RabbitMQ Management API on HTTP port 15672 (list, purge, stats, create/delete queue, create/delete exchange, bind/unbind queue); also required by `subscribe` and the `peek -n 0` browse cursor
 
 => Define topology statically by declaring exchanges, queues, and bindings.
 
@@ -225,8 +226,7 @@ flowchart LR
 - Protocol: Pulsar native (binary protocol, port 6650)
 - Binary: `pmc`, build tag: `pulsar`
 - **Queue topology**: Shared subscription on `persistent://public/default/{queue}` — messages distributed among all subscribers with the same subscription name, each delivered to exactly one consumer.
-- **Topic topology**: Exclusive subscription by default (single consumer gets all messages); `--group` maps to Shared subscription for load-balanced consumer groups.
-- Durable subscriptions: all subscriptions are durable by default in Pulsar (server retains messages until acknowledged)
+- **Topic topology**: `--group` maps to a Shared durable subscription for load-balanced consumer groups; `--durable` (without group) to an Exclusive durable one. Group-less subscribes use an Exclusive NonDurable subscription with a unique per-run name, so no cursor is left on the topic and concurrent subscribers don't collide.
 - Peek: uses Shared subscription + Nack so messages are redelivered and not consumed
 - Request-reply: via ReplyTo topic property
 - TLS: auto-detected via `pulsar+ssl://` URL scheme; also `--tls` flag
@@ -279,7 +279,7 @@ flowchart LR
 - Protocol: gRPC (Google Cloud Pub/Sub API)
 - Binary: `gmc`, build tag: `google`
 - **Queue topology**: A topic + a single shared subscription (`xmc-queue-{name}`) — messages are distributed among competing consumers, each delivered to exactly one. The subscription is auto-created on first `send` so messages are retained before the first `receive`.
-- **Topic topology**: Ephemeral per-subscriber subscriptions for true fan-out (auto-deleted on close). `--group` maps to a stable named subscription (competing consumers within the group). `--durable` uses a persistent subscription that retains its read position.
+- **Topic topology**: Ephemeral per-subscriber subscriptions for true fan-out (auto-deleted on close). `--group` maps to a stable subscription named `{group}-{topic}` — subscription IDs are project-global, so the topic scopes the name (competing consumers within the group). `--durable` uses a persistent subscription that retains its read position. An existing same-named subscription bound to another topic is rejected with a clear error rather than silently delivering that topic's messages.
 - Peek: uses `Nack` so messages are redelivered
 - Authentication: Google Application Default Credentials (ADC) or `--credentials` (service account JSON). No TLS flags (gRPC handles transport).
 - Emulator: set `--endpoint` (or env `PUBSUB_EMULATOR_HOST`) for local development
@@ -307,7 +307,7 @@ flowchart LR
 - Protocol: AWS SDK v2 (HTTPS REST APIs)
 - Binary: `awsmc`, build tag: `aws`
 - **Queue topology**: SQS queues (native point-to-point). `CreateQueue` is idempotent. `ReceiveMessage` + `DeleteMessage` = ack. Peek uses `VisibilityTimeout: 0` + `ChangeMessageVisibility` so the message is not consumed.
-- **Topic topology**: SNS topics with SNS→SQS fan-out. Each subscriber gets an auto-created SQS queue subscribed to the SNS topic with `RawMessageDelivery: true` (preserves payload + message attributes). `--group` maps to a shared SQS queue name (competing consumers). Ephemeral subscriber queues are cleaned up on close.
+- **Topic topology**: SNS topics with SNS→SQS fan-out. Each subscriber gets an auto-created SQS queue subscribed to the SNS topic with `RawMessageDelivery: true` (preserves payload + message attributes). `--group` maps to a shared SQS queue named `{group}-{topic}` — queue names are account-global, so the topic scopes the name (competing consumers). Group/durable subscriber queues stay SNS-subscribed after exit and keep buffering; ephemeral ones are unsubscribed and deleted on close.
 - Application properties: carried as SQS/SNS `MessageAttributes` (`DataType: "String"`). The four metadata keys (`message-id`, `correlation-id`, `reply-to`, `content-type`) are reserved attributes.
 - Authentication: standard AWS credential chain (env vars / shared config / IAM). `--region`, `--endpoint` (for LocalStack), `--profile`.
 - Management: `manage list` (SQS `ListQueues` + SNS `ListTopics`), `manage purge` (native `PurgeQueue`), `manage stats` (`GetQueueAttributes` for message counts)

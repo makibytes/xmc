@@ -33,11 +33,6 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 
 // Publish implements backends.TopicBackend
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	properties := opts.Properties
-	if properties == nil {
-		properties = make(map[string]any)
-	}
-
 	multicast := true // Topic = MULTICAST by default
 	if rt, ok := opts.Extra["routing-type"]; ok {
 		multicast = rt != "anycast"
@@ -46,7 +41,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	args := SendArguments{
 		Address:       opts.Topic,
 		Message:       opts.Message,
-		Properties:    properties,
+		Properties:    opts.Properties,
 		MessageID:     opts.MessageID,
 		CorrelationID: opts.CorrelationID,
 		ReplyTo:       opts.ReplyTo,
@@ -62,15 +57,21 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 
 // Subscribe implements backends.TopicBackend
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
+	// Durable subscriptions are named per (group, topic): Artemis creates the
+	// backing multicast queue after the link name, and link names live in a
+	// global namespace — an unscoped group name would collide across topics.
+	subscriptionName := opts.GroupID
+	if opts.Durable && subscriptionName != "" {
+		subscriptionName = subscriptionName + "." + opts.Topic
+	}
+
 	args := ReceiveArguments{
 		Acknowledge:         true, // Always acknowledge for topics
-		Durable:             false,
 		DurableSubscription: opts.Durable,
 		Multicast:           true, // Topic = MULTICAST
-		Number:              1,
 		Queue:               opts.Topic,
 		Selector:            opts.Selector,
-		SubscriptionName:    opts.GroupID,
+		SubscriptionName:    subscriptionName,
 		Timeout:             opts.Timeout,
 		Wait:                opts.Wait,
 	}

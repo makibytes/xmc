@@ -73,7 +73,7 @@ func GetRootCommand() *cobra.Command {
 				},
 			},
 			Purge: func(queue string) (int64, error) {
-				return 0, rabbitmq.PurgeQueue(mgmtArgs(), queue)
+				return rabbitmq.PurgeQueue(mgmtArgs(), queue)
 			},
 			Stats: func(queue string) (*backends.QueueStats, error) {
 				stats, err := rabbitmq.GetQueueStats(mgmtArgs(), queue)
@@ -135,7 +135,7 @@ func GetRootCommand() *cobra.Command {
 					return out, nil
 				},
 				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
-					return 0, rabbitmq.PurgeQueue(mgmtArgs(), queue)
+					return rabbitmq.PurgeQueue(mgmtArgs(), queue)
 				},
 				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
 					s, err := rabbitmq.GetQueueStats(mgmtArgs(), queue)

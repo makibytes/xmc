@@ -61,4 +61,3 @@ func Connect(args ConnArguments) (*amqp.Conn, *amqp.Session, error) {
 
 	return connection, session, nil
 }
-

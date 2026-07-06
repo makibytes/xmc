@@ -26,15 +26,15 @@ func ResolveTarget(isTopic bool, to, exchange, queue string) (string, error) {
 
 	// Rule 3: -q <queue> → /queues/<queue>.
 	if queue != "" {
-		return "/queues/" + queue, nil
+		return "/queues/" + escapeName(queue), nil
 	}
 
 	// Rule 4: -e <exchange> [<to>].
 	if exchange != "" {
 		if to != "" {
-			return "/exchanges/" + exchange + "/" + to, nil
+			return "/exchanges/" + escapeName(exchange) + "/" + escapeName(to), nil
 		}
-		return "/exchanges/" + exchange, nil
+		return "/exchanges/" + escapeName(exchange), nil
 	}
 
 	// Rule 5: bare <to> — apply defaults.
@@ -47,8 +47,40 @@ func ResolveTarget(isTopic bool, to, exchange, queue string) (string, error) {
 
 	if isTopic {
 		// Default topic exchange for pub/sub topology.
-		return "/exchanges/amq.topic/" + to, nil
+		return "/exchanges/amq.topic/" + escapeName(to), nil
 	}
 	// Default queue routing for queue topology.
-	return "/queues/" + to, nil
+	return "/queues/" + escapeName(to), nil
+}
+
+// escapeName percent-encodes a queue/exchange name or routing key for use in
+// an AMQP 1.0 v2 address. RabbitMQ requires percent-encoding for characters
+// outside the unreserved set [A-Za-z0-9-._~].
+func escapeName(s string) string {
+	isUnreserved := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' || c == '-' || c == '.' || c == '_' || c == '~'
+	}
+
+	needsEscape := false
+	for i := 0; i < len(s); i++ {
+		if !isUnreserved(s[i]) {
+			needsEscape = true
+			break
+		}
+	}
+	if !needsEscape {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; isUnreserved(c) {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }

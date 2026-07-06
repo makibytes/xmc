@@ -22,12 +22,13 @@ publish persistent://custom-tenant/custom-ns/mytopic "msg"   # full URL used ver
 ## Subscriptions
 
 - **Queue** (send/receive): Shared subscription `xmc-queue` — competing consumers
-- **Topic** (subscribe): Exclusive by default (one consumer); `-g <group>` switches to Shared (competing consumers within the group)
-- Durable: `-D -g <name>` creates a persistent subscription
+- **Topic** (subscribe): `-g <group>` (default `xmc-consumer-group`) = Shared durable subscription named after the group (competing consumers within the group)
+- `--durable -g ""`: Exclusive durable subscription `xmc-durable`
+- `-g ""` alone: Exclusive **non-durable** subscription with a unique per-run name — leaves no cursor on the topic, and concurrent group-less subscribers don't collide
 
 ```
 subscribe events -g processors -n 0    # Shared subscription "processors"
-subscribe events -D -g durable1 -n 0   # durable subscription
+subscribe events -D -g "" -n 0         # durable exclusive subscription
 ```
 
 ## Manage commands

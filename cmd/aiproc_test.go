@@ -19,8 +19,8 @@ func TestProcessName(t *testing.T) {
 		// no positional: --for's value "1h" is a flag value (starts with -? no, but --for
 		// itself is skipped; "1h" starts with a digit so it becomes the object)
 		{"receive --for 1h", "receive 1h"},
-		{"", ""},                            // empty input
-		{"send q1 hello", "send q1"},        // non-background verb
+		{"", ""},                     // empty input
+		{"send q1 hello", "send q1"}, // non-background verb
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

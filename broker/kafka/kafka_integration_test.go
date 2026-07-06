@@ -490,3 +490,76 @@ func TestKafka_TopicStats(t *testing.T) {
 		t.Errorf("expected MessageCount=%d, got %d", messageCount, stats.MessageCount)
 	}
 }
+
+// TestKafka_PartitionOffsetRead verifies single-partition reads with an
+// explicit --offset: a partition reader must honour a numeric offset and the
+// earliest sentinel (kafka-go only supports these via Reader.SetOffset, not
+// ReaderConfig.StartOffset).
+func TestKafka_PartitionOffsetRead(t *testing.T) {
+	t.Parallel()
+	topic := "test-partition-offset"
+	const messageCount = 3
+
+	publisher, err := NewTopicAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter: %v", err)
+	}
+	defer publisher.Close()
+
+	ctx := context.Background()
+	for i := 0; i < messageCount; i++ {
+		if err := publisher.Publish(ctx, backends.PublishOptions{
+			Topic:   topic,
+			Message: []byte(fmt.Sprintf("offset message %d", i)),
+		}); err != nil {
+			t.Fatalf("Publish %d: %v", i, err)
+		}
+	}
+
+	// Read from offset 1 on partition 0 (single-partition topic by default).
+	reader, err := NewTopicAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter (reader): %v", err)
+	}
+	defer reader.Close()
+
+	msg, err := reader.Subscribe(ctx, backends.SubscribeOptions{
+		Topic:   topic,
+		Timeout: 15,
+		Extra:   map[string]string{"partition": "0", "offset": "1"},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe (offset 1): %v", err)
+	}
+	if string(msg.Data) != "offset message 1" {
+		t.Errorf("expected message at offset 1, got %q", msg.Data)
+	}
+
+	// earliest must position at offset 0.
+	earliestReader, err := NewTopicAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter (earliest): %v", err)
+	}
+	defer earliestReader.Close()
+
+	msg, err = earliestReader.Subscribe(ctx, backends.SubscribeOptions{
+		Topic:   topic,
+		Timeout: 15,
+		Extra:   map[string]string{"partition": "0", "offset": "earliest"},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe (earliest): %v", err)
+	}
+	if string(msg.Data) != "offset message 0" {
+		t.Errorf("expected message at offset 0, got %q", msg.Data)
+	}
+
+	// --offset without --partition must be rejected.
+	if _, err := earliestReader.Subscribe(ctx, backends.SubscribeOptions{
+		Topic:   topic,
+		Timeout: 2,
+		Extra:   map[string]string{"offset": "earliest"},
+	}); err == nil {
+		t.Error("expected error for --offset without --partition")
+	}
+}

@@ -183,7 +183,6 @@ func runSystemShell(cmdLine string) error {
 	return c.Run()
 }
 
-
 // newShellCompleter builds a readline completer by walking the cobra command
 // tree. Top-level verbs get nested completions for their subcommands and flags,
 // so "manage <Tab>" shows "list", "purge", "create-queue", etc. and
@@ -244,4 +243,3 @@ func buildCmdCompleter(cmd *cobra.Command, nameOverride ...string) readline.Pref
 
 	return readline.PcItem(name, children...)
 }
-

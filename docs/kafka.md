@@ -20,6 +20,15 @@ publish mytopic -K "user-42" "msg"    # -K sets the partition key
 subscribe orders -g processors -n 0
 ```
 
+## Partition reads
+
+`--partition N` reads a single partition directly (no consumer group, nothing is committed). `--offset earliest|latest|<number>` positions the read and requires `--partition`:
+
+```
+subscribe orders --partition 0 --offset earliest -n 0
+subscribe orders --partition 2 --offset 1500
+```
+
 ## Topic forward / bridge
 
 Kafka supports topic-to-topic forwarding (same broker) and bridging (cross-broker relay to another xmc binary):

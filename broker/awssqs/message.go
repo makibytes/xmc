@@ -3,8 +3,8 @@
 package awssqs
 
 import (
-	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	"github.com/makibytes/xmc/broker/backends"
 )

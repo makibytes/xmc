@@ -14,29 +14,6 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
-// ListTopics returns all Pub/Sub topics in the project.
-func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
-	client, err := Connect(context.Background(), args)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-
-	var topics []backends.TopicInfo
-	it := client.Topics(context.Background())
-	for {
-		t, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		topics = append(topics, backends.TopicInfo{Name: t.ID()})
-	}
-	return topics, nil
-}
-
 // ListTopicsWithSubscriptions returns topics as ObjectNodes with their
 // subscriptions as children (for the AI TUI hierarchical sidebar window).
 func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, error) {
@@ -78,29 +55,6 @@ func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, err
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
-}
-
-// ListSubscriptions returns all Pub/Sub subscriptions in the project.
-func ListSubscriptions(args ConnArguments) ([]backends.QueueInfo, error) {
-	client, err := Connect(context.Background(), args)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-
-	var subs []backends.QueueInfo
-	it := client.Subscriptions(context.Background())
-	for {
-		s, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		subs = append(subs, backends.QueueInfo{Name: s.ID()})
-	}
-	return subs, nil
 }
 
 // ListQueues returns xmc-emulated queues: Pub/Sub subscriptions whose name

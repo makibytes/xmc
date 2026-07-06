@@ -20,8 +20,16 @@ type ManagementArgs struct {
 	Password string
 }
 
+// managementBaseOverride, when non-empty, replaces the management API base URL
+// derived from the AMQP server URL. Used by integration tests, where the
+// container remaps the management port.
+var managementBaseOverride string
+
 // managementURL converts the AMQP server URL to RabbitMQ Management API URL
 func managementURL(amqpServer string) (string, error) {
+	if managementBaseOverride != "" {
+		return managementBaseOverride, nil
+	}
 	u, err := url.Parse(amqpServer)
 	if err != nil {
 		return "", err
@@ -84,14 +92,42 @@ func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
 }
 
 // PurgeQueue removes all messages from a queue via the RabbitMQ Management API
-func PurgeQueue(args ManagementArgs, queue string) error {
+// and returns the number of messages purged. The purge endpoint itself reports
+// no count, so the queue's message count is read just before purging.
+func PurgeQueue(args ManagementArgs, queue string) (int64, error) {
+	stats, err := GetQueueStats(args, queue)
+	if err != nil {
+		return 0, err
+	}
+
+	base, err := managementURL(args.Server)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = backends.MgmtDelete(base+fmt.Sprintf("/queues/%%2F/%s/contents", url.PathEscape(queue)), args.User, args.Password)
+	if err != nil {
+		return 0, err
+	}
+	return stats.MessageCount, nil
+}
+
+// DeclareSubscriptionQueue creates the backing queue for a topic subscription.
+// Queues are always durable (RabbitMQ 4.x deprecates transient non-exclusive
+// queues); ephemeral subscriptions get a 5-minute x-expires so they clean
+// themselves up if the process dies without deleting them on Close.
+func DeclareSubscriptionQueue(args ManagementArgs, queue string, ephemeral bool) error {
 	base, err := managementURL(args.Server)
 	if err != nil {
 		return err
 	}
 
-	_, err = backends.MgmtDelete(base+fmt.Sprintf("/queues/%%2F/%s/contents", url.PathEscape(queue)), args.User, args.Password)
-	return err
+	cfg := map[string]any{"durable": true}
+	if ephemeral {
+		cfg["arguments"] = map[string]any{"x-expires": 300000}
+	}
+	body, _ := json.Marshal(cfg)
+	return backends.MgmtPut(base+fmt.Sprintf("/queues/%%2F/%s", url.PathEscape(queue)), body, args.User, args.Password)
 }
 
 // CreateQueue creates a queue via the RabbitMQ Management API.
@@ -260,8 +296,8 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 		Messages    int64  `json:"messages"`
 		Consumers   int    `json:"consumers"`
 		MessageStat struct {
-			Publish     int64 `json:"publish"`
-			DeliverGet  int64 `json:"deliver_get"`
+			Publish    int64 `json:"publish"`
+			DeliverGet int64 `json:"deliver_get"`
 		} `json:"message_stats"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {

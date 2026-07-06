@@ -16,6 +16,7 @@ import (
 type TopicAdapter struct {
 	sqsc            *sqs.Client
 	snsc            *sns.Client
+	subQueues       map[string]string // (topic|group) → ready subscriber queue URL
 	ephemeralQueues []string
 	subscriptions   []string
 }
@@ -25,7 +26,7 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{sqsc: sqsc, snsc: snsc}, nil
+	return &TopicAdapter{sqsc: sqsc, snsc: snsc, subQueues: make(map[string]string)}, nil
 }
 
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
@@ -56,16 +57,36 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 }
 
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	topicARN, err := ensureTopic(ctx, a.snsc, opts.Topic)
+	queueURL, err := a.ensureSubscriberQueue(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	queueName, ephemeral := backends.SubscriptionName(opts)
+	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
+	return pollSQS(ctx, a.sqsc, queueURL, timeout, true, "subscriber queue for topic "+opts.Topic)
+}
+
+// ensureSubscriberQueue creates, authorizes, and SNS-subscribes the backing
+// SQS queue for (topic, group) once per adapter; later Subscribe calls reuse
+// it without further admin calls. The queue name is scoped by the topic
+// because SQS queue names are account-global — an unscoped group name would
+// funnel two different topics into one queue.
+func (a *TopicAdapter) ensureSubscriberQueue(ctx context.Context, opts backends.SubscribeOptions) (string, error) {
+	cacheKey := opts.Topic + "|" + opts.GroupID
+	if url, ok := a.subQueues[cacheKey]; ok {
+		return url, nil
+	}
+
+	topicARN, err := ensureTopic(ctx, a.snsc, opts.Topic)
+	if err != nil {
+		return "", err
+	}
+
+	queueName, ephemeral := backends.ScopedSubscriptionName(opts, "-")
 
 	queueURL, err := ensureQueue(ctx, a.sqsc, queueName)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if ephemeral {
 		a.ephemeralQueues = append(a.ephemeralQueues, queueURL)
@@ -73,7 +94,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 
 	qARN, err := queueARN(ctx, a.sqsc, queueURL)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	policy := allowSNSPolicy(qARN, topicARN)
@@ -84,26 +105,28 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("setting queue policy: %w", err)
+		return "", fmt.Errorf("setting queue policy: %w", err)
 	}
 
-	rawDelivery := "true"
 	subOut, err := a.snsc.Subscribe(ctx, &sns.SubscribeInput{
 		TopicArn:              &topicARN,
 		Protocol:              strPtr("sqs"),
 		Endpoint:              &qARN,
-		Attributes:            map[string]string{"RawMessageDelivery": rawDelivery},
+		Attributes:            map[string]string{"RawMessageDelivery": "true"},
 		ReturnSubscriptionArn: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("subscribing queue to topic: %w", err)
+		return "", fmt.Errorf("subscribing queue to topic: %w", err)
 	}
-	if subOut.SubscriptionArn != nil {
+	// Only ephemeral subscriptions are torn down on Close; group and durable
+	// ones stay subscribed so their queue keeps buffering while no subscriber
+	// runs, matching the other brokers' subscription semantics.
+	if ephemeral && subOut.SubscriptionArn != nil {
 		a.subscriptions = append(a.subscriptions, *subOut.SubscriptionArn)
 	}
 
-	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-	return pollSQS(ctx, a.sqsc, queueURL, timeout, true, "subscriber queue "+queueName)
+	a.subQueues[cacheKey] = queueURL
+	return queueURL, nil
 }
 
 func (a *TopicAdapter) Close() error {
@@ -123,4 +146,3 @@ func (a *TopicAdapter) Close() error {
 
 	return nil
 }
-

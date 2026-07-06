@@ -56,4 +56,3 @@ func Connect(args ConnArguments) (pahomqtt.Client, error) {
 
 	return client, nil
 }
-

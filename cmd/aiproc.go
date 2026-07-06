@@ -19,7 +19,7 @@ type objWindowKind int
 
 const (
 	objWindowObjects objWindowKind = iota // default: ManageSpec object list
-	objWindowProcs                         // background process manager
+	objWindowProcs                        // background process manager
 )
 
 // ---------- Constants & styles ----------
@@ -27,9 +27,9 @@ const (
 const maxProcCapture = 256 * 1024 // 256 KB per background process
 
 var (
-	warnTriangleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow ▲ finished ok
-	procRunStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // cyan ● running
-	procErrStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // bright-red ▲ error
+	warnTriangleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow ▲ finished ok
+	procRunStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan ● running
+	procErrStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // bright-red ▲ error
 )
 
 // ---------- bgProcess ----------
@@ -43,7 +43,7 @@ type bgProcess struct {
 	command   string
 	startedAt time.Time
 	cancel    context.CancelFunc // set via procCancelMsg; UI goroutine only thereafter
-	doneCh    chan struct{}       // closed by the background goroutine when it exits
+	doneCh    chan struct{}      // closed by the background goroutine when it exits
 
 	mu         sync.Mutex
 	out        cappedBuffer // goroutine writes; UI reads via snapshotText()
@@ -347,7 +347,7 @@ func (m aiTUIModel) handleProcCancelMsg(msg procCancelMsg) (tea.Model, tea.Cmd) 
 func (m aiTUIModel) handleProcDoneMsg(msg procDoneMsg) (tea.Model, tea.Cmd) {
 	for _, p := range m.procs {
 		if p.id == msg.id {
-			p.done = true       // UI goroutine only; no lock
+			p.done = true // UI goroutine only; no lock
 			p.err = msg.err
 			p.finishedAt = time.Now()
 			(&m).rebuildProcessNodes()

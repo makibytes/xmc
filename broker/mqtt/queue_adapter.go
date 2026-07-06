@@ -19,6 +19,7 @@ const queueTopicPrefix = "queue/"
 type QueueAdapter struct {
 	connArgs ConnArguments
 	client   pahomqtt.Client
+	subs     subscriptionCache
 }
 
 // NewQueueAdapter creates a connected QueueAdapter.
@@ -54,52 +55,55 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 // Receive implements backends.QueueBackend.
 // It subscribes to "$share/xmc/queue/{queue-name}" (shared subscription) for
 // a destructive read, or to "queue/{queue-name}" with a fresh session for a
-// peek (Acknowledge=false). Returns one message then unsubscribes.
+// peek (Acknowledge=false). The subscription is kept open for the adapter's
+// lifetime so consecutive reads (-n, --for) don't drop messages that arrive
+// between calls.
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	var topic string
-	var client pahomqtt.Client
-
-	if opts.Acknowledge {
-		// Destructive read via shared subscription – competing consumers.
-		group := "xmc"
-		if g := opts.Extra["group"]; g != "" {
-			group = g
-		}
-		topic = "$share/" + group + "/" + queueTopicPrefix + opts.Queue
-		client = a.client
-	} else {
-		// Peek: use a fresh client with a unique clientID so the broker
-		// delivers a copy without advancing the queue offset.
-		peekArgs := a.connArgs
-		peekArgs.ClientID = fmt.Sprintf("xmc-peek-%s-%d", opts.Queue, os.Getpid())
-		peekArgs.ClientID = peekArgs.ClientID[:min(len(peekArgs.ClientID), 23)] // MQTT max 23 chars
-		var err error
-		client, err = Connect(peekArgs)
-		if err != nil {
-			return nil, fmt.Errorf("peek connect: %w", err)
-		}
-		defer client.Disconnect(250)
-		topic = queueTopicPrefix + opts.Queue
-	}
-
 	qos := byte(1)
 	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
 		qos = byte(v)
 	}
 
-	msgCh := make(chan pahomqtt.Message, 1)
-	token := client.Subscribe(topic, qos, func(_ pahomqtt.Client, msg pahomqtt.Message) {
-		select {
-		case msgCh <- msg:
-		default:
+	if !opts.Acknowledge {
+		// Peek: use a fresh client with a unique clientID so the broker
+		// delivers a copy while shared-group consumers keep theirs.
+		peekArgs := a.connArgs
+		peekArgs.ClientID = fmt.Sprintf("xmc-peek-%s-%d", opts.Queue, os.Getpid())
+		peekArgs.ClientID = peekArgs.ClientID[:min(len(peekArgs.ClientID), 23)] // MQTT max 23 chars
+		client, err := Connect(peekArgs)
+		if err != nil {
+			return nil, fmt.Errorf("peek connect: %w", err)
 		}
-	})
-	token.Wait()
-	if err := token.Error(); err != nil {
-		return nil, fmt.Errorf("MQTT subscribe to %q: %w", topic, err)
-	}
-	defer client.Unsubscribe(topic) //nolint:errcheck
+		defer client.Disconnect(250)
+		topic := queueTopicPrefix + opts.Queue
 
+		msgCh := make(chan pahomqtt.Message, 1)
+		token := client.Subscribe(topic, qos, func(_ pahomqtt.Client, msg pahomqtt.Message) {
+			select {
+			case msgCh <- msg:
+			default:
+			}
+		})
+		if !token.WaitTimeout(tokenTimeout) {
+			return nil, fmt.Errorf("MQTT subscribe to %q timed out", topic)
+		}
+		if err := token.Error(); err != nil {
+			return nil, fmt.Errorf("MQTT subscribe to %q: %w", topic, err)
+		}
+		return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait)
+	}
+
+	// Destructive read via shared subscription – competing consumers.
+	group := "xmc"
+	if g := opts.Extra["group"]; g != "" {
+		group = g
+	}
+	topic := "$share/" + group + "/" + queueTopicPrefix + opts.Queue
+
+	msgCh, err := a.subs.channelFor(a.client, topic, qos)
+	if err != nil {
+		return nil, err
+	}
 	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait)
 }
 
@@ -111,7 +115,7 @@ func (a *QueueAdapter) Close() error {
 
 // waitForMessage waits on msgCh respecting timeout/wait semantics, using the
 // shared TimeoutDuration helper so MQTT follows the same contract as all other
-// brokers.
+// brokers. Buffered messages from a still-open subscription are drained first.
 func waitForMessage(ctx context.Context, msgCh <-chan pahomqtt.Message, timeout float32, wait bool) (*backends.Message, error) {
 	dur := backends.TimeoutDuration(timeout, wait)
 	timer := time.NewTimer(dur)
@@ -139,4 +143,3 @@ func convertMessage(msg pahomqtt.Message) *backends.Message {
 	copy(data, payload)
 	return &backends.Message{Data: data}
 }
-

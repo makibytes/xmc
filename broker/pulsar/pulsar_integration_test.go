@@ -279,8 +279,8 @@ func TestPulsar_TopicPublishSubscribe_Key(t *testing.T) {
 	if string(res.msg.Data) != string(payload) {
 		t.Errorf("payload: got %q, want %q", res.msg.Data, payload)
 	}
-	if res.msg.MessageID != key {
-		t.Errorf("Key (MessageID): got %q, want %q", res.msg.MessageID, key)
+	if res.msg.Key != key {
+		t.Errorf("Key: got %q, want %q", res.msg.Key, key)
 	}
 }
 

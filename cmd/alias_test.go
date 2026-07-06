@@ -4,15 +4,15 @@ import "testing"
 
 func TestExpandAlias(t *testing.T) {
 	aliases := map[string]string{
-		"drain":  "receive $1 -n 0 --ndjson | send $1-dlq --ndjson",
-		"peek5":  "peek $1 -n 5",
+		"drain":   "receive $1 -n 0 --ndjson | send $1-dlq --ndjson",
+		"peek5":   "peek $1 -n 5",
 		"showall": "receive $@ -n 0",
 	}
 
 	tests := []struct {
-		name    string
-		line    string
-		want    string
+		name string
+		line string
+		want string
 	}{
 		{"simple substitution", "peek5 orders", "peek orders -n 5"},
 		{"multi-use of $1", "drain orders", "receive orders -n 0 --ndjson | send orders-dlq --ndjson"},

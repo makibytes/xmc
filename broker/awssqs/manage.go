@@ -54,31 +54,6 @@ func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 	return queues, nil
 }
 
-func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
-	_, snsc, err := Connect(context.Background(), args)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-	out, err := snsc.ListTopics(ctx, &sns.ListTopicsInput{})
-	if err != nil {
-		return nil, fmt.Errorf("listing topics: %w", err)
-	}
-
-	var topics []backends.TopicInfo
-	for _, t := range out.Topics {
-		if t.TopicArn == nil {
-			continue
-		}
-		parts := strings.Split(*t.TopicArn, ":")
-		name := parts[len(parts)-1]
-		topics = append(topics, backends.TopicInfo{Name: name})
-	}
-
-	return topics, nil
-}
-
 // ListTopicsWithSubscriptions returns SNS topics as ObjectNodes with their
 // subscriptions as children (for the AI TUI hierarchical sidebar window).
 func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, error) {

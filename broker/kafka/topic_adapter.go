@@ -98,9 +98,8 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		GroupID:   opts.GroupID,
 		Timeout:   opts.Timeout,
 		Wait:      opts.Wait,
-		Number:    1,
 		Partition: -1,
-		Offset:    -1,
+		Offset:    OffsetUnset,
 	}
 
 	if opts.Extra != nil {
@@ -123,6 +122,9 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 					return nil, fmt.Errorf("invalid --offset value %q (use earliest, latest, or a number): %w", v, err)
 				}
 				args.Offset = o
+			}
+			if args.Partition < 0 {
+				return nil, fmt.Errorf("--offset requires --partition (offsets are per-partition)")
 			}
 		}
 	}
@@ -194,14 +196,23 @@ func (a *TopicAdapter) getReader(args ReceiveArguments) (*kafka.Reader, error) {
 
 	if args.Partition >= 0 {
 		readerConfig.Partition = args.Partition
-		if args.Offset >= 0 {
-			readerConfig.StartOffset = args.Offset
-		}
 	} else {
 		readerConfig.GroupID = args.GroupID
 	}
 
-	a.reader = kafka.NewReader(readerConfig)
+	reader := kafka.NewReader(readerConfig)
+
+	// ReaderConfig.StartOffset only applies to consumer groups; partition
+	// readers position via SetOffset, which also resolves the FirstOffset /
+	// LastOffset sentinels (--offset earliest / latest).
+	if args.Partition >= 0 && args.Offset != OffsetUnset {
+		if err := reader.SetOffset(args.Offset); err != nil {
+			reader.Close()
+			return nil, fmt.Errorf("setting offset %d on partition %d: %w", args.Offset, args.Partition, err)
+		}
+	}
+
+	a.reader = reader
 	a.readerKey = key
 	return a.reader, nil
 }
@@ -227,10 +238,9 @@ func (a *TopicAdapter) Close() error {
 
 func convertKafkaToBackendMessage(msg *kafka.Message, withMetadata bool) *backends.Message {
 	result := &backends.Message{
-		Data:             msg.Value,
-		Key:              string(msg.Key),
-		Properties:       make(map[string]any),
-		InternalMetadata: make(map[string]any),
+		Data:       msg.Value,
+		Key:        string(msg.Key),
+		Properties: make(map[string]any),
 	}
 
 	for _, h := range msg.Headers {
@@ -253,10 +263,12 @@ func convertKafkaToBackendMessage(msg *kafka.Message, withMetadata bool) *backen
 	delete(result.Properties, propTTL)
 
 	if withMetadata {
-		result.InternalMetadata["Topic"] = msg.Topic
-		result.InternalMetadata["Partition"] = msg.Partition
-		result.InternalMetadata["Offset"] = msg.Offset
-		result.InternalMetadata["Time"] = msg.Time
+		result.InternalMetadata = map[string]any{
+			"Topic":     msg.Topic,
+			"Partition": msg.Partition,
+			"Offset":    msg.Offset,
+			"Time":      msg.Time,
+		}
 		if len(msg.Key) > 0 {
 			result.InternalMetadata["Key"] = string(msg.Key)
 		}

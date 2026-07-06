@@ -27,8 +27,7 @@ send orders "msg" --fifo --message-group-id checkout   # auto-appends .fifo
 
 ## Consumer groups (topics)
 
-`-g <group>`: creates a named SQS subscriber queue; same group = competing consumers, different groups = fan-out.
-`-D -g <name>` = durable. No `-g` = ephemeral (deleted on close).
+`-g <group>`: creates SQS subscriber queue `<group>-<topic>` (scoped by topic — SQS queue names are account-global); same group = competing consumers, different groups = fan-out. Group and durable subscriber queues stay SNS-subscribed after exit, so they keep buffering; only ephemeral ones (no `-g`) are unsubscribed and deleted on close.
 
 ## Manage
 

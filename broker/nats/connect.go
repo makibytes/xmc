@@ -19,8 +19,8 @@ type ConnArguments = backends.CommonConnArgs
 // on transient failures with no upper reconnect limit.
 func Connect(args ConnArguments) (*natsclient.Conn, error) {
 	opts := []natsclient.Option{
-		natsclient.MaxReconnects(-1),                      // unlimited reconnect attempts
-		natsclient.ReconnectWait(2 * time.Second),         // initial backoff between attempts
+		natsclient.MaxReconnects(-1),              // unlimited reconnect attempts
+		natsclient.ReconnectWait(2 * time.Second), // initial backoff between attempts
 		natsclient.ReconnectJitter(500*time.Millisecond, 2*time.Second),
 		natsclient.DisconnectErrHandler(func(_ *natsclient.Conn, err error) {
 			if err != nil {

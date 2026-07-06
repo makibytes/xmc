@@ -76,13 +76,13 @@ Entry point files (`broker/artemis.go`, etc.) fill in a `cmd.BrokerSpec` struct 
 Artemis and RabbitMQ both use AMQP 1.0. Shared logic is in `broker/amqpcommon/`:
 - `connect.go` - AMQP connection with SASL authentication and TLS support
 - `receive.go` - Message receive with timeout, acknowledge/release, selectors, and durable subscriptions
-- `message.go` - AMQP message to backend Message conversion
+- `message.go` - `BuildMessage` (AMQP 1.0 message construction: metadata mapped to the native property slots, unset fields omitted from the wire instead of sent as empty strings) and AMQP → backend Message conversion
 
-Broker-specific differences (Artemis routing annotations, RabbitMQ exchange routing) remain in their respective packages.
+Broker-specific differences (Artemis routing annotations, RabbitMQ exchange routing + subscription queues) remain in their respective packages. RabbitMQ 4.x AMQP 1.0 (address v2) cannot consume from an exchange, so `rabbitmq.TopicAdapter.Subscribe` declares a backing queue via the Management API (`<group>.<key>` for groups, `xmc-durable-<key>` for durable, expiring `xmc-sub-*` for ephemeral), binds it with the topic as binding key, and consumes from `/queues/<name>`; v2 address segments are percent-encoded like the official RabbitMQ clients.
 
 ### Shared Helpers
 
-- `broker/backends/naming.go` - `RandomSuffix()` (crypto/rand hex) and `SubscriptionName(opts)` (group / durable / ephemeral naming convention shared by all cloud brokers)
+- `broker/backends/naming.go` - `RandomSuffix()` (crypto/rand hex), `SubscriptionName(opts)` (group / durable / ephemeral naming convention), and `ScopedSubscriptionName(opts, sep)` (group form additionally scoped by topic, for brokers whose subscription namespace is global: AWS queue names, Google subscription IDs)
 - `broker/backends/properties.go` - `StringifyProps()`, `PropMessageID`/`PropCorrelationID`/`PropReplyTo`/`PropContentType` constants (the cross-broker metadata contract)
 - `broker/backends/timeout.go` - `TimeoutDuration(timeout, wait)` (shared timeout semantics)
 - `broker/backends/errors.go` - `ErrNoMessageAvailable` (shared no-message sentinel)

@@ -32,12 +32,10 @@ func toSBMessage(data []byte, props map[string]any, messageID, correlationID, re
 		msg.TimeToLive = &d
 	}
 
+	// Service Bus speaks AMQP 1.0: application properties are typed on the
+	// wire, so pass them through as-is like the other AMQP brokers.
 	if len(props) > 0 {
-		appProps := make(map[string]any, len(backends.StringifyProps(props)))
-		for k, v := range backends.StringifyProps(props) {
-			appProps[k] = v
-		}
-		msg.ApplicationProperties = appProps
+		msg.ApplicationProperties = props
 	}
 
 	return msg
