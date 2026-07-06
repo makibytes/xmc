@@ -3,8 +3,8 @@
 package awssqs
 
 import (
-	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	"github.com/makibytes/xmc/broker/backends"
 )
@@ -78,6 +78,14 @@ func sqsToBackendMessage(msg sqstypes.Message) *backends.Message {
 			result.Properties[k] = val
 		}
 	}
+
+	// Back-fill with the SQS-assigned message ID when the sender set none.
+	if result.MessageID == "" && msg.MessageId != nil {
+		result.MessageID = *msg.MessageId
+	}
+	// FIFO ordering concept maps back to Key (set on send via -K or
+	// --message-group-id); absent on standard queues.
+	result.Key = msg.Attributes[string(sqstypes.MessageSystemAttributeNameMessageGroupId)]
 
 	return result
 }

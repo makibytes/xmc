@@ -19,9 +19,9 @@ subscribe events --subscription existing-sub -n 0   # target pre-existing subscr
 
 ## Consumer groups
 
-`-g <group>`: named subscription; same group = competing, different groups = fan-out.
+`-g <group>`: subscription `<group>-<topic>` (scoped by topic — Pub/Sub subscription names are project-global); same group = competing, different groups = fan-out.
 `-D`: durable (`xmc-durable-<topic>`). No `-g`, no `-D`: ephemeral (deleted on close).
-`--subscription <name>`: override to target a specific pre-existing subscription (overrides `-g`).
+`--subscription <name>`: override to target a specific pre-existing subscription (overrides `-g`). If a named subscription exists but is bound to a different topic, the command fails with a clear error instead of delivering the wrong topic's messages.
 
 ## Manage
 
@@ -32,9 +32,17 @@ subscribe events --subscription existing-sub -n 0   # target pre-existing subscr
 `create-topic <name>`,
 `delete-topic <name>`.
 
+## Ordering
+
+`-K <key>` maps to the Pub/Sub `OrderingKey` (and back to the key field on receive).
+Subscriptions created by xmc enable ordered delivery; the flag is immutable, so
+subscriptions created by older versions keep unordered delivery — recreate them to
+get ordering.
+
 ## Constraints
 
 - No per-message TTL (retention is subscription-level, set in GCP Console).
 - No selectors, no priority.
+- Without `-I`, received messages get the server-assigned Pub/Sub ID as message-id.
 - `manage stats` is not available (backlog count requires the Cloud Monitoring API — use GCP Console).
 - Queue emulation: each queue is a Pub/Sub topic with a single shared pull subscription.

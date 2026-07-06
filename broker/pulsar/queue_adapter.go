@@ -112,6 +112,11 @@ func pulsarToBackendMessage(msg pulsar.Message) *backends.Message {
 	}
 	msgID, _ := props[backends.PropMessageID].(string)
 	delete(props, backends.PropMessageID)
+	if msgID == "" {
+		// Back-fill with the broker-assigned ID (ledger:entry:partition) when
+		// the sender set none.
+		msgID = msg.ID().String()
+	}
 	corrID, _ := props[backends.PropCorrelationID].(string)
 	delete(props, backends.PropCorrelationID)
 	replyTo, _ := props[backends.PropReplyTo].(string)

@@ -9,43 +9,52 @@ import (
 	"strconv"
 	"time"
 
-	pahomqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
+
 	"github.com/makibytes/xmc/broker/backends"
 )
 
 const queueTopicPrefix = "queue/"
 
-// QueueAdapter adapts MQTT to QueueBackend using shared subscriptions.
+// QueueAdapter adapts MQTT 5 to QueueBackend using shared subscriptions.
 type QueueAdapter struct {
 	connArgs ConnArguments
-	client   pahomqtt.Client
+	cm       *autopaho.ConnectionManager
+	subs     subCache5
 }
 
-// NewQueueAdapter creates a connected QueueAdapter.
+// NewQueueAdapter creates a connected MQTT 5 QueueAdapter.
 func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
-	client, err := Connect(args)
+	cm, err := Connect5(args)
 	if err != nil {
 		return nil, err
 	}
-	return &QueueAdapter{connArgs: args, client: client}, nil
+	return &QueueAdapter{connArgs: args, cm: cm}, nil
 }
 
 // Send implements backends.QueueBackend.
-// It publishes the message to topic "queue/{queue-name}" with the configured QoS.
+// It publishes the message to topic "queue/{queue-name}" with the configured
+// QoS; metadata rides in the native MQTT 5 property slots. A reply-to queue
+// name is published as response topic "queue/{reply-to}" so native MQTT 5
+// responders and xmc's reply command land in the same place.
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	topic := queueTopicPrefix + opts.Queue
-	qos := byte(1)
-	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
-		qos = byte(v)
+	responseTopic := opts.ReplyTo
+	if responseTopic != "" {
+		responseTopic = queueTopicPrefix + responseTopic
 	}
-	token := a.client.Publish(topic, qos, false, opts.Message)
-	if !token.WaitTimeout(30 * time.Second) {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("MQTT publish to %q timed out", topic)
-	}
-	if err := token.Error(); err != nil {
+
+	pubCtx, cancel := context.WithTimeout(ctx, tokenTimeout)
+	defer cancel()
+	_, err := a.cm.Publish(pubCtx, &paho.Publish{
+		Topic:   topic,
+		QoS:     qosFromExtra(opts.Extra),
+		Payload: opts.Message,
+		Properties: buildPublishProperties(opts.Properties,
+			opts.MessageID, opts.CorrelationID, responseTopic, opts.ContentType, opts.TTL),
+	})
+	if err != nil {
 		return fmt.Errorf("MQTT publish to %q: %w", topic, err)
 	}
 	return nil
@@ -54,89 +63,72 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 // Receive implements backends.QueueBackend.
 // It subscribes to "$share/xmc/queue/{queue-name}" (shared subscription) for
 // a destructive read, or to "queue/{queue-name}" with a fresh session for a
-// peek (Acknowledge=false). Returns one message then unsubscribes.
+// peek (Acknowledge=false). The subscription is kept open for the adapter's
+// lifetime so consecutive reads (-n, --for) don't drop messages that arrive
+// between calls.
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	var topic string
-	var client pahomqtt.Client
+	qos := qosFromExtra(opts.Extra)
 
-	if opts.Acknowledge {
-		// Destructive read via shared subscription – competing consumers.
-		group := "xmc"
-		if g := opts.Extra["group"]; g != "" {
-			group = g
-		}
-		topic = "$share/" + group + "/" + queueTopicPrefix + opts.Queue
-		client = a.client
-	} else {
+	if !opts.Acknowledge {
 		// Peek: use a fresh client with a unique clientID so the broker
-		// delivers a copy without advancing the queue offset.
+		// delivers a copy while shared-group consumers keep theirs.
 		peekArgs := a.connArgs
-		peekArgs.ClientID = fmt.Sprintf("xmc-peek-%s-%d", opts.Queue, os.Getpid())
-		peekArgs.ClientID = peekArgs.ClientID[:min(len(peekArgs.ClientID), 23)] // MQTT max 23 chars
-		var err error
-		client, err = Connect(peekArgs)
+		peekArgs.ClientID = fmt.Sprintf("xmc-peek-%d-%s", os.Getpid(), backends.RandomSuffix())
+		cm, err := Connect5(peekArgs)
 		if err != nil {
 			return nil, fmt.Errorf("peek connect: %w", err)
 		}
-		defer client.Disconnect(250)
-		topic = queueTopicPrefix + opts.Queue
-	}
+		defer cm.Disconnect(context.Background()) //nolint:errcheck
 
-	qos := byte(1)
-	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
-		qos = byte(v)
-	}
-
-	msgCh := make(chan pahomqtt.Message, 1)
-	token := client.Subscribe(topic, qos, func(_ pahomqtt.Client, msg pahomqtt.Message) {
-		select {
-		case msgCh <- msg:
-		default:
+		var peekSubs subCache5
+		msgCh, err := peekSubs.channelFor(ctx, cm, queueTopicPrefix+opts.Queue, qos)
+		if err != nil {
+			return nil, err
 		}
-	})
-	token.Wait()
-	if err := token.Error(); err != nil {
-		return nil, fmt.Errorf("MQTT subscribe to %q: %w", topic, err)
+		return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait, true)
 	}
-	defer client.Unsubscribe(topic) //nolint:errcheck
 
-	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait)
+	// Destructive read via shared subscription – competing consumers.
+	group := "xmc"
+	if g := opts.Extra["group"]; g != "" {
+		group = g
+	}
+	topic := "$share/" + group + "/" + queueTopicPrefix + opts.Queue
+
+	msgCh, err := a.subs.channelFor(ctx, a.cm, topic, qos)
+	if err != nil {
+		return nil, err
+	}
+	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait, true)
 }
 
 // Close implements backends.QueueBackend.
 func (a *QueueAdapter) Close() error {
-	a.client.Disconnect(250)
-	return nil
+	return a.cm.Disconnect(context.Background())
+}
+
+// qosFromExtra reads the --qos flag value (default 1).
+func qosFromExtra(extra map[string]string) byte {
+	if v, err := strconv.Atoi(extra["qos"]); err == nil {
+		return byte(v)
+	}
+	return 1
 }
 
 // waitForMessage waits on msgCh respecting timeout/wait semantics, using the
 // shared TimeoutDuration helper so MQTT follows the same contract as all other
-// brokers.
-func waitForMessage(ctx context.Context, msgCh <-chan pahomqtt.Message, timeout float32, wait bool) (*backends.Message, error) {
+// brokers. Buffered messages from a still-open subscription are drained first.
+func waitForMessage(ctx context.Context, msgCh <-chan *paho.Publish, timeout float32, wait bool, stripQueuePrefix bool) (*backends.Message, error) {
 	dur := backends.TimeoutDuration(timeout, wait)
 	timer := time.NewTimer(dur)
 	defer timer.Stop()
 
 	select {
 	case msg := <-msgCh:
-		return convertMessage(msg), nil
+		return convertPublish(msg, stripQueuePrefix), nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timer.C:
 		return nil, backends.ErrNoMessageAvailable
 	}
 }
-
-// convertMessage converts a paho MQTT message to a backends.Message.
-//
-// MQTT 3.1.1 has no user properties at the protocol level, so application
-// properties, correlation ID, reply-to, content-type, and message ID cannot be
-// carried through an MQTT broker. To gain metadata parity, migrate to the
-// MQTT 5 client (eclipse/paho.golang) which supports User Properties.
-func convertMessage(msg pahomqtt.Message) *backends.Message {
-	payload := msg.Payload()
-	data := make([]byte, len(payload))
-	copy(data, payload)
-	return &backends.Message{Data: data}
-}
-

@@ -6,8 +6,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Request-reply | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
-| Reply / responder | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| Request-reply | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Reply / responder | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Move / redrive | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Custom output format (`-F`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | NDJSON export/import (`--ndjson`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -20,16 +20,16 @@
 | TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | - | - | - |
 | Message selectors | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
 | Durable subscriptions | Yes | Yes | - | - | - | - | Yes | Yes | Yes | Yes | Yes |
-| TTL / expiry | Yes | Yes | Yes | Yes | - | - | Partial | - | - | - | Yes |
-| Application properties | Yes | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes |
+| TTL / expiry | Yes | Yes | Partial | Yes | Yes | - | Partial | - | - | - | Yes |
+| Application properties | Yes | Yes | Yes | Yes | Yes (MQTT 5) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Message priority | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
 | Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) | Yes (Streams) | Yes | Yes | Yes |
 | Management: list | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes | Yes |
-| Management: purge | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes (drain) |
-| Management: stats | Yes | Yes | - | - | - | - | - | Yes | - | Yes | Yes |
-| Management: create | queue, topic | queue, exchange | topic | - | - | queue | topic | queue, topic | - | - | - |
-| Management: delete | queue, topic | queue, exchange | topic | - | - | queue | topic | queue, topic | - | - | - |
-| Management: bind | - | queue↔exchange | - | - | - | - | - | - | - | - | - |
+| Management: purge | Yes | Yes | - | - | - | Yes | - | Yes | Yes (seek) | Yes | Yes (drain) |
+| Management: stats | Yes | Yes | Yes (topic) | - | - | Yes | - | Yes | - | Yes | Yes |
+| Management: create | queue, topic, address | queue, exchange | topic | - | - | queue | topic | queue, topic | queue, topic | queue, topic | queue, topic |
+| Management: delete | queue, topic, address | queue, exchange | topic | - | - | queue | topic | queue, topic | queue, topic | queue, topic | queue, topic |
+| Management: bind | queue↔address | queue↔exchange | - | - | - | - | - | - | - | - | - |
 
 The `reply`, `move` and `-F`/`--format` features live in the generic command layer
 (`cmd/`) on top of the queue/topic interfaces, so they are available for every broker
@@ -69,21 +69,27 @@ update it when adding a broker or a new canonical field.
 
 | Field | Artemis / RabbitMQ (AMQP) | IBM MQ | Azure SB | Kafka / Pulsar / NATS / Redis / Google / AWS | MQTT |
 | --- | --- | --- | --- | --- | --- |
-| MessageID | native `Properties.MessageID` | native `MQMD.MsgId` | native `MessageID` | `PropMessageID` (no native slot) | unsupported |
-| CorrelationID | native `Properties.CorrelationID` | native `MQMD.CorrelId` | native `CorrelationID` | `PropCorrelationID` | unsupported |
-| ReplyTo | native `Properties.ReplyTo` | native `MQMD.ReplyToQ` | native `ReplyTo` | `PropReplyTo` | unsupported |
-| ContentType | native `Properties.ContentType` | message-handle property under `PropContentType` (MQMD has no content-type slot) | native `ContentType` | `PropContentType` | unsupported |
+| MessageID | native `Properties.MessageID` | native `MQMD.MsgId` | native `MessageID` | `PropMessageID` (no native slot) | user property `message-id` (MQTT 5; no native slot) |
+| MessageID back-fill (sender set none) | — (broker adds no wire ID) | queue manager always assigns `MsgId` | broker `SequenceNumber` | server ID (Google/AWS/Pulsar), stream entry ID (Redis), `stream:seq` (NATS), `topic:partition:offset` (Kafka) | — |
+| CorrelationID | native `Properties.CorrelationID` | native `MQMD.CorrelId` | native `CorrelationID` | `PropCorrelationID` | native correlation data (MQTT 5) |
+| ReplyTo | native `Properties.ReplyTo` | native `MQMD.ReplyToQ` | native `ReplyTo` | `PropReplyTo` | native response topic (MQTT 5) |
+| ContentType | native `Properties.ContentType` | message-handle property under `PropContentType` (MQMD has no content-type slot) | native `ContentType` | `PropContentType` | native content type (MQTT 5) |
 | Priority | native `Header.Priority` | native `MQMD.Priority` | unsupported | unsupported | unsupported |
 | Persistent | native `Header.Durable` | native `MQMD.Persistence` | unsupported | unsupported | Yes (QoS 1, protocol-level, not a `Message` field) |
-| TTL | AMQP header | native `MQMD.Expiry` | native `TimeToLive` | internal transport header, Kafka/Pulsar only (stripped back out on receive, not user-visible); unsupported elsewhere | unsupported |
-| Key (partition/routing) | n/a | n/a | n/a | native on Kafka/Pulsar; dropped (not mapped to `OrderingKey`/`MessageGroupId`) on NATS/Redis/Google/AWS | n/a |
+| TTL | AMQP header | native `MQMD.Expiry` | native `TimeToLive` | internal transport header, Kafka/Pulsar only (stripped back out on receive, not user-visible); unsupported elsewhere | native message expiry (MQTT 5, seconds) |
+| Key (partition/ordering) | n/a | n/a | n/a | native on Kafka/Pulsar; Google `OrderingKey`; AWS `MessageGroupId` (FIFO only, explicit `--message-group-id` wins); dropped on NATS/Redis | n/a |
 
-Two gaps are noted here as deliberate, tracked non-goals rather than bugs: xmc does not
-currently (1) populate `MessageID` from a broker-assigned server-side ID on receive when
-the sender left it blank (Kafka/Pulsar/Google all generate one), or (2) map `Key` onto
-Google Pub/Sub's `OrderingKey` or AWS SQS/SNS's `MessageGroupId` (both are ordering
-concepts adjacent to, but not identical with, a partition key). Either could be revisited
-as an explicit, separately-decided enhancement.
+When the sender sets no message ID, read commands back-fill `MessageID` with the
+broker-assigned identity per the back-fill row above — a sender-set ID always wins, and
+messages relayed by `move`/`forward`/`bridge` keep their origin ID. Artemis, RabbitMQ,
+and MQTT have no back-fill because those brokers put no server-assigned ID on the wire
+(AMQP `message-id` is sender-populated; Artemis's internal ID is not exposed over AMQP).
+
+`-K`/`--key` maps to Google Pub/Sub's `OrderingKey` (xmc-created subscriptions enable
+ordered delivery; subscriptions created by older versions keep unordered delivery — the
+flag is immutable) and to AWS `MessageGroupId` on FIFO queues/topics only (`--message-group-id`
+takes precedence; on standard queues the key is dropped as before). Both map back to
+`Key` on receive.
 
 ## Traditional Message Brokers
 
@@ -115,10 +121,11 @@ flowchart LR
 - Queues must be pre-declared (RabbitMQ does not auto-create queues over AMQP 1.0)
 - Smart addressing defaults: `send` → `/queues/<name>`, `publish` → `/exchanges/amq.topic/<name>`
 - Explicit routing: `-e <exchange>` sets the exchange (with optional routing key as `<to>`), `-q <queue>` forces queue routing
-- Full v2 addresses (starting with `/`) are always used verbatim (highest precedence)
+- Full v2 addresses (starting with `/`) are always used verbatim (highest precedence); reserved characters in names/keys are percent-encoded like the official RabbitMQ clients
+- `subscribe`: AMQP 1.0 v2 forbids exchange sources, so xmc declares a backing queue via the Management API (`<group>.<key>` durable for groups, `xmc-durable-<key>` for `--durable`, expiring `xmc-sub-<random>` for group-less runs), binds it with the topic as binding key, and consumes from it
 - Choose between `fanout`, `direct`, `topic` and `headers` exchange types
 - Selectors: Supported via AMQP source filters
-- Management: RabbitMQ Management API on HTTP port 15672 (list, purge, stats, create/delete queue, create/delete exchange, bind/unbind queue)
+- Management: RabbitMQ Management API on HTTP port 15672 (list, purge, stats, create/delete queue, create/delete exchange, bind/unbind queue); also required by `subscribe` and the `peek -n 0` browse cursor
 
 => Define topology statically by declaring exchanges, queues, and bindings.
 
@@ -175,7 +182,8 @@ flowchart LR
 
 ### MQTT
 
-- Protocol: MQTT 3.1.1 / 5.0
+- Protocol: MQTT 5 by default; `--mqtt-version 3` selects the legacy 3.1.1 client for old brokers (no properties/metadata — send/publish reject the flags loudly)
+- MQTT 5 metadata: user properties (`-P`), content type, correlation data, response topic, message expiry (`-E`, seconds)
 - Binary: `mmc`, build tag: `mqtt`
 - **Queue topology**: send publishes to `queue/{name}` with QoS 1; receive uses MQTT 5.0 shared subscriptions (`$share/xmc/queue/{name}`) for competing consumers; peek subscribes directly without a shared subscription using a fresh clean-session client.
 - **Topic topology**: publish/subscribe to MQTT topics directly. Consumer groups via `--group` map to shared subscriptions (`$share/{groupID}/{topic}`).
@@ -225,8 +233,7 @@ flowchart LR
 - Protocol: Pulsar native (binary protocol, port 6650)
 - Binary: `pmc`, build tag: `pulsar`
 - **Queue topology**: Shared subscription on `persistent://public/default/{queue}` — messages distributed among all subscribers with the same subscription name, each delivered to exactly one consumer.
-- **Topic topology**: Exclusive subscription by default (single consumer gets all messages); `--group` maps to Shared subscription for load-balanced consumer groups.
-- Durable subscriptions: all subscriptions are durable by default in Pulsar (server retains messages until acknowledged)
+- **Topic topology**: `--group` maps to a Shared durable subscription for load-balanced consumer groups; `--durable` (without group) to an Exclusive durable one. Group-less subscribes use an Exclusive NonDurable subscription with a unique per-run name, so no cursor is left on the topic and concurrent subscribers don't collide.
 - Peek: uses Shared subscription + Nack so messages are redelivered and not consumed
 - Request-reply: via ReplyTo topic property
 - TLS: auto-detected via `pulsar+ssl://` URL scheme; also `--tls` flag
@@ -279,7 +286,7 @@ flowchart LR
 - Protocol: gRPC (Google Cloud Pub/Sub API)
 - Binary: `gmc`, build tag: `google`
 - **Queue topology**: A topic + a single shared subscription (`xmc-queue-{name}`) — messages are distributed among competing consumers, each delivered to exactly one. The subscription is auto-created on first `send` so messages are retained before the first `receive`.
-- **Topic topology**: Ephemeral per-subscriber subscriptions for true fan-out (auto-deleted on close). `--group` maps to a stable named subscription (competing consumers within the group). `--durable` uses a persistent subscription that retains its read position.
+- **Topic topology**: Ephemeral per-subscriber subscriptions for true fan-out (auto-deleted on close). `--group` maps to a stable subscription named `{group}-{topic}` — subscription IDs are project-global, so the topic scopes the name (competing consumers within the group). `--durable` uses a persistent subscription that retains its read position. An existing same-named subscription bound to another topic is rejected with a clear error rather than silently delivering that topic's messages.
 - Peek: uses `Nack` so messages are redelivered
 - Authentication: Google Application Default Credentials (ADC) or `--credentials` (service account JSON). No TLS flags (gRPC handles transport).
 - Emulator: set `--endpoint` (or env `PUBSUB_EMULATOR_HOST`) for local development
@@ -307,7 +314,7 @@ flowchart LR
 - Protocol: AWS SDK v2 (HTTPS REST APIs)
 - Binary: `awsmc`, build tag: `aws`
 - **Queue topology**: SQS queues (native point-to-point). `CreateQueue` is idempotent. `ReceiveMessage` + `DeleteMessage` = ack. Peek uses `VisibilityTimeout: 0` + `ChangeMessageVisibility` so the message is not consumed.
-- **Topic topology**: SNS topics with SNS→SQS fan-out. Each subscriber gets an auto-created SQS queue subscribed to the SNS topic with `RawMessageDelivery: true` (preserves payload + message attributes). `--group` maps to a shared SQS queue name (competing consumers). Ephemeral subscriber queues are cleaned up on close.
+- **Topic topology**: SNS topics with SNS→SQS fan-out. Each subscriber gets an auto-created SQS queue subscribed to the SNS topic with `RawMessageDelivery: true` (preserves payload + message attributes). `--group` maps to a shared SQS queue named `{group}-{topic}` — queue names are account-global, so the topic scopes the name (competing consumers). Group/durable subscriber queues stay SNS-subscribed after exit and keep buffering; ephemeral ones are unsubscribed and deleted on close.
 - Application properties: carried as SQS/SNS `MessageAttributes` (`DataType: "String"`). The four metadata keys (`message-id`, `correlation-id`, `reply-to`, `content-type`) are reserved attributes.
 - Authentication: standard AWS credential chain (env vars / shared config / IAM). `--region`, `--endpoint` (for LocalStack), `--profile`.
 - Management: `manage list` (SQS `ListQueues` + SNS `ListTopics`), `manage purge` (native `PurgeQueue`), `manage stats` (`GetQueueAttributes` for message counts)

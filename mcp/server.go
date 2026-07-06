@@ -25,10 +25,19 @@ import (
 	"time"
 )
 
-// protocolVersion is the MCP revision this server implements. During
-// initialize the server echoes back the client's requested version when one is
-// supplied (per the spec's negotiation rule), falling back to this value.
+// protocolVersion is the latest MCP revision this server implements. During
+// initialize the server echoes back the client's requested version when it is
+// one of supportedVersions (per the spec's negotiation rule: same version if
+// supported, otherwise the server's latest).
 const protocolVersion = "2025-06-18"
+
+// supportedVersions are the MCP revisions this server can honestly claim: the
+// tools-only surface it exposes is identical across all three.
+var supportedVersions = map[string]bool{
+	"2024-11-05": true,
+	"2025-03-26": true,
+	"2025-06-18": true,
+}
 
 // ---- JSON-RPC 2.0 envelope -------------------------------------------------
 
@@ -169,7 +178,7 @@ func (s *Server) initialize(params json.RawMessage) any {
 		var p struct {
 			ProtocolVersion string `json:"protocolVersion"`
 		}
-		if err := json.Unmarshal(params, &p); err == nil && p.ProtocolVersion != "" {
+		if err := json.Unmarshal(params, &p); err == nil && supportedVersions[p.ProtocolVersion] {
 			negotiated = p.ProtocolVersion
 		}
 	}
@@ -209,7 +218,7 @@ func (s *Server) toolsCall(ctx context.Context, params json.RawMessage) (any, *r
 		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf("unknown tool: %s", call.Name)}
 	}
 
-	res, err := tool.Handler(ctx, call.Arguments)
+	res, err := runTool(ctx, tool, call.Arguments)
 	if err != nil {
 		// Tool execution failures are reported to the model as an isError
 		// result so it can read the reason and recover, not as a JSON-RPC fault.
@@ -219,6 +228,18 @@ func (s *Server) toolsCall(ctx context.Context, params json.RawMessage) (any, *r
 		}, nil
 	}
 	return res, nil
+}
+
+// runTool invokes the handler and converts a panic into an error, so one
+// misbehaving broker adapter can't take down the long-lived server (and the
+// agent still gets a readable failure to react to).
+func runTool(ctx context.Context, tool *Tool, args json.RawMessage) (res *ToolResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = nil, fmt.Errorf("tool %s panicked: %v", tool.Name, r)
+		}
+	}()
+	return tool.Handler(ctx, args)
 }
 
 func (s *Server) encode(resp rpcResponse) []byte {

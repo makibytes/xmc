@@ -19,8 +19,8 @@ type ConnArguments struct {
 	ClientID string // auto-generated if empty
 }
 
-// Connect creates and connects a new MQTT client using the provided arguments.
-func Connect(args ConnArguments) (pahomqtt.Client, error) {
+// ConnectV3 creates and connects a legacy MQTT 3.1.1 client (--mqtt-version 3).
+func ConnectV3(args ConnArguments) (pahomqtt.Client, error) {
 	clientID := args.ClientID
 	if clientID == "" {
 		clientID = fmt.Sprintf("xmc-%d-%d", os.Getpid(), rand.Int31()) //nolint:gosec
@@ -57,3 +57,12 @@ func Connect(args ConnArguments) (pahomqtt.Client, error) {
 	return client, nil
 }
 
+// rejectV3Metadata fails a v3 send/publish that carries metadata the MQTT
+// 3.1.1 protocol cannot represent, instead of silently dropping it. The
+// default MQTT 5 adapters carry all of these natively.
+func rejectV3Metadata(hasProps bool, messageID, correlationID, replyTo, contentType string, ttl int64) error {
+	if hasProps || messageID != "" || correlationID != "" || replyTo != "" || contentType != "" || ttl > 0 {
+		return fmt.Errorf("application properties and metadata require MQTT 5; remove --mqtt-version 3 or drop the metadata flags")
+	}
+	return nil
+}

@@ -1007,7 +1007,7 @@ func TestAITUI_MetadataPeekHotkey_ShowsMetadataOnly_WithCopyMarker(t *testing.T)
 		CorrelationID: "corr-1",
 		Properties:    map[string]any{"tenant": "acme"},
 		InternalMetadata: map[string]any{
-			"Header": "durable=false",
+			"Header":  "durable=false",
 			"Ignored": "<nil>",
 		},
 	}}

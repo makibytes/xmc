@@ -30,9 +30,12 @@ func fetchMessage(ctx context.Context, reader *kafka.Reader, args ReceiveArgumen
 		return nil, hintAdvertisedListeners(fmt.Errorf("failed to fetch message: %w", err), brokers)
 	}
 
-	// Commit the message (acknowledge)
-	if err := reader.CommitMessages(ctx, message); err != nil {
-		log.Verbose("⚠️  failed to commit message: %v", err)
+	// Commit the offset (acknowledge). Only group readers track offsets;
+	// partition readers (--partition) have nothing to commit.
+	if args.Partition < 0 && args.GroupID != "" {
+		if err := reader.CommitMessages(ctx, message); err != nil {
+			log.Verbose("⚠️  failed to commit message: %v", err)
+		}
 	}
 
 	return &message, nil

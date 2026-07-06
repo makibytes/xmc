@@ -18,13 +18,25 @@ type TopicInfo struct {
 	Name string
 }
 
+// applyAdminAuth adds the CLI's credentials to an Admin REST API request:
+// --token as a Bearer token, --user/--password as basic auth.
+func applyAdminAuth(req *http.Request, args ConnArguments) {
+	switch {
+	case args.Token != "":
+		req.Header.Set("Authorization", "Bearer "+args.Token)
+	case args.User != "":
+		req.SetBasicAuth(args.User, args.Password)
+	}
+}
+
 // adminRequest performs an HTTP request against the Pulsar Admin REST API.
-func adminRequest(method, endpoint string) error {
+func adminRequest(args ConnArguments, method, endpoint string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest(method, endpoint, nil)
 	if err != nil {
 		return err
 	}
+	applyAdminAuth(req, args)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -40,13 +52,14 @@ func adminRequest(method, endpoint string) error {
 }
 
 // adminPutJSON performs a PUT with a JSON body against the Pulsar Admin REST API.
-func adminPutJSON(endpoint string, body []byte) error {
+func adminPutJSON(args ConnArguments, endpoint string, body []byte) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("PUT", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	applyAdminAuth(req, args)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -69,10 +82,10 @@ func CreateTopic(connArgs ConnArguments, adminPort int, topic, tenant, namespace
 	if partitions > 0 {
 		endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s/%s/partitions", adminURL, persistence, tenant, namespace, url.PathEscape(topic))
 		body := fmt.Sprintf("%d", partitions)
-		return adminPutJSON(endpoint, []byte(body))
+		return adminPutJSON(connArgs, endpoint, []byte(body))
 	}
 	endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s/%s", adminURL, persistence, tenant, namespace, url.PathEscape(topic))
-	return adminRequest("PUT", endpoint)
+	return adminRequest(connArgs, "PUT", endpoint)
 }
 
 // DeleteTopic deletes a topic via the Admin REST API.
@@ -80,7 +93,7 @@ func DeleteTopic(connArgs ConnArguments, adminPort int, topic, tenant, namespace
 	adminURL := buildAdminURL(connArgs.Server, adminPort)
 	persistence := persistenceScheme(nonPersistent)
 	endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s/%s", adminURL, persistence, tenant, namespace, url.PathEscape(topic))
-	return adminRequest("DELETE", endpoint)
+	return adminRequest(connArgs, "DELETE", endpoint)
 }
 
 // ListTopics lists topics in the given tenant/namespace via the Admin REST API.
@@ -90,7 +103,12 @@ func ListTopics(connArgs ConnArguments, adminPort int, tenant, namespace string,
 	endpoint := fmt.Sprintf("%s/admin/v2/%s/%s/%s", adminURL, persistence, tenant, namespace)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(endpoint)
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	applyAdminAuth(req, connArgs)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("querying Pulsar admin API: %w", err)
 	}

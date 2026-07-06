@@ -18,7 +18,7 @@ func queueAddress(name string) string {
 	if strings.HasPrefix(name, "/") {
 		return name
 	}
-	return "/queues/" + name
+	return "/queues/" + escapeName(name)
 }
 
 // QueueAdapter adapts RabbitMQ to the QueueBackend interface using direct queue routing
@@ -65,8 +65,6 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	args := ReceiveArguments{
 		Queue:       queueAddress(opts.Queue),
 		Acknowledge: opts.Acknowledge,
-		Durable:     false,
-		Number:      1,
 		Selector:    opts.Selector,
 		Timeout:     opts.Timeout,
 		Wait:        opts.Wait,
@@ -89,6 +87,11 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 // cursor over them. Falls back to backends.ErrBrowseUnsupported if the
 // Management API is unavailable or fails (e.g. management plugin not loaded).
 func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
+	if opts.Selector != "" {
+		// The Management API's get endpoint cannot filter by selector; fall
+		// back to the plain receive loop, which applies the selector filter.
+		return nil, backends.ErrBrowseUnsupported
+	}
 	msgs, err := peekQueueMessages(ManagementArgs{
 		Server:   a.connArgs.Server,
 		User:     a.connArgs.User,

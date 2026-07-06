@@ -33,7 +33,7 @@ type Message struct {
 	ContentType   string
 	Priority      int
 	Persistent    bool
-	Key           string // Partition/routing key (Kafka, Pulsar); empty for most brokers
+	Key           string // Partition/ordering key (Kafka, Pulsar, Google, AWS FIFO); empty for other brokers
 
 	// Internal metadata (for display purposes)
 	InternalMetadata map[string]any
@@ -50,7 +50,7 @@ type SendOptions struct {
 	ContentType   string
 	Priority      int
 	Persistent    bool
-	Key           string            // Partition/routing key (Kafka, Pulsar); ignored by most brokers
+	Key           string            // Partition/ordering key (Kafka, Pulsar, Google, AWS FIFO); ignored by other brokers
 	TTL           int64             // Time-to-live in milliseconds (0 = no expiry)
 	Extra         map[string]string // Broker-specific flags (e.g. fifo, qos, routing-type)
 }

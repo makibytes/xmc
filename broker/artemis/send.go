@@ -10,6 +10,7 @@ import (
 
 	"github.com/Azure/go-amqp"
 
+	"github.com/makibytes/xmc/broker/amqpcommon"
 	"github.com/makibytes/xmc/log"
 )
 
@@ -17,22 +18,19 @@ var nextLinkID atomic.Uint64
 
 func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments) error {
 	log.Verbose("🏗️  constructing message...")
-	message := amqp.NewMessage(args.Message)
-	message.Header = &amqp.MessageHeader{
-		Durable:  args.Durable,
-		Priority: args.Priority,
-	}
+	message := amqpcommon.BuildMessage(amqpcommon.MessageArgs{
+		Payload:       args.Message,
+		ContentType:   args.ContentType,
+		CorrelationID: args.CorrelationID,
+		MessageID:     args.MessageID,
+		ReplyTo:       args.ReplyTo,
+		Priority:      args.Priority,
+		Durable:       args.Durable,
+		TTL:           args.TTL,
+		Properties:    args.Properties,
+	})
 	if args.TTL > 0 {
-		message.Header.TTL = time.Duration(args.TTL) * time.Millisecond
 		log.Verbose("setting TTL to %d ms", args.TTL)
-	}
-	message.Properties = &amqp.MessageProperties{
-		ContentType:   &args.ContentType,
-		CorrelationID: &args.CorrelationID,
-		MessageID:     &args.MessageID,
-		ReplyTo:       &args.ReplyTo,
-		Subject:       &args.Subject,
-		To:            &args.To,
 	}
 
 	// AMQP 1.0 doesn't know about ANYCAST/MULTICAST, it's an Artemis-specific feature
@@ -51,23 +49,9 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 		"x-opt-jms-dest": artemisRouting,
 	}
 
-	//TODO: reply queue -> x-opt-jms-reply-to
-
-	if len(args.Properties) > 0 {
-		message.ApplicationProperties = args.Properties
-	}
-
-	var durability amqp.Durability
-	if args.Durable {
-		durability = amqp.DurabilityUnsettledState
-	} else {
-		durability = amqp.DurabilityNone
-	}
-
+	durability := amqpcommon.LinkDurability(args.Durable)
 	senderOptions := &amqp.SenderOptions{
-		Durability: durability,
-		//		DynamicAddress:   true,
-		SourceAddress:      args.Address,
+		Durability:         durability,
 		TargetCapabilities: targetCapabilities,
 		TargetDurability:   durability,
 		Name:               fmt.Sprintf("amc-%d", nextLinkID.Add(1)),
@@ -87,7 +71,5 @@ func SendMessage(ctx context.Context, session *amqp.Session, args SendArguments)
 	}()
 
 	log.Verbose("💌 sending message...")
-	err = sender.Send(ctx, message, nil)
-
-	return err
+	return sender.Send(ctx, message, nil)
 }

@@ -15,15 +15,14 @@ var nextLinkID atomic.Uint64
 
 // ReceiveOptions configures an AMQP receive operation
 type ReceiveOptions struct {
-	Queue              string
-	Timeout            float32
-	Wait               bool     // true = wait indefinitely for a message
-	Acknowledge        bool     // true = accept (destructive), false = release (peek)
-	Durable            bool
-	SourceCapabilities []string // e.g. ["queue"] or ["topic"] for Artemis routing
-	Selector           string   // JMS-style message selector (AMQP filter)
-	DurableSubscription bool    // create a durable subscription
-	SubscriptionName   string   // name for durable subscription
+	Queue               string
+	Timeout             float32
+	Wait                bool     // true = wait indefinitely for a message
+	Acknowledge         bool     // true = accept (destructive), false = release (peek)
+	SourceCapabilities  []string // e.g. ["queue"] or ["topic"] for Artemis routing
+	Selector            string   // JMS-style message selector (AMQP filter)
+	DurableSubscription bool     // create a durable subscription
+	SubscriptionName    string   // name for durable subscription
 }
 
 // ReceiveMessage receives a single message from an AMQP 1.0 session.
@@ -38,12 +37,7 @@ func ReceiveMessage(ctx context.Context, session *amqp.Session, opts ReceiveOpti
 	}
 	defer cancel()
 
-	var durability amqp.Durability
-	if opts.Durable || opts.DurableSubscription {
-		durability = amqp.DurabilityUnsettledState
-	} else {
-		durability = amqp.DurabilityNone
-	}
+	durability := LinkDurability(opts.DurableSubscription)
 
 	expiryPolicy := amqp.ExpiryPolicyLinkDetach
 	linkName := fmt.Sprintf("xmc-%d", nextLinkID.Add(1))
@@ -91,9 +85,13 @@ func ReceiveMessage(ctx context.Context, session *amqp.Session, opts ReceiveOpti
 	}
 
 	if opts.Acknowledge {
-		receiver.AcceptMessage(receiveCtx, message)
+		if err := receiver.AcceptMessage(receiveCtx, message); err != nil {
+			return nil, fmt.Errorf("accepting message: %w", err)
+		}
 	} else {
-		receiver.ReleaseMessage(receiveCtx, message)
+		if err := receiver.ReleaseMessage(receiveCtx, message); err != nil {
+			return nil, fmt.Errorf("releasing message: %w", err)
+		}
 	}
 
 	return message, nil

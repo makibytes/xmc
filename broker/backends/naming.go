@@ -31,3 +31,16 @@ func SubscriptionName(opts SubscribeOptions) (name string, ephemeral bool) {
 	}
 	return fmt.Sprintf("xmc-sub-%s", RandomSuffix()), true
 }
+
+// ScopedSubscriptionName is SubscriptionName for brokers whose subscription
+// namespace is global rather than per-topic (AWS SQS queue names, Google
+// Pub/Sub subscription IDs): the group form is additionally scoped by the
+// topic, so the same group on two topics yields two subscription objects
+// instead of silently mixing both topics' messages into one. sep joins group
+// and topic and must be legal in the broker's naming rules.
+func ScopedSubscriptionName(opts SubscribeOptions, sep string) (name string, ephemeral bool) {
+	if opts.GroupID != "" {
+		return opts.GroupID + sep + opts.Topic, false
+	}
+	return SubscriptionName(opts)
+}

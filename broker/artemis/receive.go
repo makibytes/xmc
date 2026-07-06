@@ -27,7 +27,6 @@ func ReceiveMessage(ctx context.Context, session *amqp.Session, args ReceiveArgu
 		Timeout:             args.Timeout,
 		Wait:                args.Wait,
 		Acknowledge:         args.Acknowledge,
-		Durable:             args.Durable,
 		SourceCapabilities:  sourceCapabilities,
 		Selector:            args.Selector,
 		DurableSubscription: args.DurableSubscription,

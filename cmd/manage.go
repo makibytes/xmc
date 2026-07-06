@@ -51,9 +51,9 @@ func (a *BindAction) targetNoun() string {
 // Consumer Groups). Hierarchical types (exchange→binding→queue) populate
 // Children on the returned nodes when expanded.
 type ObjectType struct {
-	Label        string                                      // window title: "Queues", "Exchanges", "Subscriptions"
-	Hierarchical bool                                        // true → expand hotkey reveals Children as a tree
-	List         func() ([]backends.ObjectNode, error)       // returns the current objects
+	Label        string                                // window title: "Queues", "Exchanges", "Subscriptions"
+	Hierarchical bool                                  // true → expand hotkey reveals Children as a tree
+	List         func() ([]backends.ObjectNode, error) // returns the current objects
 }
 
 // SidebarActions returns the create and delete ManageAction for a given object

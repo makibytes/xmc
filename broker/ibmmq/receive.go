@@ -9,7 +9,12 @@ import (
 	"github.com/makibytes/xmc/log"
 )
 
-// ReceiveMessage receives a message from an IBM MQ queue
+// ReceiveMessage receives a message from an IBM MQ queue.
+//
+// On success the returned message handle still holds the message's properties:
+// the caller owns it and must DltMH it after extracting them (deleting it here
+// would invalidate the handle before conversion). On error the handle is
+// already cleaned up.
 func ReceiveMessage(qMgr ibmmq.MQQueueManager, args ReceiveArguments) (*ibmmq.MQMD, []byte, ibmmq.MQMessageHandle, error) {
 	// Open queue for input
 	mqod := ibmmq.NewMQOD()
@@ -27,6 +32,13 @@ func ReceiveMessage(qMgr ibmmq.MQQueueManager, args ReceiveArguments) (*ibmmq.MQ
 		log.Verbose("📥 opening queue %s for peeking (browse)...", args.Queue)
 	}
 
+	// A message selector is evaluated by the queue manager; it is part of the
+	// object descriptor at open time (MQOD version 4 SelectionString).
+	if args.Selector != "" {
+		log.Verbose("applying selector: %s", args.Selector)
+		mqod.SelectionString = args.Selector
+	}
+
 	qObject, err := qMgr.Open(mqod, openOptions)
 	if err != nil {
 		return nil, nil, ibmmq.MQMessageHandle{}, fmt.Errorf("failed to open queue: %w", err)
@@ -35,23 +47,16 @@ func ReceiveMessage(qMgr ibmmq.MQQueueManager, args ReceiveArguments) (*ibmmq.MQ
 
 	// Create message descriptor and get options
 	gmo := ibmmq.NewMQGMO()
-	gmo.Options = ibmmq.MQGMO_NO_SYNCPOINT | ibmmq.MQGMO_FAIL_IF_QUIESCING
-
-	if args.Acknowledge {
-		gmo.Options |= ibmmq.MQGMO_WAIT
-	} else {
-		gmo.Options |= ibmmq.MQGMO_BROWSE_FIRST | ibmmq.MQGMO_WAIT
+	gmo.Options = ibmmq.MQGMO_NO_SYNCPOINT | ibmmq.MQGMO_FAIL_IF_QUIESCING | ibmmq.MQGMO_WAIT
+	if !args.Acknowledge {
+		gmo.Options |= ibmmq.MQGMO_BROWSE_FIRST
 	}
 
 	// Set timeout
 	if args.Wait {
 		gmo.WaitInterval = ibmmq.MQWI_UNLIMITED
 	} else {
-		if args.Timeout < 1 {
-			gmo.WaitInterval = int32(args.Timeout * 1000) // Convert to milliseconds
-		} else {
-			gmo.WaitInterval = int32(args.Timeout * 1000)
-		}
+		gmo.WaitInterval = int32(args.Timeout * 1000) // seconds → milliseconds
 	}
 
 	md := ibmmq.NewMQMD()
@@ -63,51 +68,34 @@ func ReceiveMessage(qMgr ibmmq.MQQueueManager, args ReceiveArguments) (*ibmmq.MQ
 	if err != nil {
 		return nil, nil, msgHandle, fmt.Errorf("failed to create message handle: %w", err)
 	}
-	defer msgHandle.DltMH(ibmmq.NewMQDMHO())
+	discardHandle := func() { msgHandle.DltMH(ibmmq.NewMQDMHO()) } //nolint:errcheck
 
 	gmo.MsgHandle = msgHandle
-
-	// Apply message selector if provided
-	if args.Selector != "" {
-		gmo.MatchOptions = ibmmq.MQMO_MATCH_MSG_TOKEN
-		// IBM MQ selection strings are set via SelectionString on the object descriptor
-		log.Verbose("applying selector: %s", args.Selector)
-	}
 
 	// Get message
 	log.Verbose("📩 receiving message from queue %s...", args.Queue)
 	datalen, err := qObject.Get(md, gmo, buffer)
 	if err != nil {
 		mqret := err.(*ibmmq.MQReturn)
-		if mqret.MQRC == ibmmq.MQRC_NO_MSG_AVAILABLE {
+		switch mqret.MQRC {
+		case ibmmq.MQRC_NO_MSG_AVAILABLE:
 			// Timeout - no message available
+			discardHandle()
 			return nil, nil, msgHandle, fmt.Errorf("timeout: %w", err)
-		}
-		if mqret.MQRC == ibmmq.MQRC_TRUNCATED_MSG_FAILED {
-			// Message too large for buffer, get actual size and retry
+		case ibmmq.MQRC_TRUNCATED_MSG_FAILED:
+			// Message too large for buffer; a failed truncated Get leaves the
+			// message in place (and does not advance the browse cursor), so
+			// retry with the same options and a buffer of the reported size.
 			buffer = make([]byte, datalen)
 			md = ibmmq.NewMQMD()
 			datalen, err = qObject.Get(md, gmo, buffer)
 			if err != nil {
+				discardHandle()
 				return nil, nil, msgHandle, fmt.Errorf("failed to get message: %w", err)
 			}
-		} else {
+		default:
+			discardHandle()
 			return nil, nil, msgHandle, fmt.Errorf("failed to get message: %w", err)
-		}
-	}
-
-	// Handle the case where buffer was initially empty
-	if len(buffer) == 0 && datalen > 0 {
-		buffer = make([]byte, datalen)
-		// Need to browse/get again with proper buffer size
-		md = ibmmq.NewMQMD()
-		if !args.Acknowledge {
-			gmo.Options = ibmmq.MQGMO_NO_SYNCPOINT | ibmmq.MQGMO_FAIL_IF_QUIESCING | ibmmq.MQGMO_BROWSE_FIRST | ibmmq.MQGMO_WAIT
-			gmo.WaitInterval = int32(args.Timeout * 1000)
-		}
-		datalen, err = qObject.Get(md, gmo, buffer)
-		if err != nil {
-			return nil, nil, msgHandle, fmt.Errorf("failed to get message with proper buffer: %w", err)
 		}
 	}
 

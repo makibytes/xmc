@@ -35,7 +35,10 @@ func TestResolveTarget(t *testing.T) {
 		// Rule 5: bare <to> defaults
 		{"bare topic default", true, "orders.eu", "", "", "/exchanges/amq.topic/orders.eu", false},
 		{"bare queue default", false, "q1", "", "", "/queues/q1", false},
-		{"bare topic wildcard", true, "orders.#", "", "", "/exchanges/amq.topic/orders.#", false},
+		// Reserved characters are percent-encoded (the broker decodes them),
+		// matching the official RabbitMQ AMQP 1.0 client libraries.
+		{"bare topic wildcard", true, "orders.#", "", "", "/exchanges/amq.topic/orders.%23", false},
+		{"routing key with slash", true, "a/b", "amq.topic", "", "/exchanges/amq.topic/a%2Fb", false},
 
 		// Errors
 		{"no args topic", true, "", "", "", "", true},

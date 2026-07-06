@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-
 // NewReceiveCommand creates a receive command for queue-based brokers.
 // When resolver is non-nil, --exchange and --queue flags are registered
 // for exchange-routed brokers (e.g. RabbitMQ). Note: -q is already taken
@@ -130,7 +129,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 				return runConsume(browser.Next, cfg, sf.Duration, sf.Stats, parentCtx)
 			case !errors.Is(err, backends.ErrBrowseUnsupported):
 				return err
-			// ErrBrowseUnsupported: fall through to the plain Receive loop below
+				// ErrBrowseUnsupported: fall through to the plain Receive loop below
 			}
 		}
 	}

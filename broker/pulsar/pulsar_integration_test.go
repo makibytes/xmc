@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,10 @@ func TestPulsar_QueueSendReceive(t *testing.T) {
 	}
 	if string(msg.Data) != string(payload) {
 		t.Errorf("payload: got %q, want %q", msg.Data, payload)
+	}
+	// Sender set no message ID → back-filled with ledger:entry:partition.
+	if want := regexp.MustCompile(`^\d+:\d+:-?\d+(:\d+)?$`); !want.MatchString(msg.MessageID) {
+		t.Errorf("MessageID: got %q, want back-filled %q", msg.MessageID, want)
 	}
 }
 
@@ -279,8 +284,8 @@ func TestPulsar_TopicPublishSubscribe_Key(t *testing.T) {
 	if string(res.msg.Data) != string(payload) {
 		t.Errorf("payload: got %q, want %q", res.msg.Data, payload)
 	}
-	if res.msg.MessageID != key {
-		t.Errorf("Key (MessageID): got %q, want %q", res.msg.MessageID, key)
+	if res.msg.Key != key {
+		t.Errorf("Key: got %q, want %q", res.msg.Key, key)
 	}
 }
 

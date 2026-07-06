@@ -76,13 +76,13 @@ Entry point files (`broker/artemis.go`, etc.) fill in a `cmd.BrokerSpec` struct 
 Artemis and RabbitMQ both use AMQP 1.0. Shared logic is in `broker/amqpcommon/`:
 - `connect.go` - AMQP connection with SASL authentication and TLS support
 - `receive.go` - Message receive with timeout, acknowledge/release, selectors, and durable subscriptions
-- `message.go` - AMQP message to backend Message conversion
+- `message.go` - `BuildMessage` (AMQP 1.0 message construction: metadata mapped to the native property slots, unset fields omitted from the wire instead of sent as empty strings) and AMQP → backend Message conversion
 
-Broker-specific differences (Artemis routing annotations, RabbitMQ exchange routing) remain in their respective packages.
+Broker-specific differences (Artemis routing annotations, RabbitMQ exchange routing + subscription queues) remain in their respective packages. RabbitMQ 4.x AMQP 1.0 (address v2) cannot consume from an exchange, so `rabbitmq.TopicAdapter.Subscribe` declares a backing queue via the Management API (`<group>.<key>` for groups, `xmc-durable-<key>` for durable, expiring `xmc-sub-*` for ephemeral), binds it with the topic as binding key, and consumes from `/queues/<name>`; v2 address segments are percent-encoded like the official RabbitMQ clients.
 
 ### Shared Helpers
 
-- `broker/backends/naming.go` - `RandomSuffix()` (crypto/rand hex) and `SubscriptionName(opts)` (group / durable / ephemeral naming convention shared by all cloud brokers)
+- `broker/backends/naming.go` - `RandomSuffix()` (crypto/rand hex), `SubscriptionName(opts)` (group / durable / ephemeral naming convention), and `ScopedSubscriptionName(opts, sep)` (group form additionally scoped by topic, for brokers whose subscription namespace is global: AWS queue names, Google subscription IDs)
 - `broker/backends/properties.go` - `StringifyProps()`, `PropMessageID`/`PropCorrelationID`/`PropReplyTo`/`PropContentType` constants (the cross-broker metadata contract)
 - `broker/backends/timeout.go` - `TimeoutDuration(timeout, wait)` (shared timeout semantics)
 - `broker/backends/errors.go` - `ErrNoMessageAvailable` (shared no-message sentinel)
@@ -119,6 +119,7 @@ Uses `spf13/cobra` for CLI:
 - Configuration: `~/.xmc/<binary>.yml` YAML config for AI settings, broker-auth fallback (flag > env > YAML > default), sidebar auto-refresh (`auto-update-objects`, `auto-update-messages` — both default true), and command aliases (`aliases:` map with `$1`/`$2`/`$@` substitution)
 - History: shared readline history per binary (`<binary>-sh.log` in `~/.xmc/`; AI-executed commands are appended to the same file)
 - Connectivity: `ping` (all brokers; connects and reports reachability)
+- MCP server: `mcp` (all brokers; serves broker operations as MCP tools over stdio, or Streamable HTTP with `--http :8080` for in-cluster deployment via `Dockerfile.mcp` + `deploy/kubernetes`)
 - Resilience: `--reconnect` (auto-reconnect with exponential backoff for long-running commands; only triggers on real connection/network errors, not application errors)
 - Exchange routing (RabbitMQ): `-e`/`--exchange` and `-q`/`--queue` on send/publish (`--exchange`/`--queue` on receive/subscribe, long-form only since `-q`=quiet there; `--queue-name` is a deprecated alias); defaults: send→`/queues/<to>`, publish→`/exchanges/amq.topic/<to>`; AMQP 1.0 v2 addresses always win
 - Management commands: `manage list`, `manage purge`, `manage stats`, `manage create-queue`, `manage delete-queue`, `manage update-queue`, `manage enable-queue`/`disable-queue` (Artemis), `manage create-topic`, `manage delete-topic`, `manage update-topic` (Kafka: `--partitions`/`--config`, Changed-flag partial update like update-queue), `manage create-exchange`, `manage delete-exchange`, `manage bind-queue`, `manage unbind-queue` (bind target noun per broker via `BindAction.TargetNoun`: RabbitMQ exchange, Artemis address), `manage delete-consumer-group` (Kafka; no create counterpart — groups are created implicitly)
@@ -135,7 +136,9 @@ Uses `spf13/cobra` for CLI:
 - Output to stdout omits newline when redirected for binary data preservation
 - **JSON output** (`-J`): Structured JSON output for receive, peek, subscribe, and request commands
 - **Line-delimited mode** (`-l`): Read stdin line by line, send/publish each line as separate message
-- **MQTT limitation**: MQTT 3.1.1 has no user properties at the protocol level, so application properties and metadata (correlation-id, reply-to, content-type, message-id) cannot be carried through an MQTT broker
+- **MessageID back-fill**: when the sender set no message ID, read commands back-fill it with the broker-assigned identity (SQS/Pub/Sub server ID, Pulsar `ledger:entry:partition`, Redis stream entry ID, NATS `stream:seq`, Kafka `topic:partition:offset`, Azure sequence number, IBM MQ `MQMD.MsgId` natively); a sender-set ID always wins; Artemis/RabbitMQ/MQTT put no server ID on the wire, so no back-fill there
+- **Key mapping** (`-K`): native partition key on Kafka/Pulsar; Google Pub/Sub `OrderingKey` (xmc-created subscriptions enable ordered delivery); AWS `MessageGroupId` on FIFO queues/topics (explicit `--message-group-id` wins); both map back to `Key` on receive
+- **MQTT**: MQTT 5 by default (paho.golang) — application properties and metadata map to the native v5 slots (user properties, content type, correlation data, response topic, message expiry); `--mqtt-version 3` selects the legacy 3.1.1 client (paho.mqtt.golang), which has no slot for any of these — its send/publish reject metadata flags loudly instead of dropping them
 
 ### TLS Support
 
@@ -168,7 +171,7 @@ Each broker uses its native management API. Object types listed via `ManageSpec.
 Each broker can register per-message flags via `BrokerSpec.ProduceFlags`/`ConsumeFlags` and read them back via `ProduceExtra`/`ConsumeExtra` into `opts.Extra map[string]string`:
 - **Artemis**: `--anycast`/`--multicast` (routing-type override); `--broker-name` (Jolokia management)
 - **Kafka**: `--partition`/`--offset` (consume: single-partition reads); key-aware balancer (Hash when key present)
-- **MQTT**: `--qos 0|1|2`/`--retain` (produce); `--qos` (consume); `--queue-group` (persistent; shared subscription prefix for queue reads — distinct from the per-command `-g/--group` consumer group)
+- **MQTT**: `--qos 0|1|2`/`--retain` (produce); `--qos` (consume); `--queue-group` (persistent; shared subscription prefix for queue reads — distinct from the per-command `-g/--group` consumer group); `--mqtt-version 5|3` (persistent; default 5, env `MMC_MQTT_VERSION`)
 - **AWS**: `--fifo`/`--message-group-id`/`--dedup-id` (produce); `--visibility-timeout` (consume)
 - **Azure**: `--subscription` (consume: named subscription override)
 - **Google**: `--subscription` (consume: named subscription override)
@@ -234,7 +237,7 @@ Brokers with address conventions use `BrokerSpec.ResolveTarget` to map bare name
   - `artemis/` - Apache Artemis (AMQP 1.0) + Jolokia management
   - `kafka/` - Apache Kafka + admin client management
   - `ibmmq/` - IBM MQ
-  - `mqtt/` - MQTT (paho.mqtt.golang; queue via shared subscriptions, topic pub/sub)
+  - `mqtt/` - MQTT (MQTT 5 via eclipse/paho.golang by default with native metadata slots; legacy 3.1.1 via paho.mqtt.golang behind `--mqtt-version 3`; queue via shared subscriptions, topic pub/sub)
   - `nats/` - NATS / JetStream (JetStream WorkQueue for queues, core NATS for topics)
   - `pulsar/` - Apache Pulsar (persistent:// topics; Shared subscription for queues, Exclusive/Shared for topics)
   - `rabbitmq/` - RabbitMQ (AMQP 1.0) + Management API
@@ -244,6 +247,11 @@ Brokers with address conventions use `BrokerSpec.ResolveTarget` to map bare name
   - `azuresb/` - Azure Service Bus (native queues + topics/subscriptions; native peek + TTL)
   - `backends/` - Common queue/topic interfaces, types, and shared helpers (naming, properties, timeout, errors, `ObjectNode`/`Metric` for generic broker objects); `SendOptions`/`PublishOptions`/`ReceiveOptions`/`SubscribeOptions` each have an `Extra map[string]string` for broker-specific flag values
   - `tlsutil/` - Shared TLS configuration builder (used by non-cloud brokers)
+- `mcp/` - Hand-rolled (stdlib-only) MCP server exposing broker operations as tools for AI agents
+  - `server.go` - JSON-RPC 2.0 core (initialize with version negotiation, ping, tools/list, tools/call with per-call panic recovery), stdio + stateless Streamable HTTP transports (`/healthz` probe)
+  - `tools.go` - tool registry from `mcp.Deps` (per-broker factories + optional management hooks; credentials live in closures, never in tool params): send, request, peek (uses `BrowseBackend` cursor when available, like the CLI), receive, publish, consume, ping, manage_* (purge requires `confirm: true`)
+  - `command.go` - `mcp.NewCommand` cobra subcommand, wired via `BrokerSpec.Extra` in every broker entry file
+  - `message.go` - message JSON shape (mirrors the NDJSON record; binary payloads base64) + JSON-Schema builders
 - `log/` - Logging utilities with verbose mode support
 - `rc/` - Return code constants
 - `test/` - bats integration test files

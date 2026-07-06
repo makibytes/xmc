@@ -63,5 +63,12 @@ func streamToMessage(id string, values map[string]any) *backends.Message {
 		}
 	}
 
+	// Back-fill with the broker-assigned stream entry ID when the sender set
+	// none. On a relayed message (move/forward) the original entry ID is
+	// stored as a field, so the origin ID wins over the current entry's.
+	if msg.MessageID == "" {
+		msg.MessageID = id
+	}
+
 	return msg
 }

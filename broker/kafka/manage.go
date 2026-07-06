@@ -5,6 +5,8 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -224,20 +226,9 @@ func TopicStats(connArgs ConnArguments, topic string) (*backends.QueueStats, err
 
 // ListConsumerGroups lists all consumer groups on the Kafka cluster.
 func ListConsumerGroups(connArgs ConnArguments) ([]backends.ObjectNode, error) {
-	brokers, tlsConfig, err := parseKafkaURL(connArgs.Server, connArgs.TLS)
+	client, brokers, err := newAdminClient(connArgs)
 	if err != nil {
 		return nil, err
-	}
-
-	transport := &kafkago.Transport{TLS: tlsConfig}
-	sasl := getSASLMechanism(connArgs.User, connArgs.Password)
-	if sasl != nil {
-		transport.SASL = sasl
-	}
-
-	client := &kafkago.Client{
-		Addr:      kafkago.TCP(brokers...),
-		Transport: transport,
 	}
 
 	log.Verbose("listing consumer groups on %s...", brokers[0])
@@ -295,13 +286,15 @@ func ListTopics(connArgs ConnArguments) ([]TopicInfo, error) {
 		topicMap[p.Topic]++
 	}
 
-	var topics []TopicInfo
+	topics := make([]TopicInfo, 0, len(topicMap))
 	for name, count := range topicMap {
 		topics = append(topics, TopicInfo{
 			Name:           name,
 			PartitionCount: count,
 		})
 	}
+	// Map iteration order is random; sort for stable list/sidebar output.
+	slices.SortFunc(topics, func(a, b TopicInfo) int { return strings.Compare(a.Name, b.Name) })
 
 	return topics, nil
 }

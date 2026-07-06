@@ -14,6 +14,7 @@ import (
 // TopicAdapter adapts Pulsar pub/sub to the TopicBackend interface.
 type TopicAdapter struct {
 	*clientCache
+	ephemeralSub string // per-adapter name for group-less, non-durable subscriptions
 }
 
 // NewTopicAdapter creates a new Pulsar topic adapter.
@@ -22,7 +23,10 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{clientCache: newClientCache(client)}, nil
+	return &TopicAdapter{
+		clientCache:  newClientCache(client),
+		ephemeralSub: "xmc-sub-" + backends.RandomSuffix(),
+	}, nil
 }
 
 // Publish implements backends.TopicBackend.
@@ -60,22 +64,31 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 }
 
 // Subscribe implements backends.TopicBackend.
-// Uses Exclusive subscription by default; Shared if GroupID is set.
+// GroupID selects a Shared subscription named after the group (competing
+// consumers); --durable an Exclusive durable one. Without either, the
+// subscription is NonDurable with a per-adapter unique name, so no cursor is
+// left behind on the topic and concurrent group-less subscribers don't
+// collide on an Exclusive subscription name.
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	subType := pulsar.Exclusive
-	subName := "xmc-sub"
-	if opts.Durable {
-		subName = "xmc-durable"
-	}
-	if opts.GroupID != "" {
+	subMode := pulsar.Durable
+	var subName string
+	switch {
+	case opts.GroupID != "":
 		subType = pulsar.Shared
 		subName = opts.GroupID
+	case opts.Durable:
+		subName = "xmc-durable"
+	default:
+		subName = a.ephemeralSub
+		subMode = pulsar.NonDurable
 	}
 
 	consumer, err := a.getConsumer(pulsar.ConsumerOptions{
 		Topic:            opts.Topic,
 		SubscriptionName: subName,
 		Type:             subType,
+		SubscriptionMode: subMode,
 	})
 	if err != nil {
 		return nil, err

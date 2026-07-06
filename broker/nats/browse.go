@@ -5,6 +5,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	natsclient "github.com/nats-io/nats.go"
 
@@ -58,7 +59,8 @@ func (b *queueBrowser) Next(_ context.Context) (*backends.Message, error) {
 			}
 			return nil, err
 		}
-		return headersToBackendMessage(raw.Data, raw.Header), nil
+		return headersToBackendMessage(raw.Data, raw.Header,
+			b.stream+":"+strconv.FormatUint(raw.Sequence, 10)), nil
 	}
 	return nil, backends.ErrNoMessageAvailable
 }

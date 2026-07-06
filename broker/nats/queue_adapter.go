@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	natsclient "github.com/nats-io/nats.go"
@@ -51,8 +52,10 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	msg := natsclient.NewMsg(subject)
 	msg.Data = opts.Message
 
+	// Deliberately NOT mapped to Nats-Msg-Id: that header triggers JetStream's
+	// duplicate-window dedup, which would silently drop repeat sends carrying
+	// the same --message-id (e.g. send -n 5) — no other broker behaves that way.
 	if opts.MessageID != "" {
-		msg.Header.Set(natsclient.MsgIdHdr, opts.MessageID)
 		msg.Header.Set(backends.PropMessageID, opts.MessageID)
 	}
 	if opts.CorrelationID != "" {
@@ -222,13 +225,22 @@ func queueSubject(queue string) string {
 // extracting the four reserved metadata keys into the typed fields so that
 // request/reply and -F templating work consistently with other brokers.
 func natsToBackendMessage(msg *natsclient.Msg) *backends.Message {
-	return headersToBackendMessage(msg.Data, msg.Header)
+	var seqID string
+	// Metadata is only available on JetStream deliveries (it is parsed from
+	// the ack reply subject); core NATS messages have none.
+	if meta, err := msg.Metadata(); err == nil {
+		seqID = meta.Stream + ":" + strconv.FormatUint(meta.Sequence.Stream, 10)
+	}
+	return headersToBackendMessage(msg.Data, msg.Header, seqID)
 }
 
 // headersToBackendMessage builds a backends.Message from payload and headers;
 // shared by the live-delivery path (*nats.Msg) and the browse path
 // (*nats.RawStreamMsg), which carry the same header type but different shells.
-func headersToBackendMessage(data []byte, header natsclient.Header) *backends.Message {
+// seqID is the broker-assigned identity ("<stream>:<stream-sequence>") used to
+// back-fill MessageID when the sender set none; empty for core NATS messages,
+// which are not stored and have no broker-assigned identity.
+func headersToBackendMessage(data []byte, header natsclient.Header, seqID string) *backends.Message {
 	result := &backends.Message{
 		Data:       data,
 		Properties: make(map[string]any),
@@ -252,6 +264,11 @@ func headersToBackendMessage(data []byte, header natsclient.Header) *backends.Me
 		default:
 			result.Properties[k] = v
 		}
+	}
+	// Back-fill with the broker-assigned stream coordinate when the sender
+	// set no message ID.
+	if result.MessageID == "" {
+		result.MessageID = seqID
 	}
 	return result
 }

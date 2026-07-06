@@ -3,6 +3,7 @@
 package azuresb
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
@@ -32,12 +33,10 @@ func toSBMessage(data []byte, props map[string]any, messageID, correlationID, re
 		msg.TimeToLive = &d
 	}
 
+	// Service Bus speaks AMQP 1.0: application properties are typed on the
+	// wire, so pass them through as-is like the other AMQP brokers.
 	if len(props) > 0 {
-		appProps := make(map[string]any, len(backends.StringifyProps(props)))
-		for k, v := range backends.StringifyProps(props) {
-			appProps[k] = v
-		}
-		msg.ApplicationProperties = appProps
+		msg.ApplicationProperties = props
 	}
 
 	return msg
@@ -69,6 +68,12 @@ func sbToBackendMessage(msg *azservicebus.ReceivedMessage) *backends.Message {
 
 	if msg.SequenceNumber != nil {
 		result.InternalMetadata["sequence-number"] = *msg.SequenceNumber
+		// Service Bus itself assigns no message ID (MessageID is app-defined);
+		// the sequence number is the broker-assigned identity. Back-fill when
+		// the sender set none.
+		if result.MessageID == "" {
+			result.MessageID = strconv.FormatInt(*msg.SequenceNumber, 10)
+		}
 	}
 	if msg.EnqueuedTime != nil {
 		result.InternalMetadata["enqueued-time"] = msg.EnqueuedTime.String()

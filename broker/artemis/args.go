@@ -13,17 +13,13 @@ type SendArguments struct {
 	Priority      uint8
 	Properties    map[string]any
 	ReplyTo       string
-	Subject       string
-	To            string
 	TTL           int64 // Time-to-live in milliseconds
 }
 
 type ReceiveArguments struct {
 	Acknowledge         bool
-	Durable             bool
 	DurableSubscription bool
 	Multicast           bool
-	Number              int
 	Queue               string
 	Selector            string
 	SubscriptionName    string

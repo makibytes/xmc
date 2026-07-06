@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,10 @@ func TestNATS_QueueSendReceive(t *testing.T) {
 	}
 	if string(msg.Data) != string(payload) {
 		t.Fatalf("expected %q, got %q", payload, msg.Data)
+	}
+	// Sender set no message ID → back-filled with <stream>:<sequence>.
+	if want := regexp.MustCompile("^" + streamName(queue) + `:\d+$`); !want.MatchString(msg.MessageID) {
+		t.Errorf("MessageID: got %q, want back-filled %q", msg.MessageID, want)
 	}
 }
 

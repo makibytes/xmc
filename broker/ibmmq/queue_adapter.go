@@ -58,7 +58,6 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		Queue:       opts.Queue,
 		Timeout:     opts.Timeout,
 		Wait:        opts.Wait,
-		Number:      1,
 		Acknowledge: opts.Acknowledge,
 		Selector:    opts.Selector,
 	}
@@ -70,6 +69,9 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		}
 		return nil, err
 	}
+	// On success the handle still carries the message properties; delete it
+	// only after they have been extracted.
+	defer msgHandle.DltMH(ibmmq.NewMQDMHO()) //nolint:errcheck
 	if data == nil {
 		return nil, backends.ErrNoMessageAvailable
 	}

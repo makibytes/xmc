@@ -37,16 +37,22 @@ func pubsubToBackendMessage(msg *pubsub.Message) *backends.Message {
 		}
 	}
 
-	return &backends.Message{
+	result := &backends.Message{
 		Data:          msg.Data,
 		Properties:    props,
 		MessageID:     attrs[backends.PropMessageID],
 		CorrelationID: attrs[backends.PropCorrelationID],
 		ReplyTo:       attrs[backends.PropReplyTo],
 		ContentType:   attrs[backends.PropContentType],
+		Key:           msg.OrderingKey,
 		InternalMetadata: map[string]any{
 			"pubsub-id":    msg.ID,
 			"publish-time": msg.PublishTime.String(),
 		},
 	}
+	// Back-fill with the server-assigned Pub/Sub ID when the sender set none.
+	if result.MessageID == "" {
+		result.MessageID = msg.ID
+	}
+	return result
 }

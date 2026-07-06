@@ -179,8 +179,8 @@ func StartIBMMQ(ctx context.Context) (*BrokerContainer, error) {
 		Image:        "icr.io/ibm-messaging/mq:latest",
 		ExposedPorts: []string{"1414/tcp", "9443/tcp"},
 		Env: map[string]string{
-			"LICENSE":      "accept",
-			"MQ_QMGR_NAME": "QM1",
+			"LICENSE":         "accept",
+			"MQ_QMGR_NAME":    "QM1",
 			"MQ_APP_PASSWORD": "passw0rd",
 		},
 		WaitingFor: wait.ForLog("AMQ5026I").WithStartupTimeout(90 * time.Second),
@@ -218,8 +218,8 @@ func StartPulsar(ctx context.Context) (*BrokerContainer, error) {
 		Image:        "apachepulsar/pulsar:3.3.0",
 		ExposedPorts: []string{"6650/tcp", "8080/tcp"},
 		Env: map[string]string{
-			"PULSAR_STANDALONE_USE_ZOOKEEPER":            "1",
-			"PULSAR_PREFIX_allowAutoTopicCreationType":   "non-partitioned",
+			"PULSAR_STANDALONE_USE_ZOOKEEPER":             "1",
+			"PULSAR_PREFIX_allowAutoTopicCreationType":    "non-partitioned",
 			"PULSAR_PREFIX_allowAutoSubscriptionCreation": "true",
 		},
 		Cmd: []string{"/bin/bash", "-c", "bin/pulsar standalone --no-functions-worker -nss"},
@@ -253,5 +253,38 @@ func StartPulsar(ctx context.Context) (*BrokerContainer, error) {
 	return &BrokerContainer{
 		Container: container,
 		URL:       fmt.Sprintf("pulsar://%s:%s", host, port.Port()),
+	}, nil
+}
+
+// StartRedis starts a Redis container using a generic container and returns
+// its connection URL (redis://host:port).
+func StartRedis(ctx context.Context) (*BrokerContainer, error) {
+	req := testcontainers.ContainerRequest{
+		Image:        "redis:7-alpine",
+		ExposedPorts: []string{"6379/tcp"},
+		WaitingFor:   wait.ForListeningPort("6379/tcp").WithStartupTimeout(30 * time.Second),
+	}
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("starting Redis: %w", err)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		container.Terminate(ctx) //nolint:errcheck
+		return nil, err
+	}
+	port, err := container.MappedPort(ctx, "6379")
+	if err != nil {
+		container.Terminate(ctx) //nolint:errcheck
+		return nil, err
+	}
+
+	return &BrokerContainer{
+		Container: container,
+		URL:       fmt.Sprintf("redis://%s:%s", host, port.Port()),
 	}, nil
 }

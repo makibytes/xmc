@@ -22,13 +22,42 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	var group string
+	var mqttVersion int
+
+	defaultVersion := 5
+	if v := os.Getenv("MMC_MQTT_VERSION"); v == "3" || v == "4" {
+		defaultVersion = 3
+	}
+
+	newQueue := func() (backends.QueueBackend, error) {
+		switch mqttVersion {
+		case 5:
+			return mqtt.NewQueueAdapter(connArgs)
+		case 3, 4: // 3.1.1 speaks protocol level 4; accept both spellings
+			return mqtt.NewQueueAdapterV3(connArgs)
+		default:
+			return nil, fmt.Errorf("unsupported --mqtt-version %d (use 5 or 3)", mqttVersion)
+		}
+	}
+	newTopic := func() (backends.TopicBackend, error) {
+		switch mqttVersion {
+		case 5:
+			return mqtt.NewTopicAdapter(connArgs)
+		case 3, 4:
+			return mqtt.NewTopicAdapterV3(connArgs)
+		default:
+			return nil, fmt.Errorf("unsupported --mqtt-version %d (use 5 or 3)", mqttVersion)
+		}
+	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
-		Use:              "mmc",
-		Short:            "MQTT Messaging Client",
-		Long:             "Command-line interface for MQTT messaging",
-		AIContext:        AIDoc("mqtt"),
-		UnsupportedFlags: []string{"priority", "ttl", "selector", "property", "content-type", "correlation-id", "message-id", "reply-to"},
+		Use:       "mmc",
+		Short:     "MQTT Messaging Client",
+		Long:      "Command-line interface for MQTT messaging",
+		AIContext: AIDoc("mqtt"),
+		// MQTT 5 (the default) carries properties and metadata natively;
+		// --mqtt-version 3 rejects them at send time instead of warning here.
+		UnsupportedFlags: []string{"priority", "selector"},
 		ProduceFlags: func(c *cobra.Command) {
 			c.Flags().Int("qos", 1, "QoS level (0, 1, or 2)")
 			c.Flags().Bool("retain", false, "Set retain flag on published messages")
@@ -63,22 +92,19 @@ func GetRootCommand() *cobra.Command {
 			// per-command -g/--group consumer-group flag on subscribe/forward/
 			// bridge, which has a different meaning and default.
 			c.PersistentFlags().StringVar(&group, "queue-group", "xmc", "Queue shared subscription group name")
+			c.PersistentFlags().IntVar(&mqttVersion, "mqtt-version", defaultVersion, "MQTT protocol version: 5 (default) or 3 (legacy 3.1.1, no metadata support)")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
-		Queue: func() (backends.QueueBackend, error) { return mqtt.NewQueueAdapter(connArgs) },
-		Topic: func() (backends.TopicBackend, error) { return mqtt.NewTopicAdapter(connArgs) },
-		Ping:  func() (cmd.Closeable, error) { return mqtt.NewQueueAdapter(connArgs) },
+		Queue: newQueue,
+		Topic: newTopic,
+		Ping:  func() (cmd.Closeable, error) { return newQueue() },
 		Extra: []*cobra.Command{
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-mqtt",
 				ServerVersion: cmd.Version(),
 				Target:        connArgs.Server,
-				NewQueue: func() (backends.QueueBackend, error) {
-					return mqtt.NewQueueAdapter(connArgs)
-				},
-				NewTopic: func() (backends.TopicBackend, error) {
-					return mqtt.NewTopicAdapter(connArgs)
-				},
+				NewQueue: newQueue,
+				NewTopic: newTopic,
 			}),
 		},
 	})

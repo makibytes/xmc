@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -91,7 +92,18 @@ func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, du
 func (a *TopicAdapter) subscribeIndependent(ctx context.Context, key string, timeout time.Duration) (*backends.Message, error) {
 	startID, ok := a.lastID[key]
 	if !ok {
-		startID = "$"
+		// Resolve "now" to a concrete ID once: XRead's "$" is re-evaluated on
+		// every call, so a polling loop (-n 0, --for) would drop entries
+		// published between two calls.
+		info, err := a.client.XInfoStream(ctx, key).Result()
+		switch {
+		case err == nil:
+			startID = info.LastGeneratedID
+		case strings.Contains(err.Error(), "no such key"):
+			startID = "0-0" // stream doesn't exist yet: deliver from its beginning
+		default:
+			return nil, fmt.Errorf("resolving stream position for %s: %w", key, err)
+		}
 		a.lastID[key] = startID
 	}
 

@@ -18,7 +18,7 @@ func registerProduceFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolP("persistent", "d", false, "Make message persistent")
 	cmd.Flags().StringP("reply-to", "R", "", "Reply to address for request/response")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Message properties in key=value format")
-	cmd.Flags().StringP("key", "K", "", "Message key for partitioning (Kafka, Pulsar)")
+	cmd.Flags().StringP("key", "K", "", "Message key: partitioning (Kafka, Pulsar), ordering (Google, AWS FIFO)")
 	cmd.Flags().IntP("count", "n", 1, "Number of times to send/publish the message")
 	cmd.Flags().VarP(newDurationValue(0, time.Millisecond), "ttl", "E", "Message time-to-live (e.g. \"5s\", \"1m\"; 0 = no expiry)")
 	cmd.Flags().BoolP("lines", "l", false, "Read stdin line by line, send each line as a separate message")

@@ -13,7 +13,8 @@ import (
 
 type QueueAdapter struct {
 	senderCache
-	adm *admin.Client
+	adm     *admin.Client
+	ensured map[string]struct{} // queues confirmed to exist, to skip per-message admin calls
 }
 
 func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
@@ -29,11 +30,25 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 	return &QueueAdapter{
 		senderCache: newSenderCache(client),
 		adm:         adm,
+		ensured:     make(map[string]struct{}),
 	}, nil
 }
 
+// ensureQueueCached ensures the queue exists once per adapter; subsequent
+// calls for the same queue skip the admin round-trip.
+func (a *QueueAdapter) ensureQueueCached(ctx context.Context, name string) error {
+	if _, ok := a.ensured[name]; ok {
+		return nil
+	}
+	if err := ensureQueue(ctx, a.adm, name); err != nil {
+		return err
+	}
+	a.ensured[name] = struct{}{}
+	return nil
+}
+
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
-	if err := ensureQueue(ctx, a.adm, opts.Queue); err != nil {
+	if err := a.ensureQueueCached(ctx, opts.Queue); err != nil {
 		return err
 	}
 
@@ -49,7 +64,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 }
 
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	if err := ensureQueue(ctx, a.adm, opts.Queue); err != nil {
+	if err := a.ensureQueueCached(ctx, opts.Queue); err != nil {
 		return nil, err
 	}
 

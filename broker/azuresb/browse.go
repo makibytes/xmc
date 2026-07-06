@@ -18,7 +18,7 @@ import (
 // creates a fresh receiver per call and therefore always re-reads the head,
 // which made "peek -n 0" repeat the first message forever.
 func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
-	if err := ensureQueue(ctx, a.adm, opts.Queue); err != nil {
+	if err := a.ensureQueueCached(ctx, opts.Queue); err != nil {
 		return nil, err
 	}
 	recv, err := a.senderCache.client.NewReceiverForQueue(opts.Queue, nil)

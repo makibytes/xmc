@@ -53,9 +53,14 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	if gid := opts.Extra["message-group-id"]; gid != "" {
 		input.MessageGroupId = &gid
 	} else if strings.HasSuffix(opts.Queue, ".fifo") {
-		// FIFO queues require MessageGroupId; default to "xmc" when not set.
-		defaultGID := "xmc"
-		input.MessageGroupId = &defaultGID
+		if opts.Key != "" {
+			// -K maps to the FIFO ordering concept, MessageGroupId.
+			input.MessageGroupId = &opts.Key
+		} else {
+			// FIFO queues require MessageGroupId; default to "xmc" when not set.
+			defaultGID := "xmc"
+			input.MessageGroupId = &defaultGID
+		}
 	}
 	if did := opts.Extra["dedup-id"]; did != "" {
 		input.MessageDeduplicationId = &did

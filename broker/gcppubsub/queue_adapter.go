@@ -14,6 +14,7 @@ import (
 
 type QueueAdapter struct {
 	client *pubsub.Client
+	cache  ensureCache
 }
 
 func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
@@ -25,13 +26,13 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 }
 
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
-	topic, err := ensureTopic(ctx, a.client, opts.Queue)
+	topic, err := a.cache.topic(ctx, a.client, opts.Queue)
 	if err != nil {
 		return err
 	}
 
 	subName := fmt.Sprintf("xmc-queue-%s", opts.Queue)
-	if _, err := ensureSubscription(ctx, a.client, subName, topic); err != nil {
+	if _, err := a.cache.subscription(ctx, a.client, subName, topic); err != nil {
 		return err
 	}
 
@@ -39,8 +40,9 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
 
 	result := topic.Publish(ctx, &pubsub.Message{
-		Data:       opts.Message,
-		Attributes: attrs,
+		Data:        opts.Message,
+		Attributes:  attrs,
+		OrderingKey: opts.Key,
 	})
 	_, err = result.Get(ctx)
 	return err
@@ -51,11 +53,11 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	if opts.Extra != nil && opts.Extra["subscription"] != "" {
 		subName = opts.Extra["subscription"]
 	}
-	topic, err := ensureTopic(ctx, a.client, opts.Queue)
+	topic, err := a.cache.topic(ctx, a.client, opts.Queue)
 	if err != nil {
 		return nil, err
 	}
-	sub, err := ensureSubscription(ctx, a.client, subName, topic)
+	sub, err := a.cache.subscription(ctx, a.client, subName, topic)
 	if err != nil {
 		return nil, err
 	}

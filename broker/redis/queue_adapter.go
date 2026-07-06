@@ -75,14 +75,14 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 	entry := result[0].Messages[0]
 
-	a.client.XAck(ctx, opts.Queue, xmcQueueGroup, entry.ID)  //nolint:errcheck
-	a.client.XDel(ctx, opts.Queue, entry.ID)                  //nolint:errcheck
+	a.client.XAck(ctx, opts.Queue, xmcQueueGroup, entry.ID) //nolint:errcheck
+	a.client.XDel(ctx, opts.Queue, entry.ID)                //nolint:errcheck
 
 	return streamToMessage(entry.ID, entry.Values), nil
 }
 
 func (a *QueueAdapter) peek(ctx context.Context, key string, opts backends.ReceiveOptions) (*backends.Message, error) {
-	entries, err := a.client.XRange(ctx, key, "-", "+").Result()
+	entries, err := a.client.XRangeN(ctx, key, "-", "+", 1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("peeking queue %s: %w", opts.Queue, err)
 	}

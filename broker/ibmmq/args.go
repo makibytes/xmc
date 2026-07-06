@@ -12,14 +12,13 @@ type SendArguments struct {
 	Priority      int
 	Persistence   int
 	ReplyTo       string
-	TTL           int64 // Time-to-live in tenths of a second for MQMD.Expiry
+	TTL           int64 // Time-to-live in milliseconds (converted to MQMD.Expiry tenths of a second)
 }
 
 type ReceiveArguments struct {
 	Queue       string
 	Timeout     float32
 	Wait        bool
-	Number      int
 	Acknowledge bool // get = true, peek = false
 	Selector    string
 }
