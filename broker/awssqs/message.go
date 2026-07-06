@@ -79,6 +79,14 @@ func sqsToBackendMessage(msg sqstypes.Message) *backends.Message {
 		}
 	}
 
+	// Back-fill with the SQS-assigned message ID when the sender set none.
+	if result.MessageID == "" && msg.MessageId != nil {
+		result.MessageID = *msg.MessageId
+	}
+	// FIFO ordering concept maps back to Key (set on send via -K or
+	// --message-group-id); absent on standard queues.
+	result.Key = msg.Attributes[string(sqstypes.MessageSystemAttributeNameMessageGroupId)]
+
 	return result
 }
 

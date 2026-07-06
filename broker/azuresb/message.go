@@ -3,6 +3,7 @@
 package azuresb
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
@@ -67,6 +68,12 @@ func sbToBackendMessage(msg *azservicebus.ReceivedMessage) *backends.Message {
 
 	if msg.SequenceNumber != nil {
 		result.InternalMetadata["sequence-number"] = *msg.SequenceNumber
+		// Service Bus itself assigns no message ID (MessageID is app-defined);
+		// the sequence number is the broker-assigned identity. Back-fill when
+		// the sender set none.
+		if result.MessageID == "" {
+			result.MessageID = strconv.FormatInt(*msg.SequenceNumber, 10)
+		}
 	}
 	if msg.EnqueuedTime != nil {
 		result.InternalMetadata["enqueued-time"] = msg.EnqueuedTime.String()

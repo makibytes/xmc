@@ -77,6 +77,10 @@ func ensureSubscription(ctx context.Context, client *pubsub.Client, subName stri
 
 	sub, err = client.CreateSubscription(ctx, subName, pubsub.SubscriptionConfig{
 		Topic: topic,
+		// Honor ordering keys (-K) on delivery. Key-less messages are
+		// unaffected; the field is immutable after creation, so subscriptions
+		// created by older xmc versions keep unordered delivery.
+		EnableMessageOrdering: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating subscription %s: %w", subName, err)
@@ -103,6 +107,9 @@ func (c *ensureCache) topic(ctx context.Context, client *pubsub.Client, name str
 	if err != nil {
 		return nil, err
 	}
+	// The client rejects a Publish carrying an OrderingKey (-K) unless the
+	// publisher handle opts in; key-less messages are unaffected by this.
+	t.EnableMessageOrdering = true
 	if c.topics == nil {
 		c.topics = make(map[string]*pubsub.Topic)
 	}

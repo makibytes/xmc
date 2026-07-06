@@ -23,7 +23,7 @@ send orders.fifo "msg" --message-group-id checkout
 send orders "msg" --fifo --message-group-id checkout   # auto-appends .fifo
 ```
 
-`--message-group-id` is required for FIFO sends. `--dedup-id` enables explicit deduplication; omit it for content-based deduplication (enabled by default).
+`--message-group-id` is required for FIFO sends; without it, `-K <key>` is used, then the default group `xmc`. `--dedup-id` enables explicit deduplication; omit it for content-based deduplication (enabled by default). The group ID maps back to the key field on receive.
 
 ## Consumer groups (topics)
 
@@ -44,5 +44,7 @@ send orders "msg" --fifo --message-group-id checkout   # auto-appends .fifo
 - `--visibility-timeout <sec>` (default 30): redelivery window for unacked messages (consume only).
 - No per-message TTL (SQS retention is queue-level, set in AWS Console).
 - No selectors, no priority.
+- `-K` only maps to `MessageGroupId` on FIFO queues/topics; dropped on standard ones.
+- Without `-I`, received messages get the SQS-assigned message ID as message-id.
 - Queue names: alphanumeric, hyphens, underscores (and `.fifo` suffix for FIFO).
 - Ephemeral subscriber queues cleaned up on close; durable ones persist.

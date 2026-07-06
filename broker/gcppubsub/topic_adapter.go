@@ -40,8 +40,9 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
 
 	result := topic.Publish(ctx, &pubsub.Message{
-		Data:       opts.Message,
-		Attributes: attrs,
+		Data:        opts.Message,
+		Attributes:  attrs,
+		OrderingKey: opts.Key,
 	})
 	_, err = result.Get(ctx)
 	return err

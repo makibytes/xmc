@@ -32,9 +32,17 @@ subscribe events --subscription existing-sub -n 0   # target pre-existing subscr
 `create-topic <name>`,
 `delete-topic <name>`.
 
+## Ordering
+
+`-K <key>` maps to the Pub/Sub `OrderingKey` (and back to the key field on receive).
+Subscriptions created by xmc enable ordered delivery; the flag is immutable, so
+subscriptions created by older versions keep unordered delivery — recreate them to
+get ordering.
+
 ## Constraints
 
 - No per-message TTL (retention is subscription-level, set in GCP Console).
 - No selectors, no priority.
+- Without `-I`, received messages get the server-assigned Pub/Sub ID as message-id.
 - `manage stats` is not available (backlog count requires the Cloud Monitoring API — use GCP Console).
 - Queue emulation: each queue is a Pub/Sub topic with a single shared pull subscription.

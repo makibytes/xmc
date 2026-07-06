@@ -6,7 +6,7 @@ import "context"
 type PublishOptions struct {
 	Topic         string
 	Message       []byte
-	Key           string // For partitioning (Kafka, Pulsar)
+	Key           string // Partition/ordering key (Kafka, Pulsar, Google, AWS FIFO .fifo topics)
 	Properties    map[string]any
 	MessageID     string
 	CorrelationID string

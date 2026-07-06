@@ -5,42 +5,45 @@ package mqtt
 import (
 	"context"
 	"fmt"
-	"strconv"
 
-	pahomqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
+
 	"github.com/makibytes/xmc/broker/backends"
 )
 
-// TopicAdapter adapts MQTT to TopicBackend.
+// TopicAdapter adapts MQTT 5 to TopicBackend.
 type TopicAdapter struct {
 	connArgs ConnArguments
-	client   pahomqtt.Client
-	subs     subscriptionCache
+	cm       *autopaho.ConnectionManager
+	subs     subCache5
 }
 
-// NewTopicAdapter creates a connected TopicAdapter.
+// NewTopicAdapter creates a connected MQTT 5 TopicAdapter.
 func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
-	client, err := Connect(args)
+	cm, err := Connect5(args)
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{connArgs: args, client: client}, nil
+	return &TopicAdapter{connArgs: args, cm: cm}, nil
 }
 
 // Publish implements backends.TopicBackend.
 // Publishes to the topic with the configured QoS (--qos, default 1) and
-// retain flag.
-func (a *TopicAdapter) Publish(_ context.Context, opts backends.PublishOptions) error {
-	qos := byte(1)
-	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
-		qos = byte(v)
-	}
-	retain := opts.Extra["retain"] == "true"
-	token := a.client.Publish(opts.Topic, qos, retain, opts.Message)
-	if !token.WaitTimeout(tokenTimeout) {
-		return fmt.Errorf("MQTT publish to %q timed out", opts.Topic)
-	}
-	if err := token.Error(); err != nil {
+// retain flag; metadata rides in the native MQTT 5 property slots. Unlike the
+// queue side, a reply-to is used verbatim as the response topic.
+func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
+	pubCtx, cancel := context.WithTimeout(ctx, tokenTimeout)
+	defer cancel()
+	_, err := a.cm.Publish(pubCtx, &paho.Publish{
+		Topic:   opts.Topic,
+		QoS:     qosFromExtra(opts.Extra),
+		Retain:  opts.Extra["retain"] == "true",
+		Payload: opts.Message,
+		Properties: buildPublishProperties(opts.Properties,
+			opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType, opts.TTL),
+	})
+	if err != nil {
 		return fmt.Errorf("MQTT publish to %q: %w", opts.Topic, err)
 	}
 	return nil
@@ -57,20 +60,14 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		topic = "$share/" + opts.GroupID + "/" + opts.Topic
 	}
 
-	qos := byte(1)
-	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
-		qos = byte(v)
-	}
-
-	msgCh, err := a.subs.channelFor(a.client, topic, qos)
+	msgCh, err := a.subs.channelFor(ctx, a.cm, topic, qosFromExtra(opts.Extra))
 	if err != nil {
 		return nil, err
 	}
-	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait)
+	return waitForMessage(ctx, msgCh, opts.Timeout, opts.Wait, false)
 }
 
 // Close implements backends.TopicBackend.
 func (a *TopicAdapter) Close() error {
-	a.client.Disconnect(250)
-	return nil
+	return a.cm.Disconnect(context.Background())
 }

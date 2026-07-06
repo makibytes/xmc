@@ -5,6 +5,7 @@ package awssqs
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -47,6 +48,9 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 
 	if gid := opts.Extra["message-group-id"]; gid != "" {
 		input.MessageGroupId = &gid
+	} else if opts.Key != "" && strings.HasSuffix(opts.Topic, ".fifo") {
+		// -K maps to the FIFO ordering concept, MessageGroupId.
+		input.MessageGroupId = &opts.Key
 	}
 	if did := opts.Extra["dedup-id"]; did != "" {
 		input.MessageDeduplicationId = &did

@@ -1,6 +1,6 @@
-# MQTT (`mmc`) — MQTT 3.1.1
+# MQTT (`mmc`) — MQTT 5 (default), MQTT 3.1.1 via `--mqtt-version 3`
 
-Default: `tcp://localhost:1883` (env `MMC_SERVER`). Auth: `-u`/`-p` or env `MMC_USER`/`MMC_PASSWORD`. TLS: `ssl://host:8883` or `--tls`. Optional: `--client-id` (auto-generated if unset).
+Default: `tcp://localhost:1883` (env `MMC_SERVER`). Auth: `-u`/`-p` or env `MMC_USER`/`MMC_PASSWORD`. TLS: `ssl://host:8883` or `--tls`. Optional: `--client-id` (auto-generated if unset), `--mqtt-version 3` (env `MMC_MQTT_VERSION`) for legacy 3.1.1-only brokers.
 
 ## Addressing
 
@@ -33,16 +33,25 @@ subscribe "sensors/#"              # MQTT wildcard
 subscribe events -g processors -n 0
 ```
 
+## Metadata (MQTT 5)
+
+Mapped to the native MQTT 5 property slots:
+
+- `-P key=value` → user properties
+- `--content-type` → content type
+- `--correlation-id` → correlation data
+- `--reply-to` → response topic (queue commands prefix/strip `queue/` so `request`/`reply` and native MQTT 5 responders land in the same place)
+- `-E`/`--ttl` → message expiry (seconds, rounded up)
+- `--message-id` → user property `message-id` (MQTT 5 has no message-id slot; no broker-assigned ID exists, so no back-fill)
+
 ## Supported features
 
-- Move, forward (queue-to-queue)
+- Application properties and metadata (see above; MQTT 5 mode only)
+- Request/reply (`request`/`reply`), TTL, move, forward (queue-to-queue)
 - Topic wildcards (`+`, `#`)
 
-## Constraints — MQTT 3.1.1 limitations
+## Constraints
 
-- **No application properties** (`-P` not carried through the broker)
-- **No metadata**: correlation-id, reply-to, content-type, message-id are NOT preserved
-- **No selectors** (`-S`)
-- **No request/reply** (`request`/`reply` commands unavailable)
-- **No manage commands** (no list, purge, stats, create, delete)
-- NDJSON round-trip loses all metadata — only payload survives
+- **No selectors** (`-S`), no priority
+- **No manage commands** (MQTT has no broker management protocol)
+- **`--mqtt-version 3` (MQTT 3.1.1)**: no properties or metadata at the protocol level — send/publish reject `-P`/metadata flags loudly; NDJSON round-trip loses all metadata; request/reply unavailable

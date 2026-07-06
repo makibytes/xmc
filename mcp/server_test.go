@@ -250,3 +250,96 @@ func TestManagementToolsRegisteredWhenHooksProvided(t *testing.T) {
 		t.Error("expected purge without confirm=true to be refused")
 	}
 }
+
+// fakeBrowseQueue also implements backends.BrowseBackend; peek must use the
+// cursor so count>1 yields distinct messages instead of the head repeatedly.
+type fakeBrowseQueue struct {
+	fakeQueue
+	browsed []*backends.Message
+}
+
+type fakeBrowser struct {
+	msgs []*backends.Message
+}
+
+func (b *fakeBrowser) Next(_ context.Context) (*backends.Message, error) {
+	if len(b.msgs) == 0 {
+		return nil, backends.ErrNoMessageAvailable
+	}
+	m := b.msgs[0]
+	b.msgs = b.msgs[1:]
+	return m, nil
+}
+
+func (b *fakeBrowser) Close() error { return nil }
+
+func (f *fakeBrowseQueue) Browse(_ context.Context, _ backends.ReceiveOptions) (backends.Browser, error) {
+	return &fakeBrowser{msgs: f.browsed}, nil
+}
+
+func TestPeekUsesBrowseCursor(t *testing.T) {
+	fq := &fakeBrowseQueue{
+		// Receive would repeat this head message forever:
+		fakeQueue: fakeQueue{toReturn: []*backends.Message{{Data: []byte("head")}}},
+		browsed:   []*backends.Message{{Data: []byte("m1")}, {Data: []byte("m2")}},
+	}
+	s := NewServerFromDeps(Deps{
+		NewQueue: func() (backends.QueueBackend, error) { return fq, nil },
+	})
+	resp := call(t, s, "tools/call", map[string]any{
+		"name":      "peek",
+		"arguments": map[string]any{"queue": "q1", "count": 2},
+	})
+	b, _ := json.Marshal(resp.Result)
+	var res ToolResult
+	json.Unmarshal(b, &res)
+	if res.IsError {
+		t.Fatalf("unexpected isError: %s", res.Content[0].Text)
+	}
+	text := res.Content[0].Text
+	if !strings.Contains(text, "m1") || !strings.Contains(text, "m2") {
+		t.Errorf("expected browse cursor messages m1 and m2, got: %s", text)
+	}
+	if strings.Contains(text, "head") {
+		t.Errorf("peek fell back to stateless Receive despite BrowseBackend: %s", text)
+	}
+}
+
+// panicQueue panics on Send to prove a broken adapter cannot kill the server.
+type panicQueue struct{ fakeQueue }
+
+func (p *panicQueue) Send(context.Context, backends.SendOptions) error {
+	panic("adapter bug")
+}
+
+func TestToolPanicBecomesIsError(t *testing.T) {
+	s := NewServerFromDeps(Deps{
+		NewQueue: func() (backends.QueueBackend, error) { return &panicQueue{}, nil },
+	})
+	resp := call(t, s, "tools/call", map[string]any{
+		"name":      "send",
+		"arguments": map[string]any{"address": "A.foo", "body": "x"},
+	})
+	if resp.Error != nil {
+		t.Fatalf("panic must not surface as a JSON-RPC fault: %+v", resp.Error)
+	}
+	b, _ := json.Marshal(resp.Result)
+	var res ToolResult
+	json.Unmarshal(b, &res)
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "panicked") {
+		t.Errorf("expected isError with panic message, got: %+v", res)
+	}
+}
+
+func TestInitializeRejectsUnknownVersion(t *testing.T) {
+	s := testServer(&fakeQueue{})
+	resp := call(t, s, "initialize", map[string]any{"protocolVersion": "1999-01-01"})
+	b, _ := json.Marshal(resp.Result)
+	var got struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	json.Unmarshal(b, &got)
+	if got.ProtocolVersion != protocolVersion {
+		t.Errorf("unknown client version must fall back to %s, got %q", protocolVersion, got.ProtocolVersion)
+	}
+}

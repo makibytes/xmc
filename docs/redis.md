@@ -26,6 +26,7 @@ subscribe events -n 0                 # independent subscriber (fan-out)
 ## Supported features
 
 - Application properties (`-P`), correlation-id, reply-to, content-type, message-id
+- Without `-I`, received messages get the broker-assigned stream entry ID (e.g. `1751790000000-0`) as message-id
 - Request/reply, move, forward
 - Durable subscriptions: `-D -g <group>` (group retains read position)
 

@@ -38,6 +38,7 @@ subscribe events -D -g "" -n 0         # durable exclusive subscription
 ## Supported features
 
 - Application properties (`-P`), correlation-id, reply-to, content-type, message-id, message key (`-K`)
+- Without `-I`, received messages get the broker-assigned `ledger:entry:partition` ID as message-id
 - Request/reply, move, forward
 - TTL (`-E`): advisory header (Pulsar uses topic-level retention for actual expiry)
 

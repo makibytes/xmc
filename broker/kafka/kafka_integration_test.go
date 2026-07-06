@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,10 @@ func TestKafka_TopicPublishSubscribe(t *testing.T) {
 	case msg := <-msgCh:
 		if string(msg.Data) != string(payload) {
 			t.Errorf("expected payload %q, got %q", payload, msg.Data)
+		}
+		// Sender set no message ID → back-filled with the record coordinate.
+		if want := regexp.MustCompile("^" + topic + `:\d+:\d+$`); !want.MatchString(msg.MessageID) {
+			t.Errorf("MessageID: got %q, want back-filled %q", msg.MessageID, want)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for message")

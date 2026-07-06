@@ -6,8 +6,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Queue send/receive/peek | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Topic publish/subscribe | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Request-reply | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
-| Reply / responder | Yes | Yes | - | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| Request-reply | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Reply / responder | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Move / redrive | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Custom output format (`-F`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | NDJSON export/import (`--ndjson`) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -20,8 +20,8 @@
 | TLS / SSL | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | - | - | - |
 | Message selectors | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
 | Durable subscriptions | Yes | Yes | - | - | - | - | Yes | Yes | Yes | Yes | Yes |
-| TTL / expiry | Yes | Yes | Partial | Yes | - | - | Partial | - | - | - | Yes |
-| Application properties | Yes | Yes | Yes | Yes | - | Yes | Yes | Yes | Yes | Yes | Yes |
+| TTL / expiry | Yes | Yes | Partial | Yes | Yes | - | Partial | - | - | - | Yes |
+| Application properties | Yes | Yes | Yes | Yes | Yes (MQTT 5) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Message priority | Yes | Yes | - | Yes | - | - | - | - | - | - | - |
 | Persistent delivery | Yes | Yes | - | Yes | Yes (QoS 1) | Yes (JetStream) | Yes (persistent://) | Yes (Streams) | Yes | Yes | Yes |
 | Management: list | Yes | Yes | Yes | - | - | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -69,21 +69,27 @@ update it when adding a broker or a new canonical field.
 
 | Field | Artemis / RabbitMQ (AMQP) | IBM MQ | Azure SB | Kafka / Pulsar / NATS / Redis / Google / AWS | MQTT |
 | --- | --- | --- | --- | --- | --- |
-| MessageID | native `Properties.MessageID` | native `MQMD.MsgId` | native `MessageID` | `PropMessageID` (no native slot) | unsupported |
-| CorrelationID | native `Properties.CorrelationID` | native `MQMD.CorrelId` | native `CorrelationID` | `PropCorrelationID` | unsupported |
-| ReplyTo | native `Properties.ReplyTo` | native `MQMD.ReplyToQ` | native `ReplyTo` | `PropReplyTo` | unsupported |
-| ContentType | native `Properties.ContentType` | message-handle property under `PropContentType` (MQMD has no content-type slot) | native `ContentType` | `PropContentType` | unsupported |
+| MessageID | native `Properties.MessageID` | native `MQMD.MsgId` | native `MessageID` | `PropMessageID` (no native slot) | user property `message-id` (MQTT 5; no native slot) |
+| MessageID back-fill (sender set none) | — (broker adds no wire ID) | queue manager always assigns `MsgId` | broker `SequenceNumber` | server ID (Google/AWS/Pulsar), stream entry ID (Redis), `stream:seq` (NATS), `topic:partition:offset` (Kafka) | — |
+| CorrelationID | native `Properties.CorrelationID` | native `MQMD.CorrelId` | native `CorrelationID` | `PropCorrelationID` | native correlation data (MQTT 5) |
+| ReplyTo | native `Properties.ReplyTo` | native `MQMD.ReplyToQ` | native `ReplyTo` | `PropReplyTo` | native response topic (MQTT 5) |
+| ContentType | native `Properties.ContentType` | message-handle property under `PropContentType` (MQMD has no content-type slot) | native `ContentType` | `PropContentType` | native content type (MQTT 5) |
 | Priority | native `Header.Priority` | native `MQMD.Priority` | unsupported | unsupported | unsupported |
 | Persistent | native `Header.Durable` | native `MQMD.Persistence` | unsupported | unsupported | Yes (QoS 1, protocol-level, not a `Message` field) |
-| TTL | AMQP header | native `MQMD.Expiry` | native `TimeToLive` | internal transport header, Kafka/Pulsar only (stripped back out on receive, not user-visible); unsupported elsewhere | unsupported |
-| Key (partition/routing) | n/a | n/a | n/a | native on Kafka/Pulsar; dropped (not mapped to `OrderingKey`/`MessageGroupId`) on NATS/Redis/Google/AWS | n/a |
+| TTL | AMQP header | native `MQMD.Expiry` | native `TimeToLive` | internal transport header, Kafka/Pulsar only (stripped back out on receive, not user-visible); unsupported elsewhere | native message expiry (MQTT 5, seconds) |
+| Key (partition/ordering) | n/a | n/a | n/a | native on Kafka/Pulsar; Google `OrderingKey`; AWS `MessageGroupId` (FIFO only, explicit `--message-group-id` wins); dropped on NATS/Redis | n/a |
 
-Two gaps are noted here as deliberate, tracked non-goals rather than bugs: xmc does not
-currently (1) populate `MessageID` from a broker-assigned server-side ID on receive when
-the sender left it blank (Kafka/Pulsar/Google all generate one), or (2) map `Key` onto
-Google Pub/Sub's `OrderingKey` or AWS SQS/SNS's `MessageGroupId` (both are ordering
-concepts adjacent to, but not identical with, a partition key). Either could be revisited
-as an explicit, separately-decided enhancement.
+When the sender sets no message ID, read commands back-fill `MessageID` with the
+broker-assigned identity per the back-fill row above — a sender-set ID always wins, and
+messages relayed by `move`/`forward`/`bridge` keep their origin ID. Artemis, RabbitMQ,
+and MQTT have no back-fill because those brokers put no server-assigned ID on the wire
+(AMQP `message-id` is sender-populated; Artemis's internal ID is not exposed over AMQP).
+
+`-K`/`--key` maps to Google Pub/Sub's `OrderingKey` (xmc-created subscriptions enable
+ordered delivery; subscriptions created by older versions keep unordered delivery — the
+flag is immutable) and to AWS `MessageGroupId` on FIFO queues/topics only (`--message-group-id`
+takes precedence; on standard queues the key is dropped as before). Both map back to
+`Key` on receive.
 
 ## Traditional Message Brokers
 
@@ -176,7 +182,8 @@ flowchart LR
 
 ### MQTT
 
-- Protocol: MQTT 3.1.1 / 5.0
+- Protocol: MQTT 5 by default; `--mqtt-version 3` selects the legacy 3.1.1 client for old brokers (no properties/metadata — send/publish reject the flags loudly)
+- MQTT 5 metadata: user properties (`-P`), content type, correlation data, response topic, message expiry (`-E`, seconds)
 - Binary: `mmc`, build tag: `mqtt`
 - **Queue topology**: send publishes to `queue/{name}` with QoS 1; receive uses MQTT 5.0 shared subscriptions (`$share/xmc/queue/{name}`) for competing consumers; peek subscribes directly without a shared subscription using a fresh clean-session client.
 - **Topic topology**: publish/subscribe to MQTT topics directly. Consumer groups via `--group` map to shared subscriptions (`$share/{groupID}/{topic}`).

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	"github.com/makibytes/xmc/broker/backends"
 )
@@ -50,6 +51,11 @@ func pollSQS(ctx context.Context, sqsc *sqs.Client, queueURL string, timeout tim
 			WaitTimeSeconds:       waitSecs,
 			VisibilityTimeout:     visibilityTimeout,
 			MessageAttributeNames: []string{allAttrs},
+			// System attributes carry the SQS-assigned metadata we map back
+			// (MessageGroupId → Key).
+			MessageSystemAttributeNames: []sqstypes.MessageSystemAttributeName{
+				sqstypes.MessageSystemAttributeNameAll,
+			},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("receiving from %s: %w", errLabel, err)

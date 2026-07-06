@@ -338,9 +338,30 @@ func readMessages(ctx context.Context, d Deps, a readArgs, acknowledge bool) (*T
 			Verbosity:   backends.VerbosityNormal,
 			Selector:    a.Selector,
 		}
+
+		// Peek on a browse-capable backend uses a stateful cursor, exactly
+		// like the CLI (cmd/receive.go): stateless Receive(ack=false) re-reads
+		// the queue head, so count>1 would return the same message repeatedly.
+		next := func(ctx context.Context) (*backends.Message, error) {
+			return q.Receive(ctx, opts)
+		}
+		if !acknowledge {
+			if bb, ok := q.(backends.BrowseBackend); ok {
+				browser, err := bb.Browse(callCtx, opts)
+				switch {
+				case err == nil:
+					defer browser.Close()
+					next = browser.Next
+				case !errors.Is(err, backends.ErrBrowseUnsupported):
+					return nil, fmt.Errorf("browse failed: %v", err)
+					// ErrBrowseUnsupported: fall back to the Receive loop
+				}
+			}
+		}
+
 		messages := make([]messageJSON, 0, count)
 		for i := 0; i < count; i++ {
-			msg, err := q.Receive(callCtx, opts)
+			msg, err := next(callCtx)
 			if err != nil {
 				if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
 					break
@@ -424,7 +445,9 @@ type publishArgs struct {
 	ContentType   string         `json:"content_type"`
 	CorrelationID string         `json:"correlation_id"`
 	MessageID     string         `json:"message_id"`
+	ReplyTo       string         `json:"reply_to"`
 	Key           string         `json:"key"`
+	TTLms         int64          `json:"ttl_ms"`
 	Count         *int           `json:"count"`
 }
 
@@ -440,7 +463,9 @@ func registerPublish(s *Server, d Deps) {
 			"content_type":   stringProp("MIME type of the body (default \"text/plain\")."),
 			"correlation_id": stringProp("Optional correlation ID."),
 			"message_id":     stringProp("Optional message ID."),
-			"key":            stringProp("Optional message key for partitioning (Kafka)."),
+			"reply_to":       stringProp("Optional reply-to address."),
+			"key":            stringProp("Optional message key: partitioning (Kafka, Pulsar) or ordering (Google, AWS FIFO)."),
+			"ttl_ms":         intProp("Time-to-live in milliseconds (0 = no expiry)."),
 			"count":          intProp("Number of times to publish the message (default 1)."),
 		}, "topic", "body"),
 		Annotations: map[string]any{
@@ -473,8 +498,10 @@ func registerPublish(s *Server, d Deps) {
 					Properties:    a.Properties,
 					MessageID:     a.MessageID,
 					CorrelationID: a.CorrelationID,
+					ReplyTo:       a.ReplyTo,
 					ContentType:   orDefault(a.ContentType, "text/plain"),
 					Key:           a.Key,
+					TTL:           a.TTLms,
 				}
 				for i := 0; i < count; i++ {
 					if err := t.Publish(ctx, opts); err != nil {

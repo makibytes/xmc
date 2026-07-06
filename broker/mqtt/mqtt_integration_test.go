@@ -286,3 +286,159 @@ func TestMQTT_TopicSubscribe_GroupID(t *testing.T) {
 		t.Errorf("payload mismatch: got %q, want %q", res.msg.Data, payload)
 	}
 }
+
+// TestMQTT_QueueMetadataRoundTrip verifies that MQTT 5 carries application
+// properties and metadata in the native property slots: content type,
+// correlation data, response topic (with the queue/ prefix stripped back
+// out), message expiry, and the message-id user property.
+func TestMQTT_QueueMetadataRoundTrip(t *testing.T) {
+	t.Parallel()
+	queueName := "testq-meta-" + randomSuffix()
+	payload := []byte("metadata message")
+
+	recvAdapter, err := NewQueueAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapter (recv): %v", err)
+	}
+	defer recvAdapter.Close()
+
+	sendAdapter, err := NewQueueAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapter (send): %v", err)
+	}
+	defer sendAdapter.Close()
+
+	type result struct {
+		msg *backends.Message
+		err error
+	}
+	ch := make(chan result, 1)
+
+	go func() {
+		msg, err := recvAdapter.Receive(context.Background(), backends.ReceiveOptions{
+			Queue:       queueName,
+			Timeout:     5,
+			Acknowledge: true,
+		})
+		ch <- result{msg, err}
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	err = sendAdapter.Send(context.Background(), backends.SendOptions{
+		Queue:         queueName,
+		Message:       payload,
+		MessageID:     "msg-42",
+		CorrelationID: "corr-42",
+		ReplyTo:       "answers",
+		ContentType:   "text/plain",
+		TTL:           60000,
+		Properties:    map[string]any{"colour": "blue", "size": "42"},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	res := <-ch
+	if res.err != nil {
+		t.Fatalf("Receive: %v", res.err)
+	}
+	msg := res.msg
+	if string(msg.Data) != string(payload) {
+		t.Errorf("payload: got %q, want %q", msg.Data, payload)
+	}
+	if msg.MessageID != "msg-42" {
+		t.Errorf("MessageID: got %q, want msg-42", msg.MessageID)
+	}
+	if msg.CorrelationID != "corr-42" {
+		t.Errorf("CorrelationID: got %q, want corr-42", msg.CorrelationID)
+	}
+	if msg.ReplyTo != "answers" {
+		t.Errorf("ReplyTo: got %q, want answers (queue/ prefix stripped)", msg.ReplyTo)
+	}
+	if msg.ContentType != "text/plain" {
+		t.Errorf("ContentType: got %q, want text/plain", msg.ContentType)
+	}
+	if msg.Properties["colour"] != "blue" || msg.Properties["size"] != "42" {
+		t.Errorf("properties: got %v, want colour=blue size=42", msg.Properties)
+	}
+	if _, ok := msg.Properties[backends.PropMessageID]; ok {
+		t.Error("message-id user property leaked into Properties")
+	}
+	if msg.InternalMetadata["message-expiry"] == nil {
+		t.Errorf("InternalMetadata: got %v, want message-expiry set (TTL sent)", msg.InternalMetadata)
+	}
+}
+
+// TestMQTT_V3_QueueSendReceive verifies the legacy 3.1.1 path
+// (--mqtt-version 3) still moves payloads.
+func TestMQTT_V3_QueueSendReceive(t *testing.T) {
+	t.Parallel()
+	queueName := "testq-v3-" + randomSuffix()
+	payload := []byte("v3 queue message")
+
+	recvAdapter, err := NewQueueAdapterV3(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapterV3 (recv): %v", err)
+	}
+	defer recvAdapter.Close()
+
+	sendAdapter, err := NewQueueAdapterV3(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapterV3 (send): %v", err)
+	}
+	defer sendAdapter.Close()
+
+	type result struct {
+		msg *backends.Message
+		err error
+	}
+	ch := make(chan result, 1)
+
+	go func() {
+		msg, err := recvAdapter.Receive(context.Background(), backends.ReceiveOptions{
+			Queue:       queueName,
+			Timeout:     5,
+			Acknowledge: true,
+		})
+		ch <- result{msg, err}
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	if err := sendAdapter.Send(context.Background(), backends.SendOptions{
+		Queue:   queueName,
+		Message: payload,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	res := <-ch
+	if res.err != nil {
+		t.Fatalf("Receive: %v", res.err)
+	}
+	if string(res.msg.Data) != string(payload) {
+		t.Errorf("payload: got %q, want %q", res.msg.Data, payload)
+	}
+}
+
+// TestMQTT_V3_RejectsMetadata verifies the 3.1.1 path fails loudly instead of
+// silently dropping metadata the protocol cannot carry.
+func TestMQTT_V3_RejectsMetadata(t *testing.T) {
+	t.Parallel()
+
+	adapter, err := NewQueueAdapterV3(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapterV3: %v", err)
+	}
+	defer adapter.Close()
+
+	err = adapter.Send(context.Background(), backends.SendOptions{
+		Queue:       "testq-v3-reject",
+		Message:     []byte("x"),
+		ContentType: "text/plain",
+	})
+	if err == nil || !strings.Contains(err.Error(), "MQTT 5") {
+		t.Errorf("Send: got %v, want metadata-requires-MQTT-5 error", err)
+	}
+}

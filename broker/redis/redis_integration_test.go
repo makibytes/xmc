@@ -72,6 +72,30 @@ func TestRedis_QueueSendReceive(t *testing.T) {
 	if msg.Properties["colour"] != "red" {
 		t.Errorf("colour property: got %v, want red", msg.Properties["colour"])
 	}
+	// Sender set no message ID → back-filled with the stream entry ID.
+	if msg.MessageID == "" || msg.MessageID != msg.InternalMetadata["stream-id"] {
+		t.Errorf("MessageID: got %q, want back-filled stream ID %v", msg.MessageID, msg.InternalMetadata["stream-id"])
+	}
+
+	// A sender-set message ID must win over the back-fill.
+	if err := adapter.Send(ctx, backends.SendOptions{
+		Queue:     queue,
+		Message:   payload,
+		MessageID: "explicit-id",
+	}); err != nil {
+		t.Fatalf("Send with MessageID: %v", err)
+	}
+	msg, err = adapter.Receive(ctx, backends.ReceiveOptions{
+		Queue:       queue,
+		Acknowledge: true,
+		Timeout:     5,
+	})
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if msg.MessageID != "explicit-id" {
+		t.Errorf("MessageID: got %q, want explicit-id (sender-set must not be overwritten)", msg.MessageID)
+	}
 }
 
 // TestRedis_QueuePeekAndBrowse verifies that peek does not consume and that the

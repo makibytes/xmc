@@ -40,3 +40,4 @@ move myqueue/$deadletterqueue myqueue -n 0  # redrive
 ## Constraints
 
 - No subscription-level selectors (flag accepted but not applied as a filter rule).
+- Without `-I`, received messages get the broker-assigned sequence number as message-id (Service Bus itself assigns no message ID).

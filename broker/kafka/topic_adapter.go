@@ -262,6 +262,12 @@ func convertKafkaToBackendMessage(msg *kafka.Message, withMetadata bool) *backen
 	// Properties on receive/subscribe.
 	delete(result.Properties, propTTL)
 
+	// Kafka has no server-assigned message ID; the broker-assigned identity of
+	// a record is its coordinate. Back-fill when the sender set none.
+	if result.MessageID == "" {
+		result.MessageID = fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)
+	}
+
 	if withMetadata {
 		result.InternalMetadata = map[string]any{
 			"Topic":     msg.Topic,

@@ -50,6 +50,7 @@ No `purge`: Kafka's topic-truncate equivalent (`DeleteRecords`) has no client wr
 ## Supported features
 
 - Application properties (`-P`, carried as Kafka headers), content-type, correlation-id, message-id
+- Without `-I`, received messages get the record coordinate `<topic>:<partition>:<offset>` as message-id
 - Message key (`-K`) for partition affinity
 - TTL (`-E`): stamps a `ttl` header (advisory only — Kafka uses topic-level `retention.ms` for actual expiry)
 

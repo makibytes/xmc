@@ -26,6 +26,7 @@ subscribe events.>              # NATS wildcard: > matches any remaining tokens
 ## Supported features
 
 - Application properties (`-P`) and metadata (correlation-id, reply-to, content-type, message-id) carried as NATS headers
+- Without `-I`, received messages get the broker-assigned `<stream>:<sequence>` as message-id (JetStream reads only)
 - Request/reply (native: private per-request reply queue, auto-created and deleted)
 - Peek browses stored messages by stream sequence (non-destructive, `-n 0` walks all)
 - Move, forward
