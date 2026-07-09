@@ -1,7 +1,7 @@
 # XMC - Xenomorphic Message Client
 
 [![Build Status](https://github.com/makibytes/xmc/actions/workflows/main_build_and_test_linux.yml/badge.svg)](https://github.com/makibytes/xmc/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/makibytes/xmc)](https://goreportcard.com/report/github.com/makibytes/xmc)
+[![Lint](https://github.com/makibytes/xmc/actions/workflows/lint.yml/badge.svg)](https://github.com/makibytes/xmc/actions/workflows/lint.yml)
 [![GoDoc](https://godoc.org/github.com/makibytes/xmc?status.svg)](https://godoc.org/github.com/makibytes/xmc)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makibytes/xmc/blob/main/LICENSE)
 
