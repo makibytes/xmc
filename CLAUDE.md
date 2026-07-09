@@ -47,6 +47,17 @@ docker run --name artemis -d -p 8161:8161 -p 5672:5672 apache/activemq-artemis:l
 
 Test files are in `test/*.bats`. Default credentials for Artemis: `artemis/artemis`.
 
+## Linting
+
+`golangci-lint run` (config in `.golangci.yml`). Run once per build tag — `broker/*.go` entry files are mutually exclusive per tag, so linting multiple tags at once causes redeclaration errors:
+
+```bash
+golangci-lint run                        # tag-less shared code (cmd/, log/, rc/, broker/backends/, broker/amqpcommon/)
+golangci-lint run --build-tags=artemis   # repeat per broker tag
+```
+
+CI runs this as a matrix over every tag except `ibmmq` (needs the proprietary IBM MQ C client libraries from `build/ibmmq`) via `.github/workflows/lint.yml`.
+
 ## Architecture
 
 ### Build-Time Broker Selection
