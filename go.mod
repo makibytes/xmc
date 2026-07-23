@@ -36,7 +36,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/redpanda v0.42.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/term v0.45.0
-	google.golang.org/api v0.289.0
+	google.golang.org/api v0.290.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
