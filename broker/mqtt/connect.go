@@ -49,7 +49,9 @@ func ConnectV3(args ConnArguments) (pahomqtt.Client, error) {
 
 	client := pahomqtt.NewClient(opts)
 	token := client.Connect()
-	token.Wait()
+	if !token.WaitTimeout(tokenTimeout) {
+		return nil, fmt.Errorf("MQTT connect timed out after %s to %s", tokenTimeout, args.Server)
+	}
 	if err := token.Error(); err != nil {
 		return nil, fmt.Errorf("MQTT connect failed: %w", err)
 	}

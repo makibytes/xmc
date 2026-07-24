@@ -57,6 +57,29 @@ func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, err
 	return nodes, nil
 }
 
+// ListTopics returns topic names.
+func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
+	client, err := Connect(context.Background(), args)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	var topics []backends.TopicInfo
+	it := client.Topics(context.Background())
+	for {
+		t, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing topics: %w", err)
+		}
+		topics = append(topics, backends.TopicInfo{Name: t.ID()})
+	}
+	return topics, nil
+}
+
 // ListQueues returns xmc-emulated queues: Pub/Sub subscriptions whose name
 // starts with "xmc-queue-", reported by their logical queue name.
 func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {

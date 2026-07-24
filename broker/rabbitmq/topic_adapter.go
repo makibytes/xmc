@@ -4,9 +4,11 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/Azure/go-amqp"
 	"github.com/makibytes/xmc/broker/amqpcommon"
@@ -18,7 +20,8 @@ type TopicAdapter struct {
 	connArgs   ConnArguments
 	connection *amqp.Conn
 	session    *amqp.Session
-	subQueues  map[string]string // (exchange|key|group) → ensured subscription queue
+	mu         sync.Mutex
+	subQueues  map[string]string // (exchange|key|group|durable) → ensured subscription queue
 	ephemeral  []string          // subscription queues to delete on Close
 }
 
@@ -118,6 +121,9 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		Wait:        opts.Wait,
 	})
 	if err != nil {
+		if !opts.Wait && errors.Is(err, context.DeadlineExceeded) {
+			return nil, backends.ErrNoMessageAvailable
+		}
 		return nil, err
 	}
 	if message == nil {
@@ -146,11 +152,18 @@ func subscriptionQueueName(exchange, key string, opts backends.SubscribeOptions)
 	return "xmc-sub-" + backends.RandomSuffix(), true
 }
 
+func subscriptionCacheKey(exchange, key string, opts backends.SubscribeOptions) string {
+	return fmt.Sprintf("%s|%s|%s|%t", exchange, key, opts.GroupID, opts.Durable)
+}
+
 // ensureSubscriptionQueue declares and binds the backing queue for a
 // subscription once per adapter; later Subscribe calls for the same binding
 // reuse it without further management calls.
 func (a *TopicAdapter) ensureSubscriptionQueue(exchange, key string, opts backends.SubscribeOptions) (string, error) {
-	cacheKey := exchange + "|" + key + "|" + opts.GroupID
+	cacheKey := subscriptionCacheKey(exchange, key, opts)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if q, ok := a.subQueues[cacheKey]; ok {
 		return q, nil
 	}
@@ -174,7 +187,11 @@ func (a *TopicAdapter) ensureSubscriptionQueue(exchange, key string, opts backen
 // Close implements backends.TopicBackend
 func (a *TopicAdapter) Close() error {
 	mgmt := ManagementArgs{Server: a.connArgs.Server, User: a.connArgs.User, Password: a.connArgs.Password}
-	for _, q := range a.ephemeral {
+	a.mu.Lock()
+	ephemeral := append([]string(nil), a.ephemeral...)
+	a.mu.Unlock()
+
+	for _, q := range ephemeral {
 		DeleteQueue(mgmt, q) //nolint:errcheck
 	}
 	if a.session != nil {
