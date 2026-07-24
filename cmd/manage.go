@@ -221,9 +221,13 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 					return err
 				}
 				if count > 0 {
-					fmt.Fprintf(w, "Purged %d messages from subscription %s on topic %s\n", count, args[1], args[0])
+					if _, err := fmt.Fprintf(w, "Purged %d messages from subscription %s on topic %s\n", count, args[1], args[0]); err != nil {
+						return err
+					}
 				} else {
-					fmt.Fprintf(w, "Purged subscription %s on topic %s\n", args[1], args[0])
+					if _, err := fmt.Fprintf(w, "Purged subscription %s on topic %s\n", args[1], args[0]); err != nil {
+						return err
+					}
 				}
 				return nil
 			},
