@@ -84,7 +84,6 @@ func TestManageCommand_PurgeSubscription(t *testing.T) {
 	}
 }
 
-
 func TestManageCommand_BindActionDefaultNoun(t *testing.T) {
 	var boundQueue, boundTarget string
 	spec := ManageSpec{
