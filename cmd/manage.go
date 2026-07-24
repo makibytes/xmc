@@ -209,6 +209,27 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 		})
 	}
 
+	if spec.PurgeSubscription != nil {
+		mgmtCmd.AddCommand(&cobra.Command{
+			Use:   "purge-subscription <topic> <subscription>",
+			Short: "Remove all messages from a topic subscription",
+			Args:  cobra.ExactArgs(2),
+			RunE: func(c *cobra.Command, args []string) error {
+				w := c.OutOrStdout()
+				count, err := spec.PurgeSubscription(args[0], args[1])
+				if err != nil {
+					return err
+				}
+				if count > 0 {
+					fmt.Fprintf(w, "Purged %d messages from subscription %s on topic %s\n", count, args[1], args[0])
+				} else {
+					fmt.Fprintf(w, "Purged subscription %s on topic %s\n", args[1], args[0])
+				}
+				return nil
+			},
+		})
+	}
+
 	if spec.Stats != nil {
 		mgmtCmd.AddCommand(&cobra.Command{
 			Use:   "stats <queue>",

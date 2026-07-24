@@ -33,8 +33,11 @@ sufficient for request/response tool use and makes horizontal scaling trivial.
 | `request` | Send and wait for one reply (the "ping → pong" tool) | — |
 | `peek` | Browse messages without removing them | `readOnlyHint` |
 | `receive` | Consume (remove) messages | `destructiveHint` |
+| `publish` | Publish one message to a topic | — |
+| `consume` | Consume one message from a topic subscription/group | `destructiveHint` |
 | `ping` | Connectivity / round-trip check | `readOnlyHint` |
 | `manage_list_queues` | List queues with counts | `readOnlyHint` |
+| `manage_list_topics` | List topics (and partitions when available) | `readOnlyHint` |
 | `manage_queue_stats` | Stats for one queue | `readOnlyHint` |
 | `manage_purge_queue` | Delete all messages on a queue (requires `confirm: true`) | `destructiveHint` |
 
@@ -44,8 +47,9 @@ consistent across the CLI and the MCP server. Tool failures (timeouts, bad
 input, unreachable broker) come back as `isError` results with a message written
 for recovery, rather than as opaque protocol faults.
 
-Management tools are only registered for brokers that support management
-operations (currently Artemis).
+Management tools are only registered for brokers that wire the corresponding
+hooks in `mcp.Deps` (for example Artemis, AWS, Azure, Google, Kafka, RabbitMQ,
+Redis, NATS, Pulsar where available per operation).
 
 ### Request/reply and correlation ids
 
@@ -60,12 +64,11 @@ so no single messaging pattern is forced onto brokers where it would be alien:
 - **Artemis** implements the capability natively and filters the reply
   **server-side** by correlation id (JMS selector), so a shared reply address is
   concurrency-safe with no per-request temporary queue.
-- **Other queue brokers** (RabbitMQ, IBM MQ, MQTT, NATS, Pulsar) fall back to
-  the broker-neutral default in `backends.Request`, which sends, waits on the
-  reply destination, and rejects a non-matching reply with `ErrReplyMismatch`.
-  A broker gains native, concurrency-safe matching by implementing
-  `RequestReplyBackend` with its own idiom (MQ `MATCH_CORREL_ID`, a NATS inbox,
-  a Rabbit `direct reply-to` callback queue, etc.).
+- **RabbitMQ, MQTT, Pulsar** currently use the broker-neutral default in
+  `backends.Request`, which sends, waits on the reply destination, and rejects
+  a non-matching reply with `ErrReplyMismatch`.
+- **IBM MQ and NATS** implement native `RequestReplyBackend` paths (`MATCH_CORREL_ID`
+  style matching for MQ, private per-request reply stream/inbox style for NATS).
 
 ## Deploy on Kubernetes
 
@@ -87,9 +90,8 @@ credentials in the `xmc-mcp-broker` Secret.
 
 ## Extending
 
-`publish`/`subscribe` (topic) tools are easy to add: a `TopicFactory` is already
-threaded through `mcp.Deps`; register them alongside the queue tools in
-`mcp/tools.go`. Other brokers gain the server by adding `mcp.NewCommand(...)` to
-their `GetRootCommand` (see `broker/artemis.go`); messaging tools work through
-the shared `backends` interfaces, and management tools light up automatically
-when the corresponding hooks are supplied.
+Topic tools are already available through `TopicFactory` (`publish`, `consume`).
+Other brokers gain the server by adding `mcp.NewCommand(...)` to their
+`GetRootCommand` (see `broker/artemis.go`); messaging tools work through the
+shared `backends` interfaces, and management tools light up automatically when
+the corresponding hooks are supplied.

@@ -371,6 +371,10 @@ func (s *Server) ServeHTTP(ctx context.Context, addr, path string) error {
 		Addr:              addr,
 		Handler:           s.Handler(path),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 	errc := make(chan error, 1)
 	go func() {

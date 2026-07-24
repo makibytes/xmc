@@ -243,8 +243,8 @@ func TestRabbitMQ_QueueReceive_Timeout(t *testing.T) {
 		Acknowledge: true,
 		Timeout:     1,
 	})
-	if err == nil && msg != nil {
-		t.Error("expected error or nil message on empty queue, got a message")
+	if !errors.Is(err, backends.ErrNoMessageAvailable) || msg != nil {
+		t.Fatalf("expected ErrNoMessageAvailable and nil message, got msg=%v err=%v", msg, err)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestRabbitMQ_TopicSubscribe_Ephemeral(t *testing.T) {
 		Acknowledge: true,
 		Timeout:     1,
 	})
-	if err != nil && !errors.Is(err, backends.ErrNoMessageAvailable) && !errors.Is(err, context.DeadlineExceeded) {
+	if err != nil && !errors.Is(err, backends.ErrNoMessageAvailable) {
 		t.Fatalf("initial Subscribe: %v", err)
 	}
 	if len(subscriber.ephemeral) != 1 {

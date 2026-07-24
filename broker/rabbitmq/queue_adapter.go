@@ -4,6 +4,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/Azure/go-amqp"
@@ -72,6 +73,9 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 	message, err := ReceiveMessage(ctx, a.session, args)
 	if err != nil {
+		if !opts.Wait && errors.Is(err, context.DeadlineExceeded) {
+			return nil, backends.ErrNoMessageAvailable
+		}
 		return nil, err
 	}
 	if message == nil {

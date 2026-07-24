@@ -56,12 +56,31 @@ func TestManageCommand_QueueLifecycleActions(t *testing.T) {
 
 func TestManageCommand_ActionsOmittedWhenNil(t *testing.T) {
 	cmd := NewManageCommand(ManageSpec{})
-	for _, name := range []string{"update-queue", "enable-queue", "disable-queue", "bind-queue", "unbind-queue"} {
+	for _, name := range []string{"update-queue", "enable-queue", "disable-queue", "bind-queue", "unbind-queue", "purge-subscription"} {
 		for _, sub := range cmd.Commands() {
 			if strings.HasPrefix(sub.Use, name+" ") || sub.Name() == name {
 				t.Errorf("subcommand %q registered without a spec action", name)
 			}
 		}
+	}
+}
+
+func TestManageCommand_PurgeSubscription(t *testing.T) {
+	var gotTopic, gotSub string
+	spec := ManageSpec{
+		PurgeSubscription: func(topic, subscription string) (int64, error) {
+			gotTopic = topic
+			gotSub = subscription
+			return 7, nil
+		},
+	}
+
+	out := runManage(t, spec, "purge-subscription", "orders", "sub-a")
+	if gotTopic != "orders" || gotSub != "sub-a" {
+		t.Fatalf("PurgeSubscription got (%q, %q), want (%q, %q)", gotTopic, gotSub, "orders", "sub-a")
+	}
+	if !strings.Contains(out, "Purged 7 messages from subscription sub-a on topic orders") {
+		t.Fatalf("purge-subscription output = %q", out)
 	}
 }
 

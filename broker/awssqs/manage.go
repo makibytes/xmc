@@ -100,6 +100,30 @@ func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, err
 	return nodes, nil
 }
 
+// ListTopics returns SNS topics.
+func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
+	_, snsc, err := Connect(context.Background(), args)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	out, err := snsc.ListTopics(ctx, &sns.ListTopicsInput{})
+	if err != nil {
+		return nil, fmt.Errorf("listing topics: %w", err)
+	}
+
+	topics := make([]backends.TopicInfo, 0, len(out.Topics))
+	for _, t := range out.Topics {
+		if t.TopicArn == nil {
+			continue
+		}
+		parts := strings.Split(*t.TopicArn, ":")
+		topics = append(topics, backends.TopicInfo{Name: parts[len(parts)-1]})
+	}
+	return topics, nil
+}
+
 // lookupTopicARN resolves a topic name to its SNS ARN by listing all topics.
 func lookupTopicARN(ctx context.Context, snsc *sns.Client, name string) (string, error) {
 	out, err := snsc.ListTopics(ctx, &sns.ListTopicsInput{})

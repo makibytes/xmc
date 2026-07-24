@@ -116,6 +116,9 @@ func GetRootCommand() *cobra.Command {
 					var newPartitions int
 					if f.Changed("partitions") {
 						newPartitions, _ = f.GetInt("partitions")
+						if newPartitions <= 0 {
+							return fmt.Errorf("invalid --partitions: must be > 0 (or omit flag to keep unchanged)")
+						}
 					}
 					configs := make(map[string]string)
 					for _, entry := range updateConfigEntries {
