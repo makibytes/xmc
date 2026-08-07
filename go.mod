@@ -25,7 +25,7 @@ require (
 	github.com/muesli/reflow v0.3.0
 	github.com/muesli/termenv v0.16.0
 	github.com/nats-io/nats.go v1.52.0
-	github.com/redis/go-redis/v9 v9.21.0
+	github.com/redis/go-redis/v9 v9.22.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/spf13/cobra v1.10.2
