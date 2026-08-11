@@ -33,7 +33,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/nats v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.44.0
-	github.com/testcontainers/testcontainers-go/modules/redpanda v0.42.0
+	github.com/testcontainers/testcontainers-go/modules/redpanda v0.44.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/term v0.45.0
 	google.golang.org/api v0.292.0
