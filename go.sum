@@ -399,8 +399,8 @@ github.com/testcontainers/testcontainers-go v0.44.0 h1:/Fwh6HY1mIikhnm9e7HwoxGyc
 github.com/testcontainers/testcontainers-go v0.44.0/go.mod h1:IcnwQrYTO86xHXu5bvMaBH7ATlbS3Qn1M1QWW3c66rE=
 github.com/testcontainers/testcontainers-go/modules/nats v0.43.0 h1:n1KcDXc18F687ODlTra411qWs+U+SH8VdnMM4kwpGo0=
 github.com/testcontainers/testcontainers-go/modules/nats v0.43.0/go.mod h1:nIBpPkiorwXM5LDOQKTD9Osxr/cWv1W4FcAx43kM7jY=
-github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.43.0 h1:+4P4pktUqT8nliEQ2ukrjA+t5j36PLGugoXm9zWMYgM=
-github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.43.0/go.mod h1:Q4SHA2NVopiqTDR5PGoapozEzWalEgpJOrtNSOG2RUM=
+github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.44.0 h1:apk1rmSJ5R7VbD25UB1KoWxP2LoQNybK+c2UooZdor0=
+github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.44.0/go.mod h1:LEXVQoMV/ZUnyHH+/Oaagwv0RUXzTFB9WxzBZGxqQ/0=
 github.com/testcontainers/testcontainers-go/modules/redpanda v0.42.0 h1:mcPLvf3rzvvwG46i4jcyOk7/KcapE/IKnBgwo27k68M=
 github.com/testcontainers/testcontainers-go/modules/redpanda v0.42.0/go.mod h1:Yq0WrUIIsMkJoZ2DadCJ1Zq4RFhjPPpSNYHpjRrGfDU=
 github.com/tklauser/go-sysconf v0.4.0 h1:7H0uAN+7RkwWRaxhYXDLqa5V3LPrJeV8wmD9dRUgPQU=
