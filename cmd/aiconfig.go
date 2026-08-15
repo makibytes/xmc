@@ -176,12 +176,12 @@ type providerDef struct {
 
 var providerOrder = []providerDef{
 	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "https://api.anthropic.com", "claude-sonnet-5"},
-	{"openai", []string{"OPENAI_API_KEY"}, "https://api.openai.com", "gpt-4o"},
-	{"gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}, "https://generativelanguage.googleapis.com", "gemini-2.0-flash"},
-	{"xai", []string{"XAI_API_KEY"}, "https://api.x.ai", "grok-2-latest"},
-	{"deepseek", []string{"DEEPSEEK_API_KEY"}, "https://api.deepseek.com", "deepseek-chat"},
-	{"mistral", []string{"MISTRAL_API_KEY"}, "https://api.mistral.ai", "mistral-large-latest"},
-	{"opencode", []string{"OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"}, "https://opencode.ai/zen", "mimo-v2.5-free"},
+	{"openai", []string{"OPENAI_API_KEY"}, "https://api.openai.com", "gpt-5.6-luna"},
+	{"gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}, "https://generativelanguage.googleapis.com", "gemini-3.6-flash"},
+	{"xai", []string{"XAI_API_KEY"}, "https://api.x.ai", "grok-4.5"},
+	{"deepseek", []string{"DEEPSEEK_API_KEY"}, "https://api.deepseek.com", "deepseek-v4-flash"},
+	{"mistral", []string{"MISTRAL_API_KEY"}, "https://api.mistral.ai", "mistral-small-latest"},
+	{"opencode", []string{"OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"}, "https://opencode.ai/zen", "deepseek-v4-flash-free"},
 }
 
 type envLookup func(string) string

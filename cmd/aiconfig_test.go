@@ -96,6 +96,40 @@ func TestResolveProvider_ConfigModelOverride(t *testing.T) {
 	}
 }
 
+func TestResolveProvider_DefaultModels(t *testing.T) {
+	wantModels := map[string]string{
+		"anthropic": "claude-sonnet-5",
+		"openai":    "gpt-5.6-luna",
+		"gemini":    "gemini-3.6-flash",
+		"xai":       "grok-4.5",
+		"deepseek":  "deepseek-v4-flash",
+		"mistral":   "mistral-small-latest",
+		"opencode":  "deepseek-v4-flash-free",
+	}
+
+	for _, def := range providerOrder {
+		t.Run(def.name, func(t *testing.T) {
+			cfg := &xmcConfig{AI: aiConfig{Provider: def.name}}
+			getenv := func(key string) string {
+				for _, envKey := range def.envKeys {
+					if key == envKey {
+						return "test-key"
+					}
+				}
+				return ""
+			}
+
+			spec, err := resolveProvider(cfg, getenv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.model != wantModels[def.name] {
+				t.Errorf("model = %q, want %q", spec.model, wantModels[def.name])
+			}
+		})
+	}
+}
+
 func TestResolveProvider_NoKey(t *testing.T) {
 	cfg := &xmcConfig{}
 	getenv := func(k string) string { return "" }

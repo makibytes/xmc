@@ -102,7 +102,10 @@ Each line is a JSON object. Binary payloads use `dataBase64` instead of `data`.
 
 ### Broker-Specific Caveats
 
-- **MQTT** (3.1.1): no application properties, correlation ID, reply-to, or content type at the protocol level — NDJSON records from `mmc` contain only the payload.
+- **MQTT 5** (default): application properties, message ID, correlation ID,
+  reply-to, and content type round-trip through their native property mappings.
+  Legacy MQTT 3.1.1 mode (`--mqtt-version 3`) cannot carry this metadata, so
+  `send` and `publish` reject metadata-bearing NDJSON records.
 - **NATS**: no application properties — records contain payload and basic metadata only.
 - **Message IDs** are preserved, not regenerated. The target broker receives the original ID.
 - **Numeric property values** pass through JSON and may change type (e.g. integer → float).

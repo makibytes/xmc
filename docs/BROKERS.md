@@ -185,13 +185,13 @@ flowchart LR
 - Protocol: MQTT 5 by default; `--mqtt-version 3` selects the legacy 3.1.1 client for old brokers (no properties/metadata — send/publish reject the flags loudly)
 - MQTT 5 metadata: user properties (`-P`), content type, correlation data, response topic, message expiry (`-E`, seconds)
 - Binary: `mmc`, build tag: `mqtt`
-- **Queue topology**: send publishes to `queue/{name}` with QoS 1; receive uses MQTT 5.0 shared subscriptions (`$share/xmc/queue/{name}`) for competing consumers; peek subscribes directly without a shared subscription using a fresh clean-session client.
+- **Queue topology**: send publishes to `queue/{name}` with QoS 1; receive uses shared subscriptions (`$share/xmc/queue/{name}`) for competing consumers; peek subscribes directly without a shared subscription using a fresh clean-session client.
 - **Topic topology**: publish/subscribe to MQTT topics directly. Consumer groups via `--group` map to shared subscriptions (`$share/{groupID}/{topic}`).
 - TLS: auto-detected via `ssl://` URL scheme or `--tls` flag
 - `--client-id` flag: optional, auto-generated if not set
 - QoS 0 = non-persistent, QoS 1 = persistent (maps to `--persistent` flag)
 - Default server: `tcp://localhost:1883` (env: `MMC_SERVER`)
-- Library: `github.com/eclipse/paho.mqtt.golang`
+- Libraries: `github.com/eclipse/paho.golang` (MQTT 5 default), `github.com/eclipse/paho.mqtt.golang` (legacy MQTT 3.1.1)
 
 ```mermaid
 flowchart LR

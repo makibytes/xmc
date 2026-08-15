@@ -8,7 +8,7 @@
 | `go build -tags google -o gmc .` | `gmc` | Google Cloud Pub/Sub | gRPC | `GMC_` |
 | `./scripts/build-imc-in-container.sh` | `imc` | IBM MQ | IBM MQ | `IMC_` |
 | `go build -tags kafka -o kmc .` | `kmc` | Apache Kafka | Kafka | `KMC_` |
-| `go build -tags mqtt -o mmc .` | `mmc` | MQTT Brokers | MQTT 3.1.1 | `MMC_` |
+| `go build -tags mqtt -o mmc .` | `mmc` | MQTT Brokers | MQTT 5 (default); MQTT 3.1.1 (legacy) | `MMC_` |
 | `go build -tags nats -o nmc .` | `nmc` | NATS | NATS / JetStream | `NMC_` |
 | `go build -tags pulsar -o pmc .` | `pmc` | Apache Pulsar | Pulsar native | `PMC_` |
 | `go build -tags rabbitmq -o rmc .` | `rmc` | RabbitMQ v4+ | AMQP 1.0 | `RMC_` |

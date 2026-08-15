@@ -19,7 +19,7 @@ Tired of the nitty-gritty differences between message brokers? This project prov
 | [google.md](google.md) | `gmc` | Google Cloud Pub/Sub | gRPC |
 | [ibmmq.md](ibmmq.md) | `imc` | IBM MQ | IBM MQ |
 | [kafka.md](kafka.md) | `kmc` | Apache Kafka | Kafka |
-| [mqtt.md](mqtt.md) | `mmc` | MQTT Brokers | MQTT 3.1.1 |
+| [mqtt.md](mqtt.md) | `mmc` | MQTT Brokers | MQTT 5 (default); MQTT 3.1.1 (legacy) |
 | [nats.md](nats.md) | `nmc` | NATS / JetStream | NATS |
 | [pulsar.md](pulsar.md) | `pmc` | Apache Pulsar | Pulsar native |
 | [rabbitmq.md](rabbitmq.md) | `rmc` | RabbitMQ v4+ | AMQP 1.0 |
@@ -386,7 +386,10 @@ xmc send <queue> -P key1=value1 -P key2=value2 <message>
 
 If a message has properties, `receive` shows them automatically. Use `-q` to suppress.
 
-**Note:** MQTT 3.1.1 has no user properties at the protocol level, so application properties and metadata (correlation-id, reply-to, content-type, message-id) cannot be carried through an MQTT broker.
+**MQTT note:** `mmc` uses MQTT 5 by default and maps application properties and
+metadata to its native property slots. Legacy MQTT 3.1.1 mode
+(`--mqtt-version 3`) has no protocol-level support for them, so `send` and
+`publish` reject metadata flags instead of silently dropping the values.
 
 ### Working with Files and Redirection
 
@@ -573,16 +576,18 @@ xmc supports these AI providers:
 | Provider | Environment variable | Default model |
 | --- | --- | --- |
 | Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-5 |
-| OpenAI | `OPENAI_API_KEY` | gpt-4o |
-| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-2.0-flash |
-| xAI | `XAI_API_KEY` | grok-2-latest |
-| DeepSeek | `DEEPSEEK_API_KEY` | deepseek-chat |
-| Mistral | `MISTRAL_API_KEY` | mistral-large-latest |
-| OpenCode AI (Zen) | `OPENCODE_API_KEY` or `OPENCODE_ZEN_API_KEY` | mimo-v2.5-free |
+| OpenAI | `OPENAI_API_KEY` | gpt-5.6-luna |
+| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-3.6-flash |
+| xAI | `XAI_API_KEY` | grok-4.5 |
+| DeepSeek | `DEEPSEEK_API_KEY` | deepseek-v4-flash |
+| Mistral | `MISTRAL_API_KEY` | mistral-small-latest |
+| OpenCode AI (Zen) | `OPENCODE_API_KEY` or `OPENCODE_ZEN_API_KEY` | deepseek-v4-flash-free |
 
 The recommended provider for getting started is **OpenCode AI** — their free
-models (like mimo-v2.5-free, which xmc uses by default) work well for command
-generation and cost nothing. Sign up at [opencode.ai](https://opencode.ai),
+models (like deepseek-v4-flash-free, which xmc uses by default) work well for
+command generation and cost nothing. Free Zen models are limited-time offers,
+and requests may be retained and used to improve the model; do not submit
+personal or confidential data. Sign up at [opencode.ai](https://opencode.ai),
 grab an API key, and export it:
 
 ```sh
@@ -649,7 +654,7 @@ Inside AI Shell, these slash commands are available:
 | `/model` | Pick a model interactively from the provider's model list |
 | `/model <name>` | Switch to a specific model directly (persisted to config) |
 | `/effort` | Pick reasoning effort interactively |
-| `/effort low\|med\|high` | Set reasoning effort (temperature) directly |
+| `/effort low\|med\|high` | Set provider-aware reasoning effort directly |
 | `/refresh` | Reload broker objects now (one-shot) |
 | `/refresh <dur>` | Set the periodic refresh interval (e.g. `3s`, `3m`; minimum `1s`; persisted to config) |
 | `/refresh off` | Disable periodic sidebar refresh |
@@ -660,7 +665,11 @@ Inside AI Shell, these slash commands are available:
 | `/help` | Show available slash commands and keybindings |
 | `/exit` | Quit |
 
-Effort to temperature mapping:
+Effort defaults to `low` for cost-efficient command generation. For current
+reasoning models, xmc sends the provider's native effort control: Anthropic's
+`output_config.effort`, OpenAI/xAI/Mistral's `reasoning_effort`, Gemini's
+`thinkingLevel`, or DeepSeek's thinking mode and effort. Older or custom models
+that do not expose a native effort control retain the sampling fallback:
 
 - `low` → `0.0`
 - `medium` → `0.3`
@@ -693,9 +702,12 @@ select the specific provider and model xmc should use:
 ```yaml
 ai:
   provider: opencode
-  model: mimo-v2.5-free
+  model: deepseek-v4-flash-free
   metadata-format: yaml
 ```
+
+An explicit `ai.model` is always preserved. Remove that setting if you want to
+adopt the provider's current built-in default after upgrading xmc.
 
 Provider selection precedence is:
 

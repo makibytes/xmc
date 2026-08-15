@@ -211,25 +211,25 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// applyEffort parses an effort level string and sets the temperature.
+// applyEffort parses and applies a provider-aware effort level.
 // Returns false if the argument is invalid.
 func (m *aiTUIModel) applyEffort(arg string) bool {
-	var temp float64
+	var effort aiEffort
 	switch strings.ToLower(arg) {
 	case "low", "l":
-		temp = 0
+		effort = effortLow
 	case "medium", "med", "m":
-		temp = 0.3
+		effort = effortMedium
 	case "high", "h":
-		temp = 0.7
+		effort = effortHigh
 	default:
 		m.appendTranscript(warnStyle.Render("effort must be low, medium, or high") + "\n\n")
 		return false
 	}
 	if setter, ok := m.ai.client.(modelSettable); ok {
-		setter.SetTemperature(temp)
+		setter.SetEffort(effort)
 	}
-	m.appendTranscript(dimStyle.Render(fmt.Sprintf("effort → %s (temperature %.1f)", strings.ToLower(arg), temp)) + "\n\n")
+	m.appendTranscript(dimStyle.Render("effort → "+string(effort)) + "\n\n")
 	return true
 }
 

@@ -244,7 +244,7 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.appendTranscript(dimStyle.Render(
 			"/model               pick a model from the provider\n"+
 				"/model <name>        switch to a model directly\n"+
-				"/effort              pick reasoning effort (temperature)\n"+
+				"/effort              pick reasoning effort\n"+
 				"/effort low|med|high set effort directly\n"+
 				"/refresh             reload broker objects now\n"+
 				"/refresh off         disable periodic refresh\n"+
@@ -369,12 +369,12 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			effortLevels := []string{"low", "medium", "high"}
 			currentIdx := -1
 			if setter, ok := m.ai.client.(modelSettable); ok {
-				switch t := setter.Temperature(); {
-				case t <= 0:
+				switch setter.Effort() {
+				case effortLow:
 					currentIdx = 0
-				case t <= 0.4:
+				case effortMedium:
 					currentIdx = 1
-				default:
+				case effortHigh:
 					currentIdx = 2
 				}
 			}
@@ -388,11 +388,11 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 				sel:     startSel,
 				current: currentIdx,
 				onSelect: func(model *aiTUIModel, idx int) {
-					temps := []float64{0, 0.3, 0.7}
+					efforts := []aiEffort{effortLow, effortMedium, effortHigh}
 					if setter, ok := model.ai.client.(modelSettable); ok {
-						setter.SetTemperature(temps[idx])
+						setter.SetEffort(efforts[idx])
 					}
-					model.appendTranscript(dimStyle.Render(fmt.Sprintf("effort → %s (temperature %.1f)", effortLevels[idx], temps[idx])) + "\n\n")
+					model.appendTranscript(dimStyle.Render("effort → "+effortLevels[idx]) + "\n\n")
 				},
 			}
 			m.state = tuiPicking

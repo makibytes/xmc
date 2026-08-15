@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,13 @@ func TestAnthropicClient_RequestShape(t *testing.T) {
 		if req["model"] != "claude-sonnet-4-6" {
 			t.Errorf("model = %v", req["model"])
 		}
+		if _, ok := req["temperature"]; ok {
+			t.Error("temperature should not be set for an effort-capable Claude model")
+		}
+		wantOutputConfig := map[string]any{"effort": "low"}
+		if !reflect.DeepEqual(req["output_config"], wantOutputConfig) {
+			t.Errorf("output_config = %#v, want %#v", req["output_config"], wantOutputConfig)
+		}
 
 		json.NewEncoder(w).Encode(map[string]any{
 			"content": []map[string]string{
@@ -50,6 +58,28 @@ func TestAnthropicClient_RequestShape(t *testing.T) {
 	}
 	if result != "receive q -n 5" {
 		t.Errorf("result = %q", result)
+	}
+}
+
+func TestAnthropicClient_ThinkingResponse(t *testing.T) {
+	response := `{
+		"content": [
+			{"type":"thinking","thinking":"reasoning"},
+			{"type":"text","text":"send orders hello"}
+		],
+		"usage":{"input_tokens":12,"output_tokens":7}
+	}`
+	c := &anthropicClient{model: "claude-sonnet-5"}
+
+	text, usage, err := c.parseResponse(strings.NewReader(response))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "send orders hello" {
+		t.Errorf("text = %q, want final text block", text)
+	}
+	if usage.InputTokens != 12 || usage.OutputTokens != 7 {
+		t.Errorf("usage = %+v", usage)
 	}
 }
 
@@ -99,6 +129,7 @@ func TestIsReasoningModel(t *testing.T) {
 		{"gpt-5", true},
 		{"gpt-5-mini", true},
 		{"gpt-5-thinking", true},
+		{"gpt-5.6-luna", true},
 		{"codex-mini-latest", true},
 		{"O1-MINI", true},
 	}
@@ -128,6 +159,9 @@ func TestOpenAIClient_ReasoningModelRequestShape(t *testing.T) {
 		if _, ok := req["max_completion_tokens"]; !ok {
 			t.Error("max_completion_tokens should be set for a reasoning model")
 		}
+		if req["reasoning_effort"] != "high" {
+			t.Errorf("reasoning_effort = %v, want high", req["reasoning_effort"])
+		}
 
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
@@ -137,10 +171,87 @@ func TestOpenAIClient_ReasoningModelRequestShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &openaiClient{apiKey: "k", model: "o3-mini", baseURL: srv.URL, maxTokens: 4096, temperature: 0.7}
+	c := &openaiClient{apiKey: "k", model: "o3-mini", baseURL: srv.URL, maxTokens: 4096, effort: effortHigh}
 	_, _, err := c.Complete(context.Background(), "sys", []aiMessage{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenAIClient_GenerationConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		client   openaiClient
+		wantBody map[string]any
+	}{
+		{
+			name:   "openai luna",
+			client: openaiClient{provider: "openai", model: "gpt-5.6-luna", maxTokens: 4096},
+			wantBody: map[string]any{
+				"max_completion_tokens": 4096,
+				"reasoning_effort":      effortLow,
+			},
+		},
+		{
+			name:   "xai grok",
+			client: openaiClient{provider: "xai", model: "grok-4.5", maxTokens: 4096, effort: effortMedium},
+			wantBody: map[string]any{
+				"max_tokens":       4096,
+				"reasoning_effort": effortMedium,
+			},
+		},
+		{
+			name:   "deepseek low",
+			client: openaiClient{provider: "deepseek", model: "deepseek-v4-flash", maxTokens: 4096},
+			wantBody: map[string]any{
+				"max_tokens": 4096,
+				"thinking":   map[string]any{"type": "disabled"},
+			},
+		},
+		{
+			name:   "deepseek medium",
+			client: openaiClient{provider: "deepseek", model: "deepseek-v4-flash", maxTokens: 4096, effort: effortMedium},
+			wantBody: map[string]any{
+				"max_tokens":       4096,
+				"thinking":         map[string]any{"type": "enabled"},
+				"reasoning_effort": "high",
+			},
+		},
+		{
+			name:   "deepseek high",
+			client: openaiClient{provider: "opencode", model: "deepseek-v4-flash-free", maxTokens: 4096, effort: effortHigh},
+			wantBody: map[string]any{
+				"max_tokens":       4096,
+				"thinking":         map[string]any{"type": "enabled"},
+				"reasoning_effort": "max",
+			},
+		},
+		{
+			name:   "mistral small",
+			client: openaiClient{provider: "mistral", model: "mistral-small-latest", maxTokens: 4096, effort: effortHigh},
+			wantBody: map[string]any{
+				"max_tokens":       4096,
+				"reasoning_effort": effortHigh,
+			},
+		},
+		{
+			name:   "legacy temperature fallback",
+			client: openaiClient{provider: "openai", model: "gpt-4o", maxTokens: 4096, effort: effortMedium},
+			wantBody: map[string]any{
+				"max_tokens":  4096,
+				"temperature": 0.3,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := make(map[string]any)
+			tt.client.addGenerationConfig(body)
+			if !reflect.DeepEqual(body, tt.wantBody) {
+				t.Errorf("body = %#v, want %#v", body, tt.wantBody)
+			}
+		})
 	}
 }
 
@@ -169,6 +280,37 @@ func TestGeminiClient_RequestShape(t *testing.T) {
 	}
 	if result != "publish topic msg" {
 		t.Errorf("result = %q", result)
+	}
+}
+
+func TestGeminiClient_CurrentModelEffort(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatal(err)
+		}
+
+		generationConfig := req["generationConfig"].(map[string]any)
+		if _, ok := generationConfig["temperature"]; ok {
+			t.Error("temperature should be omitted for Gemini 3 models")
+		}
+		wantThinking := map[string]any{"thinkingLevel": "medium"}
+		if !reflect.DeepEqual(generationConfig["thinkingConfig"], wantThinking) {
+			t.Errorf("thinkingConfig = %#v, want %#v", generationConfig["thinkingConfig"], wantThinking)
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]string{{"text": "send q hello"}}},
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	c := &geminiClient{apiKey: "key", model: "gemini-3.6-flash", baseURL: srv.URL, effort: effortMedium}
+	if _, _, err := c.Complete(context.Background(), "sys", []aiMessage{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -444,6 +586,59 @@ func TestOpenAIClient_Streaming(t *testing.T) {
 		t.Errorf("got %d tokens, want 2", len(tokens))
 	}
 	if usage.InputTokens != 15 || usage.OutputTokens != 6 {
+		t.Errorf("usage = %+v", usage)
+	}
+}
+
+func TestOpenAIClient_MistralChunkedResponse(t *testing.T) {
+	response := `{
+		"choices":[{
+			"message":{"content":[
+				{"type":"thinking","thinking":[{"type":"text","text":"reasoning"}]},
+				{"type":"text","text":"receive orders -n 1"}
+			]},
+			"finish_reason":"stop"
+		}],
+		"usage":{"prompt_tokens":18,"completion_tokens":9}
+	}`
+	c := &openaiClient{provider: "mistral", model: "mistral-small-latest"}
+
+	text, usage, err := c.parseResponse(strings.NewReader(response))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "receive orders -n 1" {
+		t.Errorf("text = %q, want final text chunk", text)
+	}
+	if usage.InputTokens != 18 || usage.OutputTokens != 9 {
+		t.Errorf("usage = %+v", usage)
+	}
+}
+
+func TestOpenAIClient_MistralChunkedStream(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"reasoning"}]}]}}]}`,
+		`data: {"choices":[{"delta":{"content":[{"type":"thinking","thinking":[]},{"type":"text","text":"send"}]}}]}`,
+		`data: {"choices":[{"delta":{"content":" orders hello"},"finish_reason":"stop"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":11}}`,
+		`data: [DONE]`,
+	}, "\n\n") + "\n\n"
+	c := &openaiClient{provider: "mistral", model: "mistral-small-latest"}
+
+	var tokens []string
+	text, usage, err := c.parseStream(strings.NewReader(stream), func(token string) {
+		tokens = append(tokens, token)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "send orders hello" {
+		t.Errorf("text = %q, want final text chunks", text)
+	}
+	if !reflect.DeepEqual(tokens, []string{"send", " orders hello"}) {
+		t.Errorf("tokens = %#v", tokens)
+	}
+	if usage.InputTokens != 20 || usage.OutputTokens != 11 {
 		t.Errorf("usage = %+v", usage)
 	}
 }

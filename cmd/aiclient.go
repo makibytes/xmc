@@ -119,10 +119,38 @@ type aiClient interface {
 	Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error)
 }
 
+type aiEffort string
+
+const (
+	effortLow    aiEffort = "low"
+	effortMedium aiEffort = "medium"
+	effortHigh   aiEffort = "high"
+)
+
+func normalizeEffort(effort aiEffort) aiEffort {
+	switch effort {
+	case effortMedium, effortHigh:
+		return effort
+	default:
+		return effortLow
+	}
+}
+
+func effortTemperature(effort aiEffort) float64 {
+	switch normalizeEffort(effort) {
+	case effortMedium:
+		return 0.3
+	case effortHigh:
+		return 0.7
+	default:
+		return 0
+	}
+}
+
 type modelSettable interface {
 	SetModel(string)
-	SetTemperature(float64)
-	Temperature() float64
+	SetEffort(aiEffort)
+	Effort() aiEffort
 }
 
 type modelLister interface {
@@ -143,7 +171,7 @@ func newAIClient(spec providerSpec) aiClient {
 	case "gemini":
 		return &geminiClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
 	default:
-		return &openaiClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
+		return &openaiClient{provider: spec.name, apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
 	}
 }
 
@@ -203,14 +231,36 @@ type anthropicClient struct {
 	apiKey         string
 	model          string
 	baseURL        string
-	temperature    float64
+	effort         aiEffort
 	maxTokens      int
 	requestTimeout time.Duration
 }
 
-func (c *anthropicClient) SetModel(m string)        { c.model = m }
-func (c *anthropicClient) SetTemperature(t float64) { c.temperature = t }
-func (c *anthropicClient) Temperature() float64     { return c.temperature }
+func (c *anthropicClient) SetModel(model string)     { c.model = model }
+func (c *anthropicClient) SetEffort(effort aiEffort) { c.effort = normalizeEffort(effort) }
+func (c *anthropicClient) Effort() aiEffort          { return normalizeEffort(c.effort) }
+
+func supportsAnthropicEffort(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	prefixes := []string{
+		"claude-fable-5",
+		"claude-mythos-5",
+		"claude-mythos-preview",
+		"claude-opus-5",
+		"claude-opus-4-5",
+		"claude-opus-4-6",
+		"claude-opus-4-7",
+		"claude-opus-4-8",
+		"claude-sonnet-5",
+		"claude-sonnet-4-6",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 func (c *anthropicClient) ListModels(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
@@ -238,11 +288,15 @@ func (c *anthropicClient) Complete(ctx context.Context, system string, messages 
 	}
 
 	body := map[string]any{
-		"model":       c.model,
-		"max_tokens":  c.maxTokens,
-		"temperature": c.temperature,
-		"system":      system,
-		"messages":    msgs,
+		"model":      c.model,
+		"max_tokens": c.maxTokens,
+		"system":     system,
+		"messages":   msgs,
+	}
+	if supportsAnthropicEffort(c.model) {
+		body["output_config"] = map[string]any{"effort": c.Effort()}
+	} else {
+		body["temperature"] = effortTemperature(c.Effort())
 	}
 	if onToken != nil {
 		body["stream"] = true
@@ -281,6 +335,7 @@ func (c *anthropicClient) parseResponse(r io.Reader) (string, TokenUsage, error)
 	}
 	var result struct {
 		Content []struct {
+			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 		Usage struct {
@@ -291,10 +346,16 @@ func (c *anthropicClient) parseResponse(r io.Reader) (string, TokenUsage, error)
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", TokenUsage{}, fmt.Errorf("parse anthropic response: %w", err)
 	}
-	if len(result.Content) == 0 {
+	var text strings.Builder
+	for _, block := range result.Content {
+		if block.Type == "text" || (block.Type == "" && block.Text != "") {
+			text.WriteString(block.Text)
+		}
+	}
+	if text.Len() == 0 {
 		return "", TokenUsage{}, fmt.Errorf("empty response from anthropic")
 	}
-	return result.Content[0].Text, TokenUsage{
+	return text.String(), TokenUsage{
 		InputTokens:  result.Usage.InputTokens,
 		OutputTokens: result.Usage.OutputTokens,
 	}, nil
@@ -378,17 +439,18 @@ func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string
 // Covers: OpenAI, xAI, DeepSeek, Mistral
 
 type openaiClient struct {
+	provider       string
 	apiKey         string
 	model          string
 	baseURL        string
-	temperature    float64
+	effort         aiEffort
 	maxTokens      int
 	requestTimeout time.Duration
 }
 
-func (c *openaiClient) SetModel(m string)        { c.model = m }
-func (c *openaiClient) SetTemperature(t float64) { c.temperature = t }
-func (c *openaiClient) Temperature() float64     { return c.temperature }
+func (c *openaiClient) SetModel(model string)     { c.model = model }
+func (c *openaiClient) SetEffort(effort aiEffort) { c.effort = normalizeEffort(effort) }
+func (c *openaiClient) Effort() aiEffort          { return normalizeEffort(c.effort) }
 
 // reasoningModelPrefixes are OpenAI model names/prefixes for the o-series and
 // gpt-5/codex reasoning models. These reject the standard chat-completion
@@ -404,6 +466,9 @@ var reasoningModelPrefixes = []string{"o1", "o1-", "o3", "o3-", "o4-", "gpt-5", 
 // this client accept the standard max_tokens/temperature shape.
 func isReasoningModel(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(m, "gpt-5.") {
+		return true
+	}
 	for _, p := range reasoningModelPrefixes {
 		if strings.HasSuffix(p, "-") {
 			if strings.HasPrefix(m, p) {
@@ -414,6 +479,59 @@ func isReasoningModel(model string) bool {
 		}
 	}
 	return false
+}
+
+func (c *openaiClient) isDeepSeekV4() bool {
+	model := strings.ToLower(strings.TrimSpace(c.model))
+	return (c.provider == "deepseek" || c.provider == "opencode") && strings.Contains(model, "deepseek-v4-")
+}
+
+func (c *openaiClient) isXAIReasoningModel() bool {
+	model := strings.ToLower(strings.TrimSpace(c.model))
+	return c.provider == "xai" && strings.HasPrefix(model, "grok-4.5")
+}
+
+func (c *openaiClient) isMistralReasoningModel() bool {
+	if c.provider != "mistral" {
+		return false
+	}
+	model := strings.ToLower(strings.TrimSpace(c.model))
+	return model == "mistral-small-latest" || model == "mistral-small-2603" || model == "mistral-medium-3-5"
+}
+
+func (c *openaiClient) addGenerationConfig(body map[string]any) {
+	effort := c.Effort()
+
+	if c.isDeepSeekV4() {
+		body["max_tokens"] = c.maxTokens
+		if effort == effortLow {
+			body["thinking"] = map[string]any{"type": "disabled"}
+			return
+		}
+
+		body["thinking"] = map[string]any{"type": "enabled"}
+		if effort == effortHigh {
+			body["reasoning_effort"] = "max"
+		} else {
+			body["reasoning_effort"] = "high"
+		}
+		return
+	}
+
+	if isReasoningModel(c.model) {
+		body["max_completion_tokens"] = c.maxTokens
+		body["reasoning_effort"] = effort
+		return
+	}
+
+	if c.isXAIReasoningModel() || c.isMistralReasoningModel() {
+		body["max_tokens"] = c.maxTokens
+		body["reasoning_effort"] = effort
+		return
+	}
+
+	body["max_tokens"] = c.maxTokens
+	body["temperature"] = effortTemperature(effort)
 }
 
 func (c *openaiClient) ListModels(ctx context.Context) ([]string, error) {
@@ -444,14 +562,7 @@ func (c *openaiClient) Complete(ctx context.Context, system string, messages []a
 		"model":    c.model,
 		"messages": msgs,
 	}
-	if isReasoningModel(c.model) {
-		// o1/o3/o4/gpt-5/codex reject "max_tokens" (must be
-		// "max_completion_tokens") and reject any non-default temperature.
-		body["max_completion_tokens"] = c.maxTokens
-	} else {
-		body["max_tokens"] = c.maxTokens
-		body["temperature"] = c.temperature
-	}
+	c.addGenerationConfig(body)
 	if onToken != nil {
 		body["stream"] = true
 		body["stream_options"] = map[string]any{"include_usage": true}
@@ -482,6 +593,38 @@ func (c *openaiClient) Complete(ctx context.Context, system string, messages []a
 	return c.parseResponse(resp.Body)
 }
 
+type chatContent string
+
+func (content *chatContent) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*content = ""
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*content = chatContent(text)
+		return nil
+	}
+
+	var chunks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(data, &chunks); err != nil {
+		return err
+	}
+
+	var result strings.Builder
+	for _, chunk := range chunks {
+		if chunk.Type == "text" || (chunk.Type == "" && chunk.Text != "") {
+			result.WriteString(chunk.Text)
+		}
+	}
+	*content = chatContent(result.String())
+	return nil
+}
+
 func (c *openaiClient) parseResponse(r io.Reader) (string, TokenUsage, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
@@ -490,8 +633,8 @@ func (c *openaiClient) parseResponse(r io.Reader) (string, TokenUsage, error) {
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"`
+				Content          chatContent `json:"content"`
+				ReasoningContent string      `json:"reasoning_content"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -511,7 +654,7 @@ func (c *openaiClient) parseResponse(r io.Reader) (string, TokenUsage, error) {
 		usage.InputTokens = result.Usage.PromptTokens
 		usage.OutputTokens = result.Usage.CompletionTokens
 	}
-	content := result.Choices[0].Message.Content
+	content := string(result.Choices[0].Message.Content)
 	if content == "" && result.Choices[0].Message.ReasoningContent != "" {
 		return "", usage, fmt.Errorf("model %s produced only reasoning, no answer (finish_reason=%s); try raising ai.max-tokens in ~/.xmc config or use a non-reasoning model",
 			c.model, result.Choices[0].FinishReason)
@@ -529,9 +672,9 @@ func (c *openaiClient) parseStream(r io.Reader, onToken func(string)) (string, T
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"` // DeepSeek reasoning models
-					Reasoning        string `json:"reasoning"`         // some proxies use this field
+					Content          chatContent `json:"content"`
+					ReasoningContent string      `json:"reasoning_content"` // DeepSeek reasoning models
+					Reasoning        string      `json:"reasoning"`         // some proxies use this field
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
@@ -560,9 +703,9 @@ func (c *openaiClient) parseStream(r io.Reader, onToken func(string)) (string, T
 				reasoning.WriteString(rc)
 				onToken(rc)
 			}
-			if d.Content != "" {
-				text.WriteString(d.Content)
-				onToken(d.Content)
+			if content := string(d.Content); content != "" {
+				text.WriteString(content)
+				onToken(content)
 			}
 			if chunk.Choices[0].FinishReason != "" {
 				finishReason = chunk.Choices[0].FinishReason
@@ -594,14 +737,19 @@ type geminiClient struct {
 	apiKey         string
 	model          string
 	baseURL        string
-	temperature    float64
+	effort         aiEffort
 	maxTokens      int
 	requestTimeout time.Duration
 }
 
-func (c *geminiClient) SetModel(m string)        { c.model = m }
-func (c *geminiClient) SetTemperature(t float64) { c.temperature = t }
-func (c *geminiClient) Temperature() float64     { return c.temperature }
+func (c *geminiClient) SetModel(model string)     { c.model = model }
+func (c *geminiClient) SetEffort(effort aiEffort) { c.effort = normalizeEffort(effort) }
+func (c *geminiClient) Effort() aiEffort          { return normalizeEffort(c.effort) }
+
+func supportsGeminiEffort(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gemini-3")
+}
 
 func (c *geminiClient) ListModels(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
@@ -659,17 +807,23 @@ func (c *geminiClient) Complete(ctx context.Context, system string, messages []a
 		}
 	}
 
+	generationConfig := map[string]any{
+		"maxOutputTokens": c.maxTokens,
+	}
+	if supportsGeminiEffort(c.model) {
+		generationConfig["thinkingConfig"] = map[string]any{"thinkingLevel": c.Effort()}
+	} else {
+		generationConfig["temperature"] = effortTemperature(c.Effort())
+	}
+
 	body := map[string]any{
 		"system_instruction": map[string]any{
 			"parts": []map[string]string{
 				{"text": system},
 			},
 		},
-		"generationConfig": map[string]any{
-			"temperature":     c.temperature,
-			"maxOutputTokens": c.maxTokens,
-		},
-		"contents": contents,
+		"generationConfig": generationConfig,
+		"contents":         contents,
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

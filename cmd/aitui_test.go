@@ -32,6 +32,35 @@ func TestAITUI_InitialState(t *testing.T) {
 	}
 }
 
+func TestAITUI_ApplyEffort(t *testing.T) {
+	tests := []struct {
+		input string
+		want  aiEffort
+	}{
+		{"low", effortLow},
+		{"med", effortMedium},
+		{"high", effortHigh},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			m := newTestModel()
+			client := &openaiClient{}
+			m.ai.client = client
+
+			if !m.applyEffort(tt.input) {
+				t.Fatalf("applyEffort(%q) returned false", tt.input)
+			}
+			if client.Effort() != tt.want {
+				t.Errorf("effort = %q, want %q", client.Effort(), tt.want)
+			}
+			if !strings.Contains(m.transcript.String(), "effort → "+string(tt.want)) {
+				t.Errorf("transcript = %q", m.transcript.String())
+			}
+		})
+	}
+}
+
 func TestAITUI_EscTogglesMode(t *testing.T) {
 	m := newTestModel()
 	if m.mode != modeAI {
