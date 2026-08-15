@@ -17,7 +17,7 @@ jobs:
           - 5672:5672
     steps:
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: 1.26.0
       - name: Check out code
@@ -64,7 +64,7 @@ jobs:
         broker: [artemis, rabbitmq, kafka, nats, mqtt, pulsar, redis]
     steps:
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: 1.26.0
       - name: Check out code
@@ -101,7 +101,7 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: 1.26.0
       - name: Check out code
@@ -130,7 +130,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: 1.26.0
       - name: Check out code

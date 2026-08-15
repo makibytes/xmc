@@ -300,11 +300,13 @@ func TestGeminiClient_CurrentModelEffort(t *testing.T) {
 			t.Errorf("thinkingConfig = %#v, want %#v", generationConfig["thinkingConfig"], wantThinking)
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		if err := json.NewEncoder(w).Encode(map[string]any{
 			"candidates": []map[string]any{{
 				"content": map[string]any{"parts": []map[string]string{{"text": "send q hello"}}},
 			}},
-		})
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
