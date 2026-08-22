@@ -1,6 +1,6 @@
 module github.com/makibytes/xmc
 
-go 1.26
+go 1.27
 
 require (
 	cloud.google.com/go/pubsub v1.51.0

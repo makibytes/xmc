@@ -378,7 +378,7 @@ func wrapReconnectQueue(factory QueueAdapterFactory, opts ReconnectOptions) Queu
 	if factory == nil {
 		return nil
 	}
-	rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: opts}}
+	rq := &reconnectingQueue{factory: factory, opts: opts}
 	return func() (backends.QueueBackend, error) {
 		return rq, nil
 	}
@@ -390,7 +390,7 @@ func wrapReconnectTopic(factory TopicAdapterFactory, opts ReconnectOptions) Topi
 	if factory == nil {
 		return nil
 	}
-	rt := &reconnectingTopic{reconnectingAdapter: reconnectingAdapter[backends.TopicBackend]{factory: factory, opts: opts}}
+	rt := &reconnectingTopic{factory: factory, opts: opts}
 	return func() (backends.TopicBackend, error) {
 		return rt, nil
 	}
@@ -408,7 +408,7 @@ func conditionalReconnectQueue(factory QueueAdapterFactory, rootCmd *cobra.Comma
 			return factory()
 		}
 		window, _ := rootCmd.Flags().GetDuration("reconnect-window")
-		rq := &reconnectingQueue{reconnectingAdapter: reconnectingAdapter[backends.QueueBackend]{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}}
+		rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}
 		return rq, nil
 	}
 }
@@ -425,7 +425,7 @@ func conditionalReconnectTopic(factory TopicAdapterFactory, rootCmd *cobra.Comma
 			return factory()
 		}
 		window, _ := rootCmd.Flags().GetDuration("reconnect-window")
-		rt := &reconnectingTopic{reconnectingAdapter: reconnectingAdapter[backends.TopicBackend]{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}}
+		rt := &reconnectingTopic{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}
 		return rt, nil
 	}
 }

@@ -15,7 +15,7 @@
 ARG BROKER=artemis
 ARG BINARY=amc
 
-FROM golang:1.26 AS build
+FROM golang:1.27 AS build
 ARG BROKER
 ARG BINARY
 ARG VERSION=dev
