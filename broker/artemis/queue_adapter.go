@@ -83,7 +83,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 // Browse implements backends.BrowseBackend.
 // It opens a single AMQP receiver in distribution-mode "copy" so that
 // successive calls to Next advance through the queue without consuming messages.
-func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
+func (a *QueueAdapter) Browse(_ context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
 	b, err := amqpcommon.NewQueueBrowser(a.session, amqpcommon.ReceiveOptions{
 		Queue:              opts.Queue,
 		Timeout:            opts.Timeout,
@@ -123,7 +123,7 @@ func (a *QueueAdapter) Close() error {
 	_ = a.sendCache.Close()
 	_ = a.recvCache.Close()
 	if a.session != nil {
-		a.session.Close(context.Background())
+		_ = a.session.Close(context.Background())
 	}
 	if a.connection != nil {
 		return a.connection.Close()

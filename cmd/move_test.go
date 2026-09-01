@@ -157,7 +157,7 @@ func TestMoveCommand_SendFailureSurfacesMessage(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err == nil {
@@ -168,7 +168,7 @@ func TestMoveCommand_SendFailureSurfacesMessage(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	if !strings.Contains(buf.String(), "lost-msg") {
 		t.Errorf("undelivered message should be written to stdout for recovery, got: %q", buf.String())
 	}

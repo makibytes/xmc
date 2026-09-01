@@ -194,7 +194,7 @@ func respondToRequest(ctx context.Context, backend backends.QueueBackend, reques
 		// A failing command should not tear down the whole responder. Write to
 		// the command's error stream (not the global log) so the message lands
 		// in the background process's captured output in shell/AI mode.
-		fmt.Fprintf(cfg.errOut, "reply command failed: %s\n", err)
+		_, _ = fmt.Fprintf(cfg.errOut, "reply command failed: %s\n", err)
 		return nil
 	}
 

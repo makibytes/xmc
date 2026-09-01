@@ -1,3 +1,4 @@
+// Package tlsutil builds shared TLS configuration for the non-cloud broker backends.
 package tlsutil
 
 import (

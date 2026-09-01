@@ -30,7 +30,7 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 }
 
 // Publish implements backends.TopicBackend.
-func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
+func (a *TopicAdapter) Publish(_ context.Context, opts backends.PublishOptions) error {
 	msg := natsclient.NewMsg(opts.Topic)
 	msg.Data = opts.Message
 
@@ -54,7 +54,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 }
 
 // Subscribe implements backends.TopicBackend.
-func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
+func (a *TopicAdapter) Subscribe(_ context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
 	var (

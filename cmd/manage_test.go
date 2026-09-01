@@ -114,7 +114,7 @@ func TestManageCommand_BindActionTargetNoun(t *testing.T) {
 	spec := ManageSpec{
 		BindQueue: &BindAction{
 			TargetNoun: "address",
-			Run:        func(queue, target string) error { return nil },
+			Run:        func(_, _ string) error { return nil },
 		},
 	}
 	cmd := NewManageCommand(spec)

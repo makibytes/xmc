@@ -14,11 +14,11 @@ func TestInfo_WithArgs(t *testing.T) {
 
 	Info("hello %s %d", "world", 42)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	if got := buf.String(); got != "hello world 42" {
 		t.Errorf("Info() = %q, want %q", got, "hello world 42")
@@ -32,11 +32,11 @@ func TestInfo_WithoutArgs(t *testing.T) {
 
 	Info("simple message")
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	if got := strings.TrimSpace(buf.String()); got != "simple message" {
 		t.Errorf("Info() = %q, want %q", got, "simple message")
@@ -50,11 +50,11 @@ func TestError_WithArgs(t *testing.T) {
 
 	Error("error: %s", "something failed")
 
-	w.Close()
+	_ = w.Close()
 	os.Stderr = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	if got := buf.String(); got != "error: something failed" {
 		t.Errorf("Error() = %q, want %q", got, "error: something failed")
@@ -68,11 +68,11 @@ func TestError_WithoutArgs(t *testing.T) {
 
 	Error("plain error")
 
-	w.Close()
+	_ = w.Close()
 	os.Stderr = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	if got := strings.TrimSpace(buf.String()); got != "plain error" {
 		t.Errorf("Error() = %q, want %q", got, "plain error")
@@ -90,11 +90,11 @@ func TestVerbose_WhenEnabled(t *testing.T) {
 
 	Verbose("debug: %d", 123)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	if got := buf.String(); got != "debug: 123" {
 		t.Errorf("Verbose() = %q, want %q", got, "debug: 123")
@@ -112,11 +112,11 @@ func TestVerbose_WhenDisabled(t *testing.T) {
 
 	Verbose("should not appear")
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	if got := buf.String(); got != "" {
 		t.Errorf("Verbose() when disabled = %q, want empty", got)
@@ -134,11 +134,11 @@ func TestVerbose_WithoutArgs_WhenEnabled(t *testing.T) {
 
 	Verbose("plain verbose message")
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	if got := strings.TrimSpace(buf.String()); got != "plain verbose message" {
 		t.Errorf("Verbose() = %q, want %q", got, "plain verbose message")
@@ -150,13 +150,13 @@ func TestIsStdoutRedirected_WithPipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer r.Close() //nolint:errcheck
 
 	old := os.Stdout
 	os.Stdout = w
 	defer func() {
 		os.Stdout = old
-		w.Close()
+		_ = w.Close()
 	}()
 
 	if !isStdoutRedirected() {
@@ -169,7 +169,7 @@ func TestIsStdoutRedirected_WithCharDevice(t *testing.T) {
 	if err != nil {
 		t.Skip("cannot open /dev/tty (headless environment): " + err.Error())
 	}
-	defer tty.Close()
+	defer tty.Close() //nolint:errcheck
 
 	old := os.Stdout
 	os.Stdout = tty

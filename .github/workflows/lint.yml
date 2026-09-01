@@ -29,9 +29,5 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
-          # The repo has a pre-existing lint backlog; only fail on issues
-          # introduced by this push/PR so adoption doesn't require fixing
-          # everything up front. Remove once the backlog above is cleared.
-          only-new-issues: true
           args: >-
             ${{ matrix.tag == 'none' && '' || format('--build-tags={0}', matrix.tag) }}

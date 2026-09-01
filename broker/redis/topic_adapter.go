@@ -14,6 +14,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// TopicAdapter implements backends.TopicBackend for Redis.
 type TopicAdapter struct {
 	client  *redis.Client
 	maxLen  int64
@@ -21,6 +22,7 @@ type TopicAdapter struct {
 	ensured map[string]struct{}
 }
 
+// NewTopicAdapter creates a TopicAdapter using the given connection arguments.
 func NewTopicAdapter(connArgs ConnArguments, maxLen int64) (*TopicAdapter, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
@@ -34,6 +36,7 @@ func NewTopicAdapter(connArgs ConnArguments, maxLen int64) (*TopicAdapter, error
 	}, nil
 }
 
+// Publish publishes a message to a topic.
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
 	fields := buildFields(opts.Message, opts.Properties,
 		opts.MessageID, opts.CorrelationID, opts.ReplyTo, opts.ContentType)
@@ -50,6 +53,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	return a.client.XAdd(ctx, args).Err()
 }
 
+// Subscribe subscribes and receives a message from a topic.
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	key := opts.Topic
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
@@ -60,7 +64,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	return a.subscribeIndependent(ctx, key, timeout)
 }
 
-func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, durable bool, timeout time.Duration) (*backends.Message, error) {
+func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, _ bool, timeout time.Duration) (*backends.Message, error) {
 	if err := a.ensureTopicGroup(ctx, key, group); err != nil {
 		return nil, err
 	}
@@ -129,6 +133,7 @@ func (a *TopicAdapter) subscribeIndependent(ctx context.Context, key string, tim
 	return streamToMessage(entry.ID, entry.Values), nil
 }
 
+// Close closes the connection to the broker.
 func (a *TopicAdapter) Close() error {
 	if a.client != nil {
 		return a.client.Close()

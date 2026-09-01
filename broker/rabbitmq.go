@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the RabbitMQ root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs rabbitmq.ConnArguments
 	var exchangeType string

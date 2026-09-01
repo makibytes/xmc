@@ -11,12 +11,14 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// QueueAdapter implements backends.QueueBackend for Azure Service Bus.
 type QueueAdapter struct {
 	senderCache
 	adm     *admin.Client
 	ensured map[string]struct{} // queues confirmed to exist, to skip per-message admin calls
 }
 
+// NewQueueAdapter creates a QueueAdapter using the given connection arguments.
 func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 	client, err := Connect(args)
 	if err != nil {
@@ -47,6 +49,7 @@ func (a *QueueAdapter) ensureQueueCached(ctx context.Context, name string) error
 	return nil
 }
 
+// Send sends a message to a queue.
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	if err := a.ensureQueueCached(ctx, opts.Queue); err != nil {
 		return err
@@ -63,6 +66,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	return sender.SendMessage(ctx, msg, nil)
 }
 
+// Receive receives a message from a queue.
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	if err := a.ensureQueueCached(ctx, opts.Queue); err != nil {
 		return nil, err
@@ -72,7 +76,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		return a.peek(ctx, opts)
 	}
 
-	recv, err := a.senderCache.client.NewReceiverForQueue(opts.Queue, nil)
+	recv, err := a.client.NewReceiverForQueue(opts.Queue, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating receiver for queue %s: %w", opts.Queue, err)
 	}
@@ -101,7 +105,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 }
 
 func (a *QueueAdapter) peek(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	recv, err := a.senderCache.client.NewReceiverForQueue(opts.Queue, nil)
+	recv, err := a.client.NewReceiverForQueue(opts.Queue, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating receiver for queue %s: %w", opts.Queue, err)
 	}
@@ -125,8 +129,9 @@ func (a *QueueAdapter) peek(ctx context.Context, opts backends.ReceiveOptions) (
 	return sbToBackendMessage(msgs[0]), nil
 }
 
+// Close closes the connection to the broker.
 func (a *QueueAdapter) Close() error {
 	ctx := context.Background()
 	a.closeSenders(ctx)
-	return a.senderCache.client.Close(ctx)
+	return a.client.Close(ctx)
 }

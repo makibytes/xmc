@@ -21,7 +21,7 @@ func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, err
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	var nodes []backends.ObjectNode
@@ -63,7 +63,7 @@ func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	var topics []backends.TopicInfo
 	it := client.Topics(context.Background())
@@ -87,7 +87,7 @@ func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	const prefix = "xmc-queue-"
 	var queues []backends.QueueInfo
@@ -113,7 +113,7 @@ func CreateTopic(args ConnArguments, name string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 	_, err = ensureTopic(context.Background(), client, name)
 	return err
 }
@@ -124,7 +124,7 @@ func DeleteTopic(args ConnArguments, name string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 	if err := client.Topic(name).Delete(context.Background()); err != nil {
 		return fmt.Errorf("deleting topic %s: %w", name, err)
 	}
@@ -138,7 +138,7 @@ func CreateQueue(args ConnArguments, name string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 	ctx := context.Background()
 	topic, err := ensureTopic(ctx, client, name)
 	if err != nil {
@@ -154,7 +154,7 @@ func DeleteQueue(args ConnArguments, name string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 	ctx := context.Background()
 	subName := "xmc-queue-" + name
 	if err := client.Subscription(subName).Delete(ctx); err != nil {
@@ -173,7 +173,7 @@ func PurgeQueue(args ConnArguments, name string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 	return purgeSubscriptionByFullName(context.Background(), client, "xmc-queue-"+name)
 }
 
@@ -182,12 +182,12 @@ func PurgeQueue(args ConnArguments, name string) (int64, error) {
 // sidebar) to the current time, dropping its backlog. topic is accepted for
 // signature parity with Azure's compound-key PurgeSubscription but unused:
 // Pub/Sub resolves a subscription by its own name alone.
-func PurgeSubscription(args ConnArguments, topic, subscription string) (int64, error) {
+func PurgeSubscription(args ConnArguments, _, subscription string) (int64, error) {
 	client, err := Connect(context.Background(), args)
 	if err != nil {
 		return 0, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 	return purgeSubscriptionByFullName(context.Background(), client, subscription)
 }
 

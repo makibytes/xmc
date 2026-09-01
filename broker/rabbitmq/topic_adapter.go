@@ -199,7 +199,7 @@ func (a *TopicAdapter) Close() error {
 	_ = a.sendCache.Close()
 	_ = a.recvCache.Close()
 	if a.session != nil {
-		a.session.Close(context.Background())
+		_ = a.session.Close(context.Background())
 	}
 	if a.connection != nil {
 		return a.connection.Close()

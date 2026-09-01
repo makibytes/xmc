@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the Azure Service Bus root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs azpkg.ConnArguments
 

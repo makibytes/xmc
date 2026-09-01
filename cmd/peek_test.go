@@ -62,7 +62,7 @@ func TestPeekCommand_CountFlag(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -77,7 +77,7 @@ func TestPeekCommand_CountFlag(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 	if !strings.Contains(output, "peek1") || !strings.Contains(output, "peek2") {
 		t.Errorf("output missing expected messages: %q", output)
@@ -99,7 +99,7 @@ func TestPeekCommand_JSONOutput(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -107,7 +107,7 @@ func TestPeekCommand_JSONOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	var result map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
@@ -135,7 +135,7 @@ func TestPeekCommand_SelectorFlag(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -167,8 +167,8 @@ func TestPeekCommand_QuietFlag(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	wOut.Close()
-	wErr.Close()
+	_ = wOut.Close()
+	_ = wErr.Close()
 	os.Stdout = oldStdout
 	os.Stderr = oldStderr
 
@@ -180,13 +180,13 @@ func TestPeekCommand_QuietFlag(t *testing.T) {
 	}
 
 	var bufOut bytes.Buffer
-	bufOut.ReadFrom(rOut)
+	_, _ = bufOut.ReadFrom(rOut)
 	if bufOut.String() != "peek quietly" {
 		t.Errorf("stdout = %q, want %q", bufOut.String(), "peek quietly")
 	}
 
 	var bufErr bytes.Buffer
-	bufErr.ReadFrom(rErr)
+	_, _ = bufErr.ReadFrom(rErr)
 	if strings.Contains(bufErr.String(), "Properties") {
 		t.Errorf("stderr should not contain properties in quiet mode, got: %q", bufErr.String())
 	}
@@ -209,7 +209,7 @@ func TestPeekCommand_NilMessageAfterFirst(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {

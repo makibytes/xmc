@@ -45,7 +45,7 @@ func adminRequest(args ConnArguments, method, endpoint string) error {
 	if err != nil {
 		return fmt.Errorf("admin API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(resp.Body)
@@ -68,7 +68,7 @@ func adminPutJSON(args ConnArguments, endpoint string, body []byte) error {
 	if err != nil {
 		return fmt.Errorf("admin API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusConflict {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -115,7 +115,7 @@ func ListTopics(connArgs ConnArguments, adminPort int, tenant, namespace string,
 	if err != nil {
 		return nil, fmt.Errorf("querying Pulsar admin API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

@@ -1,7 +1,9 @@
 //go:build artemis
 
+// Package artemis implements the Apache Artemis (AMQP 1.0) broker backend.
 package artemis
 
+// SendArguments holds the parameters for sending a message to Artemis.
 type SendArguments struct {
 	Address       string
 	ContentType   string
@@ -16,6 +18,7 @@ type SendArguments struct {
 	TTL           int64 // Time-to-live in milliseconds
 }
 
+// ReceiveArguments holds the parameters for receiving a message from Artemis.
 type ReceiveArguments struct {
 	Acknowledge         bool
 	DurableSubscription bool

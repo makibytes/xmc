@@ -1,5 +1,6 @@
 //go:build redis
 
+// Package redis implements the Redis Streams broker backend.
 package redis
 
 import (
@@ -16,7 +17,7 @@ import (
 // so the cursor walks the whole stream non-destructively (the stateless peek
 // path always re-reads the first entry, which made "peek -n 0" repeat it
 // forever).
-func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
+func (a *QueueAdapter) Browse(_ context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
 	return &queueBrowser{client: a.client, key: opts.Queue, cursor: "-"}, nil
 }
 

@@ -1,5 +1,7 @@
+// Package rc defines the return-code string constants used across broker commands.
 package rc
 
+// Return codes returned by broker commands, mirroring the JMS-style error taxonomy.
 const (
 	Error               = "error"
 	CmdLineParsingError = "command line parsing error"

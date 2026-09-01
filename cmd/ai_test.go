@@ -259,7 +259,7 @@ func TestIsDestructive_Cannot(t *testing.T) {
 func TestCappedBuffer_UnderLimit(t *testing.T) {
 	var buf cappedBuffer
 	buf.max = 100
-	buf.Write([]byte("hello"))
+	_, _ = buf.Write([]byte("hello"))
 	if buf.String() != "hello" {
 		t.Errorf("got %q", buf.String())
 	}
@@ -268,7 +268,7 @@ func TestCappedBuffer_UnderLimit(t *testing.T) {
 func TestCappedBuffer_OverLimit(t *testing.T) {
 	var buf cappedBuffer
 	buf.max = 10
-	buf.Write([]byte("abcdefghijklmnop"))
+	_, _ = buf.Write([]byte("abcdefghijklmnop"))
 	got := buf.String()
 	if len(got) != 10 {
 		t.Errorf("len = %d, want 10", len(got))
@@ -332,9 +332,9 @@ func TestManageDestructiveCoverage(t *testing.T) {
 func TestCappedBuffer_MultipleWrites(t *testing.T) {
 	var buf cappedBuffer
 	buf.max = 8
-	buf.Write([]byte("aaaa"))
-	buf.Write([]byte("bbbb"))
-	buf.Write([]byte("cccc"))
+	_, _ = buf.Write([]byte("aaaa"))
+	_, _ = buf.Write([]byte("bbbb"))
+	_, _ = buf.Write([]byte("cccc"))
 	got := buf.String()
 	if len(got) > 8 {
 		t.Errorf("len = %d, want <= 8", len(got))

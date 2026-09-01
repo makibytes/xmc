@@ -212,11 +212,11 @@ func (s *shellSession) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.queueAdapter != nil {
-		s.queueAdapter.Close()
+		_ = s.queueAdapter.Close()
 		s.queueAdapter = nil
 	}
 	if s.topicAdapter != nil {
-		s.topicAdapter.Close()
+		_ = s.topicAdapter.Close()
 		s.topicAdapter = nil
 	}
 }
@@ -265,7 +265,7 @@ func (s *shellSession) runOnePipeline(ctx context.Context, line string, rootCmd 
 
 	// Multi-block pipeline: wire up os.Pipe between blocks.
 	g, ctx := errgroup.WithContext(ctx)
-	var prevReader io.Reader = in
+	var prevReader = in
 
 	for i, block := range blocks {
 		isLast := i == len(blocks)-1
@@ -296,7 +296,7 @@ func (s *shellSession) runOnePipeline(ctx context.Context, line string, rootCmd 
 			currentWriter := nextWriter
 
 			g.Go(func() error {
-				defer currentWriter.Close()
+				defer currentWriter.Close() //nolint:errcheck
 				return s.executeBlock(ctx, currentBlock, currentReader, currentWriter, errw, rootCmd,
 					false,
 					currentBlock.isVerb && nextIsVerb)

@@ -12,6 +12,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// TopicAdapter implements backends.TopicBackend for Google Cloud Pub/Sub.
 type TopicAdapter struct {
 	client        *pubsub.Client
 	cache         ensureCache
@@ -19,6 +20,7 @@ type TopicAdapter struct {
 	ephemeralName string // per-adapter name for group-less subscriptions
 }
 
+// NewTopicAdapter creates a TopicAdapter using the given connection arguments.
 func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	client, err := Connect(context.Background(), args)
 	if err != nil {
@@ -30,6 +32,7 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	}, nil
 }
 
+// Publish publishes a message to a topic.
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
 	topic, err := a.cache.topic(ctx, a.client, opts.Topic)
 	if err != nil {
@@ -48,6 +51,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	return err
 }
 
+// Subscribe subscribes and receives a message from a topic.
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	topic, err := a.cache.topic(ctx, a.client, opts.Topic)
 	if err != nil {
@@ -117,6 +121,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	return nil, backends.ErrNoMessageAvailable
 }
 
+// Close closes the connection to the broker.
 func (a *TopicAdapter) Close() error {
 	if a.client != nil {
 		ctx := context.Background()

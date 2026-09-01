@@ -1,5 +1,6 @@
 //go:build pulsar
 
+// Package pulsar implements the Apache Pulsar broker backend.
 package pulsar
 
 import (

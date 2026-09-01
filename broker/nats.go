@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the NATS root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs natspkg.ConnArguments
 	var retention string

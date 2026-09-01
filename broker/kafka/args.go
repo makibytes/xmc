@@ -1,5 +1,6 @@
 //go:build kafka
 
+// Package kafka implements the Apache Kafka broker backend.
 package kafka
 
 // OffsetUnset marks "no --offset given" in ReceiveArguments.Offset. It must be
@@ -7,6 +8,7 @@ package kafka
 // which are valid values for --offset earliest / --offset latest.
 const OffsetUnset int64 = -3
 
+// ReceiveArguments holds the parameters for receiving a message from Kafka.
 type ReceiveArguments struct {
 	Topic     string
 	Timeout   float32

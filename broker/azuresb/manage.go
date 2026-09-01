@@ -51,6 +51,7 @@ func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, err
 	return nodes, nil
 }
 
+// ListQueues returns the Azure Service Bus queues visible to the caller.
 func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 	adm, err := AdminClient(args)
 	if err != nil {
@@ -81,6 +82,7 @@ func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 	return queues, nil
 }
 
+// ListTopics returns the Azure Service Bus topics visible to the caller.
 func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
 	adm, err := AdminClient(args)
 	if err != nil {
@@ -104,6 +106,7 @@ func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
 	return topics, nil
 }
 
+// GetQueueStats returns message and consumer counts for an Azure Service Bus queue.
 func GetQueueStats(args ConnArguments, queue string) (*backends.QueueStats, error) {
 	adm, err := AdminClient(args)
 	if err != nil {
@@ -120,10 +123,11 @@ func GetQueueStats(args ConnArguments, queue string) (*backends.QueueStats, erro
 		Name:          queue,
 		MessageCount:  int64(props.ActiveMessageCount),
 		ConsumerCount: 0,
-		EnqueueCount:  int64(props.TotalMessageCount),
+		EnqueueCount:  props.TotalMessageCount,
 	}, nil
 }
 
+// PurgeQueue removes all messages from an Azure Service Bus queue by draining it.
 func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 	client, err := Connect(args)
 	if err != nil {

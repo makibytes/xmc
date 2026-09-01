@@ -1,3 +1,4 @@
+// Package cmd implements the shared CLI skeleton, commands, shell, and AI TUI used by every broker binary.
 package cmd
 
 import (

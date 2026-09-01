@@ -103,9 +103,9 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 			// The message was already consumed from the source; surface it so
 			// the operator can recover the one in-flight message.
 			fmt.Fprintf(os.Stderr, "send to %s failed after %d moved; undelivered message follows on stdout:\n", destination, moved)
-			fmt.Fprint(os.Stdout, string(message.Data))
+			_, _ = fmt.Fprint(os.Stdout, string(message.Data))
 			if log.IsStdout {
-				fmt.Fprintln(os.Stdout)
+				_, _ = fmt.Fprintln(os.Stdout)
 			}
 			return fmt.Errorf("send to %s failed: %w", destination, sendErr)
 		}

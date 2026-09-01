@@ -7,8 +7,8 @@ import (
 	"syscall"
 )
 
-// initialized here
-var IsStdout bool = true
+// IsStdout reports whether stdout is a terminal (not redirected to a file or pipe).
+var IsStdout = true
 
 func init() {
 	if isStdoutRedirected() {

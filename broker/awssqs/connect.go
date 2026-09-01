@@ -1,5 +1,6 @@
 //go:build aws
 
+// Package awssqs implements the AWS SQS (queues) and SNS (topics) broker backend.
 package awssqs
 
 import (
@@ -14,12 +15,14 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 )
 
+// ConnArguments holds the connection parameters for AWS SQS/SNS.
 type ConnArguments struct {
 	Region   string
 	Endpoint string
 	Profile  string
 }
 
+// Connect creates the AWS SQS and SNS clients.
 func Connect(ctx context.Context, args ConnArguments) (*sqs.Client, *sns.Client, error) {
 	var opts []func(*config.LoadOptions) error
 
@@ -35,8 +38,8 @@ func Connect(ctx context.Context, args ConnArguments) (*sqs.Client, *sns.Client,
 		return nil, nil, fmt.Errorf("loading AWS config: %w", err)
 	}
 
-	sqsOpts := func(o *sqs.Options) {}
-	snsOpts := func(o *sns.Options) {}
+	sqsOpts := func(_ *sqs.Options) {}
+	snsOpts := func(_ *sns.Options) {}
 	if args.Endpoint != "" {
 		sqsOpts = func(o *sqs.Options) { o.BaseEndpoint = &args.Endpoint }
 		snsOpts = func(o *sns.Options) { o.BaseEndpoint = &args.Endpoint }

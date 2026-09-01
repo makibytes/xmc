@@ -225,8 +225,8 @@ func TestSendCommand_StdinData(t *testing.T) {
 	os.Stdin = r
 	defer func() { os.Stdin = oldStdin }()
 
-	w.WriteString("stdin message")
-	w.Close()
+	_, _ = w.WriteString("stdin message")
+	_ = w.Close()
 
 	err := cmd.Execute()
 	if err != nil {
@@ -247,8 +247,8 @@ func TestSendCommand_LinesMode(t *testing.T) {
 	os.Stdin = r
 	defer func() { os.Stdin = oldStdin }()
 
-	w.WriteString("line one\nline two\nline three\n")
-	w.Close()
+	_, _ = w.WriteString("line one\nline two\nline three\n")
+	_ = w.Close()
 
 	err := cmd.Execute()
 	if err != nil {
@@ -272,8 +272,8 @@ func TestSendCommand_LinesModeWithError(t *testing.T) {
 	os.Stdin = r
 	defer func() { os.Stdin = oldStdin }()
 
-	w.WriteString("line one\n")
-	w.Close()
+	_, _ = w.WriteString("line one\n")
+	_ = w.Close()
 
 	err := cmd.Execute()
 	if err == nil {
@@ -363,8 +363,8 @@ func TestSendExchangeRouting_NoArgsStdin(t *testing.T) {
 	os.Stdin = r
 	defer func() { os.Stdin = oldStdin }()
 
-	w.WriteString("stdin msg")
-	w.Close()
+	_, _ = w.WriteString("stdin msg")
+	_ = w.Close()
 
 	err := cmd.Execute()
 	if err != nil {

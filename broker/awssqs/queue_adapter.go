@@ -13,11 +13,13 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// QueueAdapter implements backends.QueueBackend for AWS SQS.
 type QueueAdapter struct {
 	sqsc *sqs.Client
 	urls map[string]string
 }
 
+// NewQueueAdapter creates a QueueAdapter using the given connection arguments.
 func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 	sqsc, _, err := Connect(context.Background(), args)
 	if err != nil {
@@ -29,6 +31,7 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 	}, nil
 }
 
+// Send sends a message to a queue.
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	// --fifo flag: ensure the queue name carries the required .fifo suffix.
 	if opts.Extra["fifo"] == "true" && !strings.HasSuffix(opts.Queue, ".fifo") {
@@ -70,6 +73,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	return err
 }
 
+// Receive receives a message from a queue.
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	url, err := a.getQueueURL(ctx, opts.Queue)
 	if err != nil {
@@ -88,6 +92,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	return pollSQS(ctx, a.sqsc, url, timeout, opts.Acknowledge, "queue "+opts.Queue, visTimeout)
 }
 
+// Close closes the connection to the broker.
 func (a *QueueAdapter) Close() error {
 	if a.sqsc != nil {
 		if hc, ok := a.sqsc.Options().HTTPClient.(*http.Client); ok && hc != nil {

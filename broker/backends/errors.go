@@ -2,6 +2,7 @@ package backends
 
 import "errors"
 
+// ErrNoMessageAvailable is returned by a non-blocking receive/browse when there is no message to return.
 var ErrNoMessageAvailable = errors.New("no message available")
 
 // ErrBrowseUnsupported is returned by BrowseBackend.Browse when the backend

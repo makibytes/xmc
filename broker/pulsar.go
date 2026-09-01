@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the Apache Pulsar root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs pulsarpkg.ConnArguments
 	var adminPort int

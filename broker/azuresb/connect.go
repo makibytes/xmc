@@ -12,11 +12,13 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
 )
 
+// ConnArguments holds the connection parameters for Azure Service Bus.
 type ConnArguments struct {
 	ConnectionString string
 	Namespace        string
 }
 
+// Connect creates the Azure Service Bus client.
 func Connect(args ConnArguments) (*azservicebus.Client, error) {
 	if args.ConnectionString != "" {
 		client, err := azservicebus.NewClientFromConnectionString(args.ConnectionString, nil)
@@ -39,6 +41,7 @@ func Connect(args ConnArguments) (*azservicebus.Client, error) {
 	return nil, fmt.Errorf("set --connection-string or --namespace")
 }
 
+// AdminClient creates the Azure Service Bus administration client.
 func AdminClient(args ConnArguments) (*admin.Client, error) {
 	if args.ConnectionString != "" {
 		adm, err := admin.NewClientFromConnectionString(args.ConnectionString, nil)

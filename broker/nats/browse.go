@@ -1,5 +1,6 @@
 //go:build nats
 
+// Package nats implements the NATS/JetStream broker backend.
 package nats
 
 import (
@@ -17,7 +18,7 @@ import (
 // stream's current sequence range with GetMsg — a true non-destructive cursor
 // (unlike Receive with Acknowledge=false, which NAKs for redelivery and keeps
 // yielding the same head message).
-func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
+func (a *QueueAdapter) Browse(_ context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
 	sn := streamName(opts.Queue)
 	if opts.Extra != nil && opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]

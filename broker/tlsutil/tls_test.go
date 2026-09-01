@@ -51,9 +51,9 @@ func TestBuildTLSConfig_InvalidCACertContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.WriteString("not valid PEM content")
-	tmpFile.Close()
+	defer os.Remove(tmpFile.Name()) //nolint:errcheck
+	_, _ = tmpFile.WriteString("not valid PEM content")
+	_ = tmpFile.Close()
 
 	cfg := TLSConfig{CACert: tmpFile.Name()}
 	_, err = BuildTLSConfig(cfg)
@@ -84,9 +84,9 @@ func TestBuildTLSConfig_WithValidCACert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tmpFile.Name())
-	pem.Encode(tmpFile, &pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-	tmpFile.Close()
+	defer os.Remove(tmpFile.Name()) //nolint:errcheck
+	_ = pem.Encode(tmpFile, &pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	_ = tmpFile.Close()
 
 	cfg := TLSConfig{CACert: tmpFile.Name()}
 	tlsConfig, err := BuildTLSConfig(cfg)
@@ -103,17 +103,17 @@ func TestBuildTLSConfig_InvalidClientCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(certFile.Name())
-	certFile.WriteString("invalid cert data")
-	certFile.Close()
+	defer os.Remove(certFile.Name()) //nolint:errcheck
+	_, _ = certFile.WriteString("invalid cert data")
+	_ = certFile.Close()
 
 	keyFile, err := os.CreateTemp("", "test-key-*.pem")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(keyFile.Name())
-	keyFile.WriteString("invalid key data")
-	keyFile.Close()
+	defer os.Remove(keyFile.Name()) //nolint:errcheck
+	_, _ = keyFile.WriteString("invalid key data")
+	_ = keyFile.Close()
 
 	cfg := TLSConfig{ClientCert: certFile.Name(), ClientKey: keyFile.Name()}
 	_, err = BuildTLSConfig(cfg)
@@ -142,9 +142,9 @@ func TestBuildTLSConfig_WithValidClientCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(certFile.Name())
-	pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	certFile.Close()
+	defer os.Remove(certFile.Name()) //nolint:errcheck
+	_ = pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	_ = certFile.Close()
 
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
@@ -154,9 +154,9 @@ func TestBuildTLSConfig_WithValidClientCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(keyFile.Name())
-	pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	keyFile.Close()
+	defer os.Remove(keyFile.Name()) //nolint:errcheck
+	_ = pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	_ = keyFile.Close()
 
 	cfg := TLSConfig{ClientCert: certFile.Name(), ClientKey: keyFile.Name()}
 	tlsConfig, err := BuildTLSConfig(cfg)

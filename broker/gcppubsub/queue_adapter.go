@@ -12,11 +12,13 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// QueueAdapter implements backends.QueueBackend for Google Cloud Pub/Sub.
 type QueueAdapter struct {
 	client *pubsub.Client
 	cache  ensureCache
 }
 
+// NewQueueAdapter creates a QueueAdapter using the given connection arguments.
 func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 	client, err := Connect(context.Background(), args)
 	if err != nil {
@@ -25,6 +27,7 @@ func NewQueueAdapter(args ConnArguments) (*QueueAdapter, error) {
 	return &QueueAdapter{client: client}, nil
 }
 
+// Send sends a message to a queue.
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	topic, err := a.cache.topic(ctx, a.client, opts.Queue)
 	if err != nil {
@@ -48,6 +51,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	return err
 }
 
+// Receive receives a message from a queue.
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	subName := fmt.Sprintf("xmc-queue-%s", opts.Queue)
 	if opts.Extra != nil && opts.Extra["subscription"] != "" {
@@ -101,6 +105,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	return nil, backends.ErrNoMessageAvailable
 }
 
+// Close closes the connection to the broker.
 func (a *QueueAdapter) Close() error {
 	if a.client != nil {
 		return a.client.Close()

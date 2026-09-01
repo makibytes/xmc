@@ -210,7 +210,7 @@ func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Durati
 		stop := startStatsReporter(st, time.Second, metaW)
 		defer func() {
 			stop()
-			fmt.Fprintln(metaW, st.summary())
+			_, _ = fmt.Fprintln(metaW, st.summary())
 		}()
 	}
 
@@ -259,7 +259,7 @@ func displayMessage(dataOut, metaOut io.Writer, message *backends.Message, verbo
 
 	_, _ = dataOut.Write(message.Data)
 	if shouldAddNewline(dataOut) {
-		fmt.Fprintln(dataOut)
+		_, _ = fmt.Fprintln(dataOut)
 	}
 
 	return nil

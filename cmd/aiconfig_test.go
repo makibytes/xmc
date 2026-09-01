@@ -132,7 +132,7 @@ func TestResolveProvider_DefaultModels(t *testing.T) {
 
 func TestResolveProvider_NoKey(t *testing.T) {
 	cfg := &xmcConfig{}
-	getenv := func(k string) string { return "" }
+	getenv := func(_ string) string { return "" }
 
 	_, err := resolveProvider(cfg, getenv)
 	if err == nil {
@@ -190,7 +190,7 @@ func TestResolveProvider_OpenCodeZenKey(t *testing.T) {
 
 func TestResolveProvider_UnknownProvider(t *testing.T) {
 	cfg := &xmcConfig{AI: aiConfig{Provider: "bogus"}}
-	getenv := func(k string) string { return "some-key" }
+	getenv := func(_ string) string { return "some-key" }
 
 	_, err := resolveProvider(cfg, getenv)
 	if err == nil {

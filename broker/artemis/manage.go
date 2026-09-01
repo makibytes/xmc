@@ -507,7 +507,7 @@ func checkJolokiaError(body []byte) error {
 		return nil // can't parse — assume success (status was 200)
 	}
 	if result.Status != 200 {
-		return fmt.Errorf("Jolokia error: %s", result.Error)
+		return fmt.Errorf("jolokia error: %s", result.Error)
 	}
 	return nil
 }

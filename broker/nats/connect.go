@@ -12,6 +12,7 @@ import (
 	natsclient "github.com/nats-io/nats.go"
 )
 
+// ConnArguments holds the connection parameters for NATS.
 type ConnArguments = backends.CommonConnArgs
 
 // Connect creates and returns a NATS connection with automatic reconnect

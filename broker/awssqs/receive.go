@@ -80,11 +80,11 @@ func pollSQS(ctx context.Context, sqsc *sqs.Client, queueURL string, timeout tim
 			}
 		} else if !acknowledge && msg.ReceiptHandle != nil {
 			// Make the message immediately visible again for other consumers.
-			sqsc.ChangeMessageVisibility(ctx, &sqs.ChangeMessageVisibilityInput{
+			_, _ = sqsc.ChangeMessageVisibility(ctx, &sqs.ChangeMessageVisibilityInput{
 				QueueUrl:          &queueURL,
 				ReceiptHandle:     msg.ReceiptHandle,
 				VisibilityTimeout: 0,
-			}) //nolint:errcheck
+			})
 		}
 
 		return sqsToBackendMessage(msg), nil

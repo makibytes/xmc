@@ -74,7 +74,7 @@ func TestReceiveCommand_FormatOutput(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -82,7 +82,7 @@ func TestReceiveCommand_FormatOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	if buf.String() != "m-9|v|payload" {
 		t.Errorf("output = %q, want %q", buf.String(), "m-9|v|payload")
 	}
@@ -99,7 +99,7 @@ func TestReceiveCommand_FormatOverridesJSON(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -107,7 +107,7 @@ func TestReceiveCommand_FormatOverridesJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	// Format wins: output is the raw payload, not JSON.
 	if buf.String() != "data" {
 		t.Errorf("output = %q, want %q (format should override --json)", buf.String(), "data")

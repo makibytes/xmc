@@ -75,7 +75,7 @@ func getDuration(cmd *cobra.Command, name string) time.Duration {
 // spellings refer to the same flag (e.g. --contenttype and --content-type, or
 // the deprecated --queue-name and --queue on read commands). Registering it
 // keeps existing scripts working while the canonical names are shown in help.
-func aliasNormalize(f *pflag.FlagSet, name string) pflag.NormalizedName {
+func aliasNormalize(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 	switch name {
 	case "contenttype":
 		name = "content-type"

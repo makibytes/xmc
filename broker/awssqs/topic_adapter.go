@@ -14,6 +14,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// TopicAdapter implements backends.TopicBackend for AWS SQS.
 type TopicAdapter struct {
 	sqsc            *sqs.Client
 	snsc            *sns.Client
@@ -22,6 +23,7 @@ type TopicAdapter struct {
 	subscriptions   []string
 }
 
+// NewTopicAdapter creates a TopicAdapter using the given connection arguments.
 func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	sqsc, snsc, err := Connect(context.Background(), args)
 	if err != nil {
@@ -30,6 +32,7 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	return &TopicAdapter{sqsc: sqsc, snsc: snsc, subQueues: make(map[string]string)}, nil
 }
 
+// Publish publishes a message to a topic.
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
 	topicARN, err := ensureTopic(ctx, a.snsc, opts.Topic)
 	if err != nil {
@@ -60,6 +63,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	return err
 }
 
+// Subscribe subscribes and receives a message from a topic.
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	queueURL, err := a.ensureSubscriberQueue(ctx, opts)
 	if err != nil {
@@ -133,19 +137,20 @@ func (a *TopicAdapter) ensureSubscriberQueue(ctx context.Context, opts backends.
 	return queueURL, nil
 }
 
+// Close closes the connection to the broker.
 func (a *TopicAdapter) Close() error {
 	ctx := context.Background()
 
 	for _, subARN := range a.subscriptions {
-		a.snsc.Unsubscribe(ctx, &sns.UnsubscribeInput{
+		_, _ = a.snsc.Unsubscribe(ctx, &sns.UnsubscribeInput{
 			SubscriptionArn: &subARN,
-		}) //nolint:errcheck
+		})
 	}
 
 	for _, queueURL := range a.ephemeralQueues {
-		a.sqsc.DeleteQueue(ctx, &sqs.DeleteQueueInput{
+		_, _ = a.sqsc.DeleteQueue(ctx, &sqs.DeleteQueueInput{
 			QueueUrl: &queueURL,
-		}) //nolint:errcheck
+		})
 	}
 
 	return nil

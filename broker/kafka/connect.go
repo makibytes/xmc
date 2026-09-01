@@ -17,6 +17,7 @@ import (
 	"github.com/segmentio/kafka-go/sasl/plain"
 )
 
+// ConnArguments holds the connection parameters for Kafka.
 type ConnArguments = backends.CommonConnArgs
 
 // parseKafkaURL parses the server URL and returns brokers and TLS config
@@ -96,7 +97,7 @@ func hintAdvertisedListeners(err error, brokers []string) error {
 	return fmt.Errorf("%w\n\nhint: the broker advertised host %q is not reachable from "+
 		"this client. Kafka clients connect to the broker's advertised.listeners, not the "+
 		"-s bootstrap URL. Fix the broker's advertised.listeners "+
-		"(e.g. KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092).", err, host)
+		"(e.g. KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092)", err, host)
 }
 
 // hostOnly strips a trailing ":port" from a bootstrap broker address, if present.

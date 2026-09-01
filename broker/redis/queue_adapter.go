@@ -14,11 +14,13 @@ import (
 
 const xmcQueueGroup = "xmc-queue"
 
+// QueueAdapter implements backends.QueueBackend for Redis.
 type QueueAdapter struct {
 	client  *redis.Client
 	ensured map[string]struct{}
 }
 
+// NewQueueAdapter creates a QueueAdapter using the given connection arguments.
 func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
@@ -30,6 +32,7 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	}, nil
 }
 
+// Send sends a message to a queue.
 func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
 	if err := a.ensureGroup(ctx, opts.Queue); err != nil {
 		return err
@@ -44,6 +47,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 	}).Err()
 }
 
+// Receive receives a message from a queue.
 func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	if !opts.Acknowledge {
 		return a.peek(ctx, opts.Queue, opts)
@@ -114,6 +118,7 @@ func (a *QueueAdapter) peek(ctx context.Context, key string, opts backends.Recei
 	return streamToMessage(entry.ID, entry.Values), nil
 }
 
+// Close closes the connection to the broker.
 func (a *QueueAdapter) Close() error {
 	if a.client != nil {
 		return a.client.Close()

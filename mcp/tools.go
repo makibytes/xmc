@@ -89,7 +89,7 @@ func withQueue(d Deps, fn func(backends.QueueBackend) (*ToolResult, error)) (*To
 	if err != nil {
 		return nil, fmt.Errorf("could not connect to broker %s: %v", d.Target, err)
 	}
-	defer q.Close()
+	defer q.Close() //nolint:errcheck
 	return fn(q)
 }
 
@@ -332,7 +332,7 @@ func readMessages(ctx context.Context, d Deps, a readArgs, acknowledge bool) (*T
 			if err != nil {
 				return nil, fmt.Errorf("browse failed: %v", err)
 			}
-			defer browser.Close()
+			defer browser.Close() //nolint:errcheck
 			next = browser.Next
 		}
 
@@ -411,7 +411,7 @@ func withTopic(d Deps, fn func(backends.TopicBackend) (*ToolResult, error)) (*To
 	if err != nil {
 		return nil, fmt.Errorf("could not connect to broker %s: %v", d.Target, err)
 	}
-	defer t.Close()
+	defer t.Close() //nolint:errcheck
 	return fn(t)
 }
 
@@ -581,7 +581,7 @@ func registerPing(s *Server, d Deps) {
 			"readOnlyHint":  true,
 			"openWorldHint": true,
 		},
-		Handler: func(ctx context.Context, _ json.RawMessage) (*ToolResult, error) {
+		Handler: func(_ context.Context, _ json.RawMessage) (*ToolResult, error) {
 			// Probe via whichever adapter the broker has (topic-only brokers
 			// like Kafka have no queue factory).
 			connect := func() (interface{ Close() error }, error) {

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the Google Cloud Pub/Sub root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs gcppkg.ConnArguments
 

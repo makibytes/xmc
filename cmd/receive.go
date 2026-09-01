@@ -89,7 +89,7 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 		if err != nil {
 			return err
 		}
-		defer browser.Close()
+		defer browser.Close() //nolint:errcheck
 		return runConsume(browser.Next, cfg, v.streaming.Duration, v.streaming.Stats, parentCtx)
 	}
 

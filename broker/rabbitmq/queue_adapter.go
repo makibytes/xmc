@@ -92,7 +92,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 // fetch up to 10 000 messages non-destructively, then returns an in-memory
 // cursor over them. Falls back to backends.ErrBrowseUnsupported if the
 // Management API is unavailable or fails (e.g. management plugin not loaded).
-func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
+func (a *QueueAdapter) Browse(_ context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
 	if opts.Selector != "" {
 		// The Management API's get endpoint cannot filter by selector; fall
 		// back to the plain receive loop, which applies the selector filter.
@@ -115,7 +115,7 @@ func (a *QueueAdapter) Close() error {
 	_ = a.sendCache.Close()
 	_ = a.recvCache.Close()
 	if a.session != nil {
-		a.session.Close(context.Background())
+		_ = a.session.Close(context.Background())
 	}
 	if a.connection != nil {
 		return a.connection.Close()

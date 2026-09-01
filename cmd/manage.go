@@ -115,7 +115,7 @@ type ObjectType struct {
 //	"Streams" → CreateQueue / DeleteQueue (NATS)
 //	"Consumer Groups" → nil / DeleteConsumerGroup (Kafka; groups are created
 //	  implicitly by the first consumer to join, so there is no create action)
-func (s *ManageSpec) SidebarActions(label string) (create, delete *ManageAction) {
+func (s *ManageSpec) SidebarActions(label string) (create, del *ManageAction) {
 	switch label {
 	case "Queues":
 		return s.CreateQueue, s.DeleteQueue
@@ -198,7 +198,7 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 		mgmtCmd.AddCommand(&cobra.Command{
 			Use:   "list",
 			Short: "List broker objects",
-			RunE: func(c *cobra.Command, args []string) error {
+			RunE: func(c *cobra.Command, _ []string) error {
 				w := c.OutOrStdout()
 				for _, ot := range spec.Objects {
 					nodes, err := ot.List()
@@ -213,9 +213,9 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 						metricStr := formatMetrics(n.Metrics)
 						detail := strings.TrimSpace(n.Kind + " " + metricStr)
 						if detail != "" {
-							fmt.Fprintf(w, "%s%-40s  %s\n", prefix, n.Name, detail)
+							_, _ = fmt.Fprintf(w, "%s%-40s  %s\n", prefix, n.Name, detail)
 						} else {
-							fmt.Fprintf(w, "%s%s\n", prefix, n.Name)
+							_, _ = fmt.Fprintf(w, "%s%s\n", prefix, n.Name)
 						}
 						for _, child := range n.Children {
 							childMetrics := formatMetrics(child.Metrics)
@@ -224,9 +224,9 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 								kind += " "
 							}
 							if childMetrics != "" {
-								fmt.Fprintf(w, "%s  └ %s%s  %s\n", prefix, kind, child.Name, childMetrics)
+								_, _ = fmt.Fprintf(w, "%s  └ %s%s  %s\n", prefix, kind, child.Name, childMetrics)
 							} else {
-								fmt.Fprintf(w, "%s  └ %s%s\n", prefix, kind, child.Name)
+								_, _ = fmt.Fprintf(w, "%s  └ %s%s\n", prefix, kind, child.Name)
 							}
 						}
 					}
@@ -248,9 +248,9 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 					return err
 				}
 				if count > 0 {
-					fmt.Fprintf(w, "Purged %d messages from %s\n", count, args[0])
+					_, _ = fmt.Fprintf(w, "Purged %d messages from %s\n", count, args[0])
 				} else {
-					fmt.Fprintf(w, "Purged queue %s\n", args[0])
+					_, _ = fmt.Fprintf(w, "Purged queue %s\n", args[0])
 				}
 				return nil
 			},
@@ -293,14 +293,14 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(w, "Queue:     %s\n", stats.Name)
-				fmt.Fprintf(w, "Messages:  %d\n", stats.MessageCount)
-				fmt.Fprintf(w, "Consumers: %d\n", stats.ConsumerCount)
+				_, _ = fmt.Fprintf(w, "Queue:     %s\n", stats.Name)
+				_, _ = fmt.Fprintf(w, "Messages:  %d\n", stats.MessageCount)
+				_, _ = fmt.Fprintf(w, "Consumers: %d\n", stats.ConsumerCount)
 				if stats.EnqueueCount > 0 {
-					fmt.Fprintf(w, "Enqueued:  %d\n", stats.EnqueueCount)
+					_, _ = fmt.Fprintf(w, "Enqueued:  %d\n", stats.EnqueueCount)
 				}
 				if stats.DequeueCount > 0 {
-					fmt.Fprintf(w, "Dequeued:  %d\n", stats.DequeueCount)
+					_, _ = fmt.Fprintf(w, "Dequeued:  %d\n", stats.DequeueCount)
 				}
 				return nil
 			},
@@ -340,7 +340,7 @@ func addManageAction(parent *cobra.Command, use, short, argName, successFmt stri
 			if err := action.Run(args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), successFmt, args[0])
+			_, _ = fmt.Fprintf(c.OutOrStdout(), successFmt, args[0])
 			return nil
 		},
 	}
@@ -367,7 +367,7 @@ func addBindAction(parent *cobra.Command, use, shortFmt, successFmt string, acti
 			if err := action.Run(args[0], args[1]); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), successFmt, args[0], args[1])
+			_, _ = fmt.Fprintf(c.OutOrStdout(), successFmt, args[0], args[1])
 			return nil
 		},
 	}

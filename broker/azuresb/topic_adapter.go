@@ -16,6 +16,7 @@ type ephemeralSub struct {
 	sub   string
 }
 
+// TopicAdapter implements backends.TopicBackend for Azure Service Bus.
 type TopicAdapter struct {
 	senderCache
 	adm           *admin.Client
@@ -51,6 +52,7 @@ func (a *TopicAdapter) ensureTopicAndSubCached(ctx context.Context, topic, sub s
 	return nil
 }
 
+// NewTopicAdapter creates a TopicAdapter using the given connection arguments.
 func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	client, err := Connect(args)
 	if err != nil {
@@ -69,6 +71,7 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	}, nil
 }
 
+// Publish publishes a message to a topic.
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
 	if err := a.ensureTopicCached(ctx, opts.Topic); err != nil {
 		return err
@@ -85,6 +88,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 	return sender.SendMessage(ctx, msg, nil)
 }
 
+// Subscribe subscribes and receives a message from a topic.
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	var subName string
 	var ephemeral bool
@@ -110,7 +114,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		a.ephemeralSubs = append(a.ephemeralSubs, ephemeralSub{topic: opts.Topic, sub: subName})
 	}
 
-	recv, err := a.senderCache.client.NewReceiverForSubscription(opts.Topic, subName, nil)
+	recv, err := a.client.NewReceiverForSubscription(opts.Topic, subName, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating subscription receiver %s/%s: %w", opts.Topic, subName, err)
 	}
@@ -154,6 +158,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	return sbToBackendMessage(msgs[0]), nil
 }
 
+// Close closes the connection to the broker.
 func (a *TopicAdapter) Close() error {
 	ctx := context.Background()
 
@@ -162,5 +167,5 @@ func (a *TopicAdapter) Close() error {
 	}
 
 	a.closeSenders(ctx)
-	return a.senderCache.client.Close(ctx)
+	return a.client.Close(ctx)
 }

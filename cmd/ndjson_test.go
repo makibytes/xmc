@@ -298,7 +298,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 	os.Stdout = w
 	fn()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
@@ -320,7 +320,7 @@ func withStdin(t *testing.T, input string, fn func()) {
 	if _, err := io.WriteString(w, input); err != nil {
 		t.Fatalf("write stdin: %v", err)
 	}
-	w.Close()
+	_ = w.Close()
 	fn()
 	os.Stdin = old
 }

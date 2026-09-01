@@ -66,7 +66,7 @@ func mgmtRequest(method, url string, body []byte, user, password string, okStatu
 	if err != nil {
 		return nil, fmt.Errorf("management API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

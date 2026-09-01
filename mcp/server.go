@@ -263,7 +263,7 @@ func (s *Server) encodeError(id json.RawMessage, code int, msg string) []byte {
 func (s *Server) ServeStdio(ctx context.Context) error {
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024)
 	writer := bufio.NewWriter(os.Stdout)
-	defer writer.Flush()
+	defer writer.Flush() //nolint:errcheck
 
 	lines := make(chan []byte)
 	scanErr := make(chan error, 1)
@@ -297,8 +297,8 @@ func (s *Server) ServeStdio(ctx context.Context) error {
 			if notification || resp == nil {
 				continue
 			}
-			writer.Write(resp)
-			writer.WriteByte('\n')
+			_, _ = writer.Write(resp)
+			_ = writer.WriteByte('\n')
 			if err := writer.Flush(); err != nil {
 				return err
 			}
@@ -333,7 +333,7 @@ func (s *Server) Handler(path string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, "ok")
+		_, _ = io.WriteString(w, "ok")
 	})
 	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -361,7 +361,7 @@ func (s *Server) serveHTTPMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(resp)
+	_, _ = w.Write(resp)
 }
 
 // ServeHTTP starts an HTTP server on addr serving the MCP endpoint at path and

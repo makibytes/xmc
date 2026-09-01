@@ -89,14 +89,14 @@ func doWithRetry(ctx context.Context, buildReq func() (*http.Request, error)) (*
 		}
 		if shouldRetry(resp.StatusCode, nil) {
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
 			lastResp = nil
 			return lastErr
 		}
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return backoff.Permanent(fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200)))
 		}
 		lastResp = resp
@@ -203,7 +203,7 @@ func fetchModelIDs(req *http.Request, extract func(io.Reader) ([]string, error))
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("models API %d: %s", resp.StatusCode, truncate(string(b), 200))
@@ -350,7 +350,7 @@ func (c *anthropicClient) Complete(ctx context.Context, system string, messages 
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("anthropic API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if onToken != nil {
 		return c.parseStream(resp.Body, onToken)
@@ -413,7 +413,7 @@ func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string
 					} `json:"usage"`
 				} `json:"message"`
 			}
-			json.Unmarshal([]byte(data), &e)
+			_ = json.Unmarshal([]byte(data), &e)
 			usage.InputTokens = e.Message.Usage.InputTokens
 
 		case "content_block_delta":
@@ -422,7 +422,7 @@ func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string
 					Text string `json:"text"`
 				} `json:"delta"`
 			}
-			json.Unmarshal([]byte(data), &e)
+			_ = json.Unmarshal([]byte(data), &e)
 			if e.Delta.Text != "" {
 				text.WriteString(e.Delta.Text)
 				onToken(e.Delta.Text)
@@ -437,7 +437,7 @@ func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string
 					OutputTokens int `json:"output_tokens"`
 				} `json:"usage"`
 			}
-			json.Unmarshal([]byte(data), &e)
+			_ = json.Unmarshal([]byte(data), &e)
 			usage.OutputTokens = e.Usage.OutputTokens
 			if e.Delta.StopReason != "" {
 				stopReason = e.Delta.StopReason
@@ -450,7 +450,7 @@ func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string
 					Message string `json:"message"`
 				} `json:"error"`
 			}
-			json.Unmarshal([]byte(data), &e)
+			_ = json.Unmarshal([]byte(data), &e)
 			return fmt.Errorf("anthropic stream error: %s: %s", e.Error.Type, e.Error.Message)
 		}
 		return nil
@@ -602,7 +602,7 @@ func (c *openaiClient) Complete(ctx context.Context, system string, messages []a
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("openai-compatible API (%s): %w", c.baseURL, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if onToken != nil {
 		return c.parseStream(resp.Body, onToken)
@@ -845,7 +845,7 @@ func (c *geminiClient) Complete(ctx context.Context, system string, messages []a
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("gemini API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if onToken != nil {
 		return c.parseStream(resp.Body, onToken)

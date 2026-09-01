@@ -1,3 +1,5 @@
+// Package amqpcommon holds the AMQP 1.0 connection, message, and link-cache
+// code shared by the Artemis and RabbitMQ backends.
 package amqpcommon
 
 import (

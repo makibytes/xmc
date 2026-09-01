@@ -1,3 +1,4 @@
+// Package ibmmq implements the IBM MQ broker backend.
 package ibmmq
 
 import (

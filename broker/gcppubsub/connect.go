@@ -1,5 +1,6 @@
 //go:build google
 
+// Package gcppubsub implements the Google Cloud Pub/Sub broker backend.
 package gcppubsub
 
 import (
@@ -12,12 +13,14 @@ import (
 	"google.golang.org/api/option"
 )
 
+// ConnArguments holds the connection parameters for Google Cloud Pub/Sub.
 type ConnArguments struct {
 	Project     string
 	Credentials string
 	Endpoint    string
 }
 
+// Connect creates the Google Cloud Pub/Sub client.
 func Connect(ctx context.Context, args ConnArguments) (*pubsub.Client, error) {
 	var opts []option.ClientOption
 
@@ -25,7 +28,7 @@ func Connect(ctx context.Context, args ConnArguments) (*pubsub.Client, error) {
 		opts = append(opts, option.WithCredentialsFile(args.Credentials))
 	}
 	if args.Endpoint != "" {
-		os.Setenv("PUBSUB_EMULATOR_HOST", args.Endpoint)
+		_ = os.Setenv("PUBSUB_EMULATOR_HOST", args.Endpoint)
 	}
 
 	client, err := pubsub.NewClient(ctx, args.Project, opts...)

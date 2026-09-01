@@ -137,7 +137,7 @@ func startStatsReporter(s *streamStats, interval time.Duration, w io.Writer) (st
 				if secs > 0 {
 					rate = float64(count-lastCount) / secs
 				}
-				fmt.Fprintf(w, "[stats] %d msgs, %.0f msg/s, %s total\n",
+				_, _ = fmt.Fprintf(w, "[stats] %d msgs, %.0f msg/s, %s total\n",
 					count, rate, humanBytes(s.bytes.Load()))
 				lastCount = count
 				lastTime = now

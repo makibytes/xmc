@@ -159,7 +159,7 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 	bw := bufio.NewWriter(stdinPipe)
 	defer func() {
 		bw.Flush() //nolint:errcheck
-		stdinPipe.Close()
+		_ = stdinPipe.Close()
 		proc.Wait() //nolint:errcheck
 	}()
 
@@ -225,7 +225,7 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 		bridged++
 		st.record(len(msg.Data))
 		if !quiet && log.IsVerbose {
-			fmt.Fprintf(errw, "bridged message %d from %s\n", bridged, source)
+			_, _ = fmt.Fprintf(errw, "bridged message %d from %s\n", bridged, source)
 		}
 	}
 

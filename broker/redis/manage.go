@@ -11,16 +11,18 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
+// ListQueues returns the Redis-backed queues visible to the caller.
 func ListQueues(connArgs ConnArguments, prefix string) ([]backends.QueueInfo, error) {
 	return listByPattern(connArgs, prefix+":queue:")
 }
 
+// ListTopics returns the Redis-backed topics visible to the caller.
 func ListTopics(connArgs ConnArguments, prefix string) ([]backends.TopicInfo, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	topicPrefix := prefix + ":topic:"
 	ctx := context.Background()
@@ -52,7 +54,7 @@ func CreateQueue(connArgs ConnArguments, prefix, queue string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	key := prefix + ":queue:" + queue
@@ -66,7 +68,7 @@ func DeleteQueue(connArgs ConnArguments, prefix, queue string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	return client.Del(ctx, prefix+":queue:"+queue).Err()
@@ -78,7 +80,7 @@ func CreateTopic(connArgs ConnArguments, prefix, topic string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	key := prefix + ":topic:" + topic
@@ -99,18 +101,19 @@ func DeleteTopic(connArgs ConnArguments, prefix, topic string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	return client.Del(ctx, prefix+":topic:"+topic).Err()
 }
 
+// PurgeQueue removes all messages from a Redis stream queue.
 func PurgeQueue(connArgs ConnArguments, prefix, queue string) (int64, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return 0, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	key := prefix + ":queue:" + queue
@@ -127,12 +130,13 @@ func PurgeQueue(connArgs ConnArguments, prefix, queue string) (int64, error) {
 	return count, nil
 }
 
+// GetQueueStats returns message and consumer counts for a Redis stream queue.
 func GetQueueStats(connArgs ConnArguments, prefix, queue string) (*backends.QueueStats, error) {
 	client, err := Connect(connArgs)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	key := prefix + ":queue:" + queue
@@ -162,7 +166,7 @@ func listByPattern(connArgs ConnArguments, prefix string) ([]backends.QueueInfo,
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	var queues []backends.QueueInfo

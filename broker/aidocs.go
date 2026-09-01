@@ -1,3 +1,5 @@
+// Package broker selects and wires up the build-tagged broker backend
+// (broker/<name>.go implements GetRootCommand for exactly one tag).
 package broker
 
 import (

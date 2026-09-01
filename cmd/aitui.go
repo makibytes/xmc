@@ -1346,7 +1346,7 @@ func (m *aiTUIModel) setViewportContent() {
 		var shimmed strings.Builder
 		globalIdx := 0 // continuous rune index across all wrapped lines
 		for li, line := range lines {
-			for _, r := range []rune(line) {
+			for _, r := range line {
 				inBand := globalIdx >= pos && globalIdx < pos+shimmerBand
 				ch := string(r)
 				if inBand {

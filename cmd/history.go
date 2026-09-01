@@ -29,7 +29,7 @@ func (h *historyStore) Load() []string {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var lines []string
 	scanner := bufio.NewScanner(f)
@@ -51,6 +51,6 @@ func (h *historyStore) Append(line string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	fmt.Fprintln(f, line)
 }

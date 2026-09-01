@@ -82,7 +82,7 @@ func TestInitializeNegotiatesClientVersion(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"serverInfo"`
 	}
-	json.Unmarshal(b, &got)
+	_ = json.Unmarshal(b, &got)
 	if got.ProtocolVersion != "2025-03-26" {
 		t.Errorf("expected echoed protocol version 2025-03-26, got %q", got.ProtocolVersion)
 	}
@@ -102,7 +102,7 @@ func TestToolsListIncludesCoreToolsWithAnnotations(t *testing.T) {
 			Annotations map[string]any `json:"annotations"`
 		} `json:"tools"`
 	}
-	json.Unmarshal(b, &got)
+	_ = json.Unmarshal(b, &got)
 
 	byName := map[string]struct {
 		schema      map[string]any
@@ -145,7 +145,7 @@ func TestSendToolRecordsMessage(t *testing.T) {
 	}
 	b, _ := json.Marshal(resp.Result)
 	var res ToolResult
-	json.Unmarshal(b, &res)
+	_ = json.Unmarshal(b, &res)
 	if res.IsError {
 		t.Fatalf("unexpected isError result: %s", res.Content[0].Text)
 	}
@@ -166,7 +166,7 @@ func TestRequestReturnsReply(t *testing.T) {
 	})
 	b, _ := json.Marshal(resp.Result)
 	var res ToolResult
-	json.Unmarshal(b, &res)
+	_ = json.Unmarshal(b, &res)
 	if res.IsError {
 		t.Fatalf("unexpected isError: %s", res.Content[0].Text)
 	}
@@ -184,7 +184,7 @@ func TestRequestTimesOutIsError(t *testing.T) {
 	})
 	b, _ := json.Marshal(resp.Result)
 	var res ToolResult
-	json.Unmarshal(b, &res)
+	_ = json.Unmarshal(b, &res)
 	if !res.IsError {
 		t.Fatal("expected isError result when no reply arrives")
 	}
@@ -231,7 +231,7 @@ func TestManagementToolsRegisteredWhenHooksProvided(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"tools"`
 	}
-	json.Unmarshal(b, &got)
+	_ = json.Unmarshal(b, &got)
 	names := map[string]bool{}
 	for _, tl := range got.Tools {
 		names[tl.Name] = true
@@ -249,7 +249,7 @@ func TestManagementToolsRegisteredWhenHooksProvided(t *testing.T) {
 	})
 	b, _ = json.Marshal(resp.Result)
 	var res ToolResult
-	json.Unmarshal(b, &res)
+	_ = json.Unmarshal(b, &res)
 	if !res.IsError {
 		t.Error("expected purge without confirm=true to be refused")
 	}
@@ -296,7 +296,7 @@ func TestPeekUsesBrowseCursor(t *testing.T) {
 	})
 	b, _ := json.Marshal(resp.Result)
 	var res ToolResult
-	json.Unmarshal(b, &res)
+	_ = json.Unmarshal(b, &res)
 	if res.IsError {
 		t.Fatalf("unexpected isError: %s", res.Content[0].Text)
 	}
@@ -329,7 +329,7 @@ func TestToolPanicBecomesIsError(t *testing.T) {
 	}
 	b, _ := json.Marshal(resp.Result)
 	var res ToolResult
-	json.Unmarshal(b, &res)
+	_ = json.Unmarshal(b, &res)
 	if !res.IsError || !strings.Contains(res.Content[0].Text, "panicked") {
 		t.Errorf("expected isError with panic message, got: %+v", res)
 	}
@@ -342,7 +342,7 @@ func TestInitializeRejectsUnknownVersion(t *testing.T) {
 	var got struct {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
-	json.Unmarshal(b, &got)
+	_ = json.Unmarshal(b, &got)
 	if got.ProtocolVersion != protocolVersion {
 		t.Errorf("unknown client version must fall back to %s, got %q", protocolVersion, got.ProtocolVersion)
 	}

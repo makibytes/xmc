@@ -20,7 +20,7 @@ func CreateStream(connArgs ConnArguments, queue string, retention string, maxMsg
 
 	name := streamName(queue)
 
-	retentionPolicy := natsclient.WorkQueuePolicy
+	var retentionPolicy natsclient.RetentionPolicy
 	switch strings.ToLower(retention) {
 	case "workqueue", "":
 		retentionPolicy = natsclient.WorkQueuePolicy

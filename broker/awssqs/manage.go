@@ -15,6 +15,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 )
 
+// ListQueues returns the SQS queues visible to the caller.
 func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 	sqsc, _, err := Connect(context.Background(), args)
 	if err != nil {
@@ -198,6 +199,7 @@ func DeleteTopic(args ConnArguments, name string) error {
 	return nil
 }
 
+// PurgeQueue removes all messages from an SQS queue.
 func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 	sqsc, _, err := Connect(context.Background(), args)
 	if err != nil {
@@ -233,6 +235,7 @@ func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 	return count, nil
 }
 
+// GetQueueStats returns message and consumer counts for an SQS queue.
 func GetQueueStats(args ConnArguments, queue string) (*backends.QueueStats, error) {
 	sqsc, _, err := Connect(context.Background(), args)
 	if err != nil {

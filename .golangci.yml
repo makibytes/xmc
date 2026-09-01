@@ -13,6 +13,15 @@ linters:
     - misspell
     - revive
     - unconvert
+  exclusions:
+    rules:
+      # cloud.google.com/go/pubsub (v1) and option.WithCredentialsFile are
+      # deprecated upstream in favor of pubsub/v2 and workload identity, but
+      # migrating is a breaking API change out of scope for a lint cleanup.
+      - path: broker/gcppubsub/
+        linters:
+          - staticcheck
+        text: "SA1019"
 
 formatters:
   enable:

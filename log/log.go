@@ -1,3 +1,4 @@
+// Package log provides Info/Error/Verbose output helpers with a verbose toggle.
 package log
 
 import (
@@ -7,6 +8,7 @@ import (
 	"sync"
 )
 
+// IsVerbose enables Verbose output when set.
 var IsVerbose bool
 
 // out/errOut, when non-nil, override the default os.Stdout/os.Stderr sinks.
@@ -59,28 +61,31 @@ func stderr() io.Writer {
 	return os.Stderr
 }
 
+// Info writes an informational message to stdout.
 func Info(s string, args ...any) {
 	if len(args) > 0 {
-		fmt.Fprintf(stdout(), s, args...)
+		_, _ = fmt.Fprintf(stdout(), s, args...)
 	} else {
-		fmt.Fprintln(stdout(), s)
+		_, _ = fmt.Fprintln(stdout(), s)
 	}
 }
 
+// Error writes an error message to stderr.
 func Error(s string, args ...any) {
 	if len(args) > 0 {
-		fmt.Fprintf(stderr(), s, args...)
+		_, _ = fmt.Fprintf(stderr(), s, args...)
 	} else {
-		fmt.Fprintln(stderr(), s)
+		_, _ = fmt.Fprintln(stderr(), s)
 	}
 }
 
+// Verbose writes a message to stdout when IsVerbose is set.
 func Verbose(s string, args ...any) {
 	if IsVerbose {
 		if len(args) > 0 {
-			fmt.Fprintf(stdout(), s, args...)
+			_, _ = fmt.Fprintf(stdout(), s, args...)
 		} else {
-			fmt.Fprintln(stdout(), s)
+			_, _ = fmt.Fprintln(stdout(), s)
 		}
 	}
 }

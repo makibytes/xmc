@@ -100,7 +100,7 @@ func NewRootCommand(spec BrokerSpec) *cobra.Command {
 		Use:   spec.Use,
 		Short: spec.Short,
 		Long:  spec.Long,
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
 				log.IsVerbose = true
 			}

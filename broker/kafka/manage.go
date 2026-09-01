@@ -35,7 +35,7 @@ func CreateTopic(connArgs ConnArguments, topic string, partitions, replicationFa
 	if err != nil {
 		return fmt.Errorf("failed to connect to Kafka: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	topicConfig := kafkago.TopicConfig{
 		Topic:             topic,
@@ -69,7 +69,7 @@ func DeleteTopic(connArgs ConnArguments, topic string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to Kafka: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	return conn.DeleteTopics(topic)
 }
@@ -196,7 +196,7 @@ func TopicStats(connArgs ConnArguments, topic string) (*backends.QueueStats, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Kafka: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	parts, err := conn.ReadPartitions(topic)
 	if err != nil {
@@ -213,7 +213,7 @@ func TopicStats(connArgs ConnArguments, topic string) (*backends.QueueStats, err
 			return nil, fmt.Errorf("failed to dial leader for %s partition %d: %w", topic, p.ID, err)
 		}
 		first, last, err := pconn.ReadOffsets()
-		pconn.Close()
+		_ = pconn.Close()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read offsets for %s partition %d: %w", topic, p.ID, err)
 		}
@@ -272,7 +272,7 @@ func ListTopics(connArgs ConnArguments) ([]TopicInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Kafka: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	partitions, err := conn.ReadPartitions()
 	if err != nil {

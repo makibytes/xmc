@@ -11,6 +11,7 @@ import (
 	"github.com/makibytes/xmc/log"
 )
 
+// SendMessage sends a message on the given AMQP session, using the sender cache.
 func SendMessage(ctx context.Context, session *amqp.Session, cache *amqpcommon.SenderCache, args SendArguments) error {
 	log.Verbose("🏗️  constructing message...")
 	message := amqpcommon.BuildMessage(amqpcommon.MessageArgs{

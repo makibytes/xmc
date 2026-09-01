@@ -27,7 +27,7 @@ func TestRequestCommand_BasicRequestReply(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -60,7 +60,7 @@ func TestRequestCommand_BasicRequestReply(t *testing.T) {
 
 	// Verify output
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	if buf.String() != "reply-data" {
 		t.Errorf("output = %q, want %q", buf.String(), "reply-data")
 	}
@@ -80,7 +80,7 @@ func TestRequestCommand_CustomReplyTo(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -117,7 +117,7 @@ func TestRequestCommand_WithFlags(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -160,7 +160,7 @@ func TestRequestCommand_JSONOutput(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -168,7 +168,7 @@ func TestRequestCommand_JSONOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	var result map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
@@ -263,7 +263,7 @@ func TestRequestCommand_CorrelationFromMessageID(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {

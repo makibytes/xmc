@@ -1,5 +1,6 @@
 //go:build azure
 
+// Package azuresb implements the Azure Service Bus broker backend.
 package azuresb
 
 import (
@@ -21,7 +22,7 @@ func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions)
 	if err := a.ensureQueueCached(ctx, opts.Queue); err != nil {
 		return nil, err
 	}
-	recv, err := a.senderCache.client.NewReceiverForQueue(opts.Queue, nil)
+	recv, err := a.client.NewReceiverForQueue(opts.Queue, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating receiver for queue %s: %w", opts.Queue, err)
 	}

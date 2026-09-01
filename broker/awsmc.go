@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the AWS SQS/SNS root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs awspkg.ConnArguments
 

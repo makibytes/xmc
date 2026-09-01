@@ -154,7 +154,7 @@ func TestRequestDispatchesToNativeCapability(t *testing.T) {
 		t.Errorf("reply = %q, want native", msg.Data)
 	}
 	// the default send path must NOT have run on a native backend
-	if f.fakeQB.lastSend.Queue != "" {
+	if f.lastSend.Queue != "" {
 		t.Error("native backend should bypass the default send/receive path")
 	}
 }

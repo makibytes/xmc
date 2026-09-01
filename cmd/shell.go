@@ -37,7 +37,7 @@ Examples:
   !ls -la              # escape to a full shell command
 
 Type "exit", "quit", or press Ctrl-D to leave the shell.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runShell(cmd, spec)
 		},
 	}
@@ -69,7 +69,7 @@ func runShell(cmd *cobra.Command, spec BrokerSpec) error {
 	if err != nil {
 		return fmt.Errorf("initialize readline: %w", err)
 	}
-	defer rl.Close()
+	defer rl.Close() //nolint:errcheck
 	session := &shellSession{
 		spec:         spec,
 		queueFactory: wrapReconnectQueue(spec.Queue, ReconnectOptions{}),
@@ -149,7 +149,7 @@ func shellHelp(rootCmd *cobra.Command, line string) {
 		target = sub
 	}
 
-	target.Help()
+	_ = target.Help()
 }
 
 // containsVerb checks whether any top-level stage in the line starts with an

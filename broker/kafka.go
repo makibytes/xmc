@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the Apache Kafka root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs kafka.ConnArguments
 	var partitions int

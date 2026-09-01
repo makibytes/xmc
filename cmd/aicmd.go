@@ -25,7 +25,7 @@ The sidebar shows live broker objects (queues, topics, exchanges, …).
 Press Tab to browse them, Enter to insert a name into your prompt.
 
 Commands executed in AI mode are written to the shared shell history.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAI(cmd, spec)
 		},
 	}

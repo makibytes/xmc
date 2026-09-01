@@ -33,7 +33,7 @@ func (f *failingQueueBackend) Send(_ context.Context, opts backends.SendOptions)
 	return nil
 }
 
-func (f *failingQueueBackend) Receive(_ context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
+func (f *failingQueueBackend) Receive(_ context.Context, _ backends.ReceiveOptions) (*backends.Message, error) {
 	f.recvCount.Add(1)
 	if atomic.AddInt32(&f.failCount, -1) >= 0 {
 		return nil, fmt.Errorf("connection reset by peer")
@@ -161,7 +161,7 @@ type failingTopicBackend struct {
 	subCount  atomic.Int32
 }
 
-func (f *failingTopicBackend) Publish(_ context.Context, opts backends.PublishOptions) error {
+func (f *failingTopicBackend) Publish(_ context.Context, _ backends.PublishOptions) error {
 	f.pubCount.Add(1)
 	if atomic.AddInt32(&f.failCount, -1) >= 0 {
 		return fmt.Errorf("connection reset by peer")
@@ -169,7 +169,7 @@ func (f *failingTopicBackend) Publish(_ context.Context, opts backends.PublishOp
 	return nil
 }
 
-func (f *failingTopicBackend) Subscribe(_ context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
+func (f *failingTopicBackend) Subscribe(_ context.Context, _ backends.SubscribeOptions) (*backends.Message, error) {
 	f.subCount.Add(1)
 	if atomic.AddInt32(&f.failCount, -1) >= 0 {
 		return nil, fmt.Errorf("connection reset by peer")
@@ -372,7 +372,7 @@ func TestReconnectingQueue_BrowseDelegatesWhenSupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Browse returned unexpected error: %v", err)
 	}
-	defer browser.Close()
+	defer browser.Close() //nolint:errcheck
 
 	var got []string
 	for {

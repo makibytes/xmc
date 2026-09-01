@@ -110,7 +110,7 @@ func TestTimeoutDurationExplicit(t *testing.T) {
 
 func TestEnvOrMissing(t *testing.T) {
 	key := "XMC_TEST_ENV_OR"
-	os.Unsetenv(key)
+	_ = os.Unsetenv(key)
 	if got := envOr(key, "fallback"); got != "fallback" {
 		t.Errorf("envOr = %q, want %q", got, "fallback")
 	}
@@ -118,8 +118,8 @@ func TestEnvOrMissing(t *testing.T) {
 
 func TestEnvOrPresent(t *testing.T) {
 	key := "XMC_TEST_ENV_OR_SET"
-	os.Setenv(key, "from-env")
-	defer os.Unsetenv(key)
+	_ = os.Setenv(key, "from-env")
+	defer os.Unsetenv(key) //nolint:errcheck
 	if got := envOr(key, "fallback"); got != "from-env" {
 		t.Errorf("envOr = %q, want %q", got, "from-env")
 	}
@@ -127,7 +127,7 @@ func TestEnvOrPresent(t *testing.T) {
 
 func TestEnvOrEmpty(t *testing.T) {
 	key := "XMC_TEST_ENV_OR_EMPTY"
-	os.Setenv(key, "")
+	_ = os.Setenv(key, "")
 	if got := envOr(key, "fallback"); got != "fallback" {
 		t.Errorf("envOr on empty = %q, want %q", got, "fallback")
 	}

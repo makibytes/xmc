@@ -171,7 +171,7 @@ func (a *TopicAdapter) getReader(args ReceiveArguments) (*kafka.Reader, error) {
 	}
 
 	if a.reader != nil {
-		a.reader.Close()
+		_ = a.reader.Close()
 	}
 
 	brokers, tlsConfig, err := parseKafkaURL(a.connArgs.Server, a.connArgs.TLS)
@@ -207,7 +207,7 @@ func (a *TopicAdapter) getReader(args ReceiveArguments) (*kafka.Reader, error) {
 	// LastOffset sentinels (--offset earliest / latest).
 	if args.Partition >= 0 && args.Offset != OffsetUnset {
 		if err := reader.SetOffset(args.Offset); err != nil {
-			reader.Close()
+			_ = reader.Close()
 			return nil, fmt.Errorf("setting offset %d on partition %d: %w", args.Offset, args.Partition, err)
 		}
 	}

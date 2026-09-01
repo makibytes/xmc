@@ -84,12 +84,12 @@ func TestVersionCommand_Execute(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	cmd.Execute()
-	w.Close()
+	_ = cmd.Execute()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	got := strings.TrimSpace(buf.String())
 	if got != "dev" {
 		t.Errorf("version = %q, want %q", got, "dev")

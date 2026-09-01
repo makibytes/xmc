@@ -39,7 +39,7 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 }
 
 // Send implements backends.QueueBackend.
-func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) error {
+func (a *QueueAdapter) Send(_ context.Context, opts backends.SendOptions) error {
 	sn := streamName(opts.Queue)
 	if opts.Extra != nil && opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]
@@ -76,7 +76,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 }
 
 // Receive implements backends.QueueBackend.
-func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
+func (a *QueueAdapter) Receive(_ context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	sn := streamName(opts.Queue)
 	if opts.Extra != nil && opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]

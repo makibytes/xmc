@@ -30,7 +30,7 @@ func TestAnthropicClient_RequestShape(t *testing.T) {
 
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		if req["model"] != "claude-sonnet-4-6" {
 			t.Errorf("model = %v", req["model"])
@@ -43,7 +43,7 @@ func TestAnthropicClient_RequestShape(t *testing.T) {
 			t.Errorf("output_config = %#v, want %#v", req["output_config"], wantOutputConfig)
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"content": []map[string]string{
 				{"text": "receive q -n 5"},
 			},
@@ -92,7 +92,7 @@ func TestOpenAIClient_RequestShape(t *testing.T) {
 			t.Errorf("auth = %q", r.Header.Get("Authorization"))
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]string{"content": "send q hello"}},
 			},
@@ -148,7 +148,7 @@ func TestOpenAIClient_ReasoningModelRequestShape(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		if _, ok := req["max_tokens"]; ok {
 			t.Error("max_tokens should not be set for a reasoning model")
@@ -163,7 +163,7 @@ func TestOpenAIClient_ReasoningModelRequestShape(t *testing.T) {
 			t.Errorf("reasoning_effort = %v, want high", req["reasoning_effort"])
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]string{"content": "ok"}},
 			},
@@ -261,7 +261,7 @@ func TestGeminiClient_RequestShape(t *testing.T) {
 			t.Errorf("key = %q", r.URL.Query().Get("key"))
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"candidates": []map[string]any{
 				{"content": map[string]any{
 					"parts": []map[string]string{
@@ -317,7 +317,7 @@ func TestGeminiClient_CurrentModelEffort(t *testing.T) {
 }
 
 func TestAIClient_CancelledContext(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		// Never respond — let the context cancel
 		<-r.Context().Done()
 	}))
@@ -334,9 +334,9 @@ func TestAIClient_CancelledContext(t *testing.T) {
 }
 
 func TestAIClient_ErrorStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error": "invalid api key"}`))
+		_, _ = w.Write([]byte(`{"error": "invalid api key"}`))
 	}))
 	defer srv.Close()
 
@@ -372,7 +372,7 @@ func TestAnthropicClient_MultiTurnMessages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		msgs, ok := req["messages"].([]any)
 		if !ok || len(msgs) != 3 {
@@ -387,7 +387,7 @@ func TestAnthropicClient_MultiTurnMessages(t *testing.T) {
 			t.Errorf("temperature = %v, want 0", temp)
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"content": []map[string]string{{"text": "send q refined"}},
 		})
 	}))
@@ -412,7 +412,7 @@ func TestOpenAIClient_MultiTurnMessages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		msgs := req["messages"].([]any)
 		// OpenAI: 1 system + 2 user + 1 assistant = 4
@@ -429,7 +429,7 @@ func TestOpenAIClient_MultiTurnMessages(t *testing.T) {
 			t.Errorf("temperature = %v, want 0", temp)
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]string{"content": "ok"}},
 			},
@@ -453,7 +453,7 @@ func TestGeminiClient_RoleMapping(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		contents := req["contents"].([]any)
 		if len(contents) != 2 {
@@ -473,7 +473,7 @@ func TestGeminiClient_RoleMapping(t *testing.T) {
 			t.Errorf("temperature = %v, want 0", genConfig["temperature"])
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"candidates": []map[string]any{
 				{"content": map[string]any{
 					"parts": []map[string]string{{"text": "ok"}},
@@ -498,7 +498,7 @@ func TestAnthropicClient_Streaming(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		if req["stream"] != true {
 			t.Error("stream should be true when onToken is provided")
@@ -507,19 +507,19 @@ func TestAnthropicClient_Streaming(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
-		fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":25}}}\n\n")
+		_, _ = fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":25}}}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"receive\"}}\n\n")
+		_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"receive\"}}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" q -n 5\"}}\n\n")
+		_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" q -n 5\"}}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":8}}\n\n")
+		_, _ = fmt.Fprintf(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":8}}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		_, _ = fmt.Fprintf(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 		flusher.Flush()
 	}))
 	defer srv.Close()
@@ -550,7 +550,7 @@ func TestOpenAIClient_Streaming(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		if req["stream"] != true {
 			t.Error("stream should be true")
@@ -559,16 +559,16 @@ func TestOpenAIClient_Streaming(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
-		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"send\"}}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"send\"}}]}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\" q hello\"}}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\" q hello\"}}]}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":6}}\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":6}}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}))
 	defer srv.Close()
@@ -657,10 +657,10 @@ func TestGeminiClient_Streaming(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
-		fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"publish\"}]}}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"publish\"}]}}]}\n\n")
 		flusher.Flush()
 
-		fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" topic msg\"}]}}],\"usageMetadata\":{\"promptTokenCount\":20,\"candidatesTokenCount\":5}}\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" topic msg\"}]}}],\"usageMetadata\":{\"promptTokenCount\":20,\"candidatesTokenCount\":5}}\n\n")
 		flusher.Flush()
 	}))
 	defer srv.Close()
@@ -727,7 +727,7 @@ func TestOpenAIClient_ListModels(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]string{
 				{"id": "gpt-4o"},
 				{"id": "gpt-3.5-turbo"},
@@ -765,7 +765,7 @@ func TestAnthropicClient_ListModels(t *testing.T) {
 		if r.Header.Get("anthropic-version") != "2023-06-01" {
 			t.Errorf("anthropic-version = %q", r.Header.Get("anthropic-version"))
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]string{
 				{"id": "claude-sonnet-4-6"},
 				{"id": "claude-haiku-4-5"},
@@ -795,7 +795,7 @@ func TestGeminiClient_ListModels(t *testing.T) {
 		if r.URL.Query().Get("key") != "gem-key" {
 			t.Errorf("key = %q", r.URL.Query().Get("key"))
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"models": []map[string]string{
 				{"name": "models/gemini-2.0-flash"},
 				{"name": "models/gemini-1.5-pro"},
@@ -819,9 +819,9 @@ func TestGeminiClient_ListModels(t *testing.T) {
 }
 
 func TestListModels_ErrorStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"invalid api key"}`))
+		_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
 	}))
 	defer srv.Close()
 
@@ -892,15 +892,15 @@ func fastRetry(t *testing.T) {
 func TestDoWithRetry_429ThenOK(t *testing.T) {
 	fastRetry(t)
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		if calls == 1 {
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"rate limit"}`))
+			_, _ = w.Write([]byte(`{"error":"rate limit"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
 
@@ -910,7 +910,7 @@ func TestDoWithRetry_429ThenOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if calls != 2 {
 		t.Errorf("handler called %d times, want 2", calls)
 	}
@@ -919,10 +919,10 @@ func TestDoWithRetry_429ThenOK(t *testing.T) {
 func TestDoWithRetry_ExhaustsOn500(t *testing.T) {
 	fastRetry(t)
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"server error"}`))
+		_, _ = w.Write([]byte(`{"error":"server error"}`))
 	}))
 	defer srv.Close()
 
@@ -940,10 +940,10 @@ func TestDoWithRetry_ExhaustsOn500(t *testing.T) {
 func TestDoWithRetry_NonRetryableStatusImmediate(t *testing.T) {
 	fastRetry(t)
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"unauthorized"}`))
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	}))
 	defer srv.Close()
 
@@ -966,7 +966,7 @@ func TestDoWithRetry_NonRetryableStatusImmediate(t *testing.T) {
 
 func TestDoWithRetry_ContextCancelImmediate(t *testing.T) {
 	fastRetry(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer srv.Close()

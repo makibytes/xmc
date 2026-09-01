@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the MQTT root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs mqtt.ConnArguments
 

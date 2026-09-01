@@ -12,6 +12,7 @@ import (
 	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
+// ConnArguments holds the connection parameters for Pulsar.
 type ConnArguments = backends.CommonConnArgs
 
 // Connect creates and returns a Pulsar client.

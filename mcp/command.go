@@ -38,7 +38,7 @@ the agent only ever supplies message addresses and bodies.`,
 		Args: cobra.NoArgs,
 		// Connection is lazy (per tool call), so starting the server never
 		// requires the broker to be reachable yet.
-		RunE: func(c *cobra.Command, _ []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 

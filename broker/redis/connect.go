@@ -12,8 +12,10 @@ import (
 	"github.com/makibytes/xmc/broker/tlsutil"
 )
 
+// ConnArguments holds the connection parameters for Redis.
 type ConnArguments = backends.CommonConnArgs
 
+// Connect creates the Redis client.
 func Connect(args ConnArguments) (*redis.Client, error) {
 	opt, err := redis.ParseURL(args.Server)
 	if err != nil {
@@ -38,7 +40,7 @@ func Connect(args ConnArguments) (*redis.Client, error) {
 	client := redis.NewClient(opt)
 
 	if err := client.Ping(context.Background()).Err(); err != nil {
-		client.Close()
+		_ = client.Close()
 		return nil, fmt.Errorf("connecting to Redis %s: %w", args.Server, err)
 	}
 

@@ -1334,7 +1334,7 @@ func (m *aiTUIModel) doAutocomplete() {
 	}
 	// Multiple matches — append longest common prefix.
 	lcp := longestCommonPrefix(candidates)
-	if len(lcp) > 0 && len(lcp) > int(prefixLen) {
+	if len(lcp) > 0 && len(lcp) > prefixLen {
 		// Only append the portion beyond what's already typed.
 		m.input.SetValue(string(line) + string(lcp))
 		return

@@ -1,3 +1,5 @@
+// Command xmc is the unified message-broker CLI; this file embeds the
+// broker-specific AI system-prompt reference docs from docs/*.md.
 package main
 
 import (

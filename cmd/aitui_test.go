@@ -1906,8 +1906,7 @@ func TestAITUI_SendHotkey_UsesQueueBackend_ForAnycastAddress(t *testing.T) {
 	model := updated.(aiTUIModel)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
 	model = updated.(aiTUIModel)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(aiTUIModel)
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected a non-nil tea.Cmd from send Enter")
 	}
@@ -1933,8 +1932,7 @@ func TestAITUI_SendHotkey_UsesTopicBackend_ForMulticastAddress(t *testing.T) {
 	model := updated.(aiTUIModel)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
 	model = updated.(aiTUIModel)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(aiTUIModel)
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected a non-nil tea.Cmd from send Enter")
 	}
@@ -1972,8 +1970,7 @@ func TestAITUI_SendHotkey_UsesTopicBackend_ForExchange(t *testing.T) {
 	model := updated.(aiTUIModel)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
 	model = updated.(aiTUIModel)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(aiTUIModel)
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected a non-nil tea.Cmd from send Enter")
 	}
@@ -2547,7 +2544,7 @@ func TestAITUI_ReceiveHotkey_OnSubscriptionChild_Google(t *testing.T) {
 }
 
 func TestAITUI_PurgeHotkey_OnSubscriptionChild_ShowsConfirmPrompt(t *testing.T) {
-	purge := func(topic, sub string) (int64, error) { return 0, nil }
+	purge := func(_, _ string) (int64, error) { return 0, nil }
 	m := newTestModelWithTopicSubscriptions(&mockTopicBackend{}, purge)
 	m = selectSubscriptionChild(t, m)
 

@@ -35,7 +35,7 @@ applicable) and reports whether it succeeds, with the round-trip time.
 By default a single attempt is made. Use --count for repeated probes and
 --interval to space them out. The command exits non-zero if any attempt fails.`,
 		Args: cobra.NoArgs,
-		RunE: func(c *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, _ []string) error {
 			return doPing(c, connect)
 		},
 	}

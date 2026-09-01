@@ -33,7 +33,7 @@ func TestReceiveCommand_DisplaysMessage(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -41,7 +41,7 @@ func TestReceiveCommand_DisplaysMessage(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	if output != "hello" {
@@ -122,7 +122,7 @@ func TestReceiveCommand_CountFlag(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -133,7 +133,7 @@ func TestReceiveCommand_CountFlag(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 	if !strings.Contains(output, "msg1") || !strings.Contains(output, "msg3") {
 		t.Errorf("output missing expected messages: %q", output)
@@ -157,7 +157,7 @@ func TestReceiveCommand_JSONOutput(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -165,7 +165,7 @@ func TestReceiveCommand_JSONOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	var result map[string]any
@@ -204,7 +204,7 @@ func TestReceiveCommand_SelectorFlag(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -237,8 +237,8 @@ func TestReceiveCommand_QuietFlag(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	wOut.Close()
-	wErr.Close()
+	_ = wOut.Close()
+	_ = wErr.Close()
 	os.Stdout = oldStdout
 	os.Stderr = oldStderr
 
@@ -247,13 +247,13 @@ func TestReceiveCommand_QuietFlag(t *testing.T) {
 	}
 
 	var bufOut bytes.Buffer
-	bufOut.ReadFrom(rOut)
+	_, _ = bufOut.ReadFrom(rOut)
 	if bufOut.String() != "data only" {
 		t.Errorf("stdout = %q, want %q", bufOut.String(), "data only")
 	}
 
 	var bufErr bytes.Buffer
-	bufErr.ReadFrom(rErr)
+	_, _ = bufErr.ReadFrom(rErr)
 	if strings.Contains(bufErr.String(), "Properties") {
 		t.Errorf("stderr should not contain properties in quiet mode, got: %q", bufErr.String())
 	}
@@ -273,7 +273,7 @@ func TestReceiveCommand_AcknowledgeTrue(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -299,7 +299,7 @@ func TestReceiveCommand_DisplaysNewlineWhenIsStdout(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -307,7 +307,7 @@ func TestReceiveCommand_DisplaysNewlineWhenIsStdout(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	if buf.String() != "hello\n" {
 		t.Errorf("output = %q, want %q", buf.String(), "hello\n")
 	}
@@ -330,7 +330,7 @@ func TestReceiveCommand_NilMessageAfterFirst(t *testing.T) {
 	defer func() { log.IsStdout = origIsStdout }()
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -362,7 +362,7 @@ func TestReceiveCommand_JSONOutputAllFields(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -370,7 +370,7 @@ func TestReceiveCommand_JSONOutputAllFields(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	var result map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
@@ -411,7 +411,7 @@ func TestReceiveCommand_JSONOutput_PrunesEmptyValues(t *testing.T) {
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -419,7 +419,7 @@ func TestReceiveCommand_JSONOutput_PrunesEmptyValues(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	var result map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
@@ -471,7 +471,7 @@ func TestReceiveCommand_JSONOutput_VerboseIncludesInternalMetadata(t *testing.T)
 	os.Stdout = w
 
 	err := cmd.Execute()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -479,7 +479,7 @@ func TestReceiveCommand_JSONOutput_VerboseIncludesInternalMetadata(t *testing.T)
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 
 	var result map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// GetRootCommand builds the Redis root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs redispkg.ConnArguments
 	var prefix string

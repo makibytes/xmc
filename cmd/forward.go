@@ -275,7 +275,7 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 		forwarded++
 		st.record(len(body))
 		if !quiet && log.IsVerbose {
-			fmt.Fprintf(errw, "forwarded message %d to %s\n", forwarded, destination)
+			_, _ = fmt.Fprintf(errw, "forwarded message %d to %s\n", forwarded, destination)
 		}
 	}
 
@@ -294,7 +294,7 @@ func startForwardStats(enabled bool, w io.Writer) (*streamStats, func()) {
 	stop := startStatsReporter(st, time.Second, w)
 	return st, func() {
 		stop()
-		fmt.Fprintln(w, st.summary())
+		_, _ = fmt.Fprintln(w, st.summary())
 	}
 }
 
@@ -308,7 +308,7 @@ func runCommandOrRecover(command string, data []byte, out, errw io.Writer) ([]by
 	}
 	result, err := runShellCommand(command, data, errw)
 	if err != nil {
-		fmt.Fprintf(errw, "command failed: %s\n", err)
+		_, _ = fmt.Fprintf(errw, "command failed: %s\n", err)
 		emitUndelivered(out, data)
 		return nil, false
 	}
@@ -321,11 +321,11 @@ func runCommandOrRecover(command string, data []byte, out, errw io.Writer) ([]by
 func emitUndelivered(w io.Writer, data []byte) {
 	_, _ = w.Write(data)
 	if shouldAddNewline(w) {
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
 }
 
 func summarizeForward(w io.Writer, forwarded int, source, destination string) error {
-	fmt.Fprintf(w, "Forwarded %d message(s) from %s to %s\n", forwarded, source, destination)
+	_, _ = fmt.Fprintf(w, "Forwarded %d message(s) from %s to %s\n", forwarded, source, destination)
 	return nil
 }
