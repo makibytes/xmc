@@ -195,9 +195,10 @@ func parseSSE(r io.Reader, handler func(data string) error) error {
 	return scanner.Err()
 }
 
-// fetchModelIDs executes an HTTP request and parses the OpenAI-style
-// {"data":[{"id":"..."}]} response. Used by anthropicClient and openaiClient.
-func fetchModelIDs(req *http.Request) ([]string, error) {
+// fetchModelIDs executes an HTTP request, decodes the response with extract
+// (which knows the provider's model-listing JSON shape), and returns the
+// non-empty ids sorted. Used by anthropicClient, openaiClient and geminiClient.
+func fetchModelIDs(req *http.Request, extract func(io.Reader) ([]string, error)) ([]string, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -207,27 +208,43 @@ func fetchModelIDs(req *http.Request) ([]string, error) {
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("models API %d: %s", resp.StatusCode, truncate(string(b), 200))
 	}
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	raw, err := extract(resp.Body)
+	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(result.Data))
-	for _, d := range result.Data {
-		if d.ID != "" {
-			ids = append(ids, d.ID)
+	ids := make([]string, 0, len(raw))
+	for _, id := range raw {
+		if id != "" {
+			ids = append(ids, id)
 		}
 	}
 	sort.Strings(ids)
 	return ids, nil
 }
 
-// --- Anthropic (POST /v1/messages) ---
+// extractOpenAIModelIDs decodes the OpenAI-style {"data":[{"id":"..."}]}
+// model-listing response shared by Anthropic and OpenAI-compatible providers.
+func extractOpenAIModelIDs(r io.Reader) ([]string, error) {
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(r).Decode(&result); err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(result.Data))
+	for i, d := range result.Data {
+		ids[i] = d.ID
+	}
+	return ids, nil
+}
 
-type anthropicClient struct {
+// baseAIClient holds the fields and settable state common to every provider
+// implementation (model/effort selection, request timeout). Each provider
+// embeds it and adds only what genuinely differs (e.g. openaiClient's
+// provider field for its per-vendor reasoning quirks).
+type baseAIClient struct {
 	apiKey         string
 	model          string
 	baseURL        string
@@ -236,9 +253,26 @@ type anthropicClient struct {
 	requestTimeout time.Duration
 }
 
-func (c *anthropicClient) SetModel(model string)     { c.model = model }
-func (c *anthropicClient) SetEffort(effort aiEffort) { c.effort = normalizeEffort(effort) }
-func (c *anthropicClient) Effort() aiEffort          { return normalizeEffort(c.effort) }
+func (c *baseAIClient) SetModel(model string)     { c.model = model }
+func (c *baseAIClient) SetEffort(effort aiEffort) { c.effort = normalizeEffort(effort) }
+func (c *baseAIClient) Effort() aiEffort          { return normalizeEffort(c.effort) }
+
+// callContext derives a request-scoped context bounded by the client's
+// configured timeout (or defaultRequestTimeout when unset). The caller must
+// invoke the returned cancel func.
+func (c *baseAIClient) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := c.requestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// --- Anthropic (POST /v1/messages) ---
+
+type anthropicClient struct {
+	baseAIClient
+}
 
 func supportsAnthropicEffort(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
@@ -271,15 +305,11 @@ func (c *anthropicClient) ListModels(ctx context.Context) ([]string, error) {
 	}
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
-	return fetchModelIDs(req)
+	return fetchModelIDs(req, extractOpenAIModelIDs)
 }
 
 func (c *anthropicClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
-	timeout := c.requestTimeout
-	if timeout <= 0 {
-		timeout = defaultRequestTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := c.callContext(ctx)
 	defer cancel()
 
 	msgs := make([]map[string]string, len(messages))
@@ -439,18 +469,9 @@ func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string
 // Covers: OpenAI, xAI, DeepSeek, Mistral
 
 type openaiClient struct {
-	provider       string
-	apiKey         string
-	model          string
-	baseURL        string
-	effort         aiEffort
-	maxTokens      int
-	requestTimeout time.Duration
+	baseAIClient
+	provider string
 }
-
-func (c *openaiClient) SetModel(model string)     { c.model = model }
-func (c *openaiClient) SetEffort(effort aiEffort) { c.effort = normalizeEffort(effort) }
-func (c *openaiClient) Effort() aiEffort          { return normalizeEffort(c.effort) }
 
 // reasoningModelPrefixes are OpenAI model names/prefixes for the o-series and
 // gpt-5/codex reasoning models. These reject the standard chat-completion
@@ -542,15 +563,11 @@ func (c *openaiClient) ListModels(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	return fetchModelIDs(req)
+	return fetchModelIDs(req, extractOpenAIModelIDs)
 }
 
 func (c *openaiClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
-	timeout := c.requestTimeout
-	if timeout <= 0 {
-		timeout = defaultRequestTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := c.callContext(ctx)
 	defer cancel()
 
 	msgs := []map[string]string{{"role": "system", "content": system}}
@@ -734,21 +751,30 @@ func (c *openaiClient) parseStream(r io.Reader, onToken func(string)) (string, T
 // --- Google Gemini (POST :generateContent / :streamGenerateContent) ---
 
 type geminiClient struct {
-	apiKey         string
-	model          string
-	baseURL        string
-	effort         aiEffort
-	maxTokens      int
-	requestTimeout time.Duration
+	baseAIClient
 }
-
-func (c *geminiClient) SetModel(model string)     { c.model = model }
-func (c *geminiClient) SetEffort(effort aiEffort) { c.effort = normalizeEffort(effort) }
-func (c *geminiClient) Effort() aiEffort          { return normalizeEffort(c.effort) }
 
 func supportsGeminiEffort(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
 	return strings.HasPrefix(model, "gemini-3")
+}
+
+// extractGeminiModelIDs decodes Gemini's {"models":[{"name":"models/..."}]}
+// model-listing response, stripping the "models/" prefix.
+func extractGeminiModelIDs(r io.Reader) ([]string, error) {
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(r).Decode(&result); err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(result.Models))
+	for i, m := range result.Models {
+		ids[i] = strings.TrimPrefix(m.Name, "models/")
+	}
+	return ids, nil
 }
 
 func (c *geminiClient) ListModels(ctx context.Context) ([]string, error) {
@@ -759,40 +785,11 @@ func (c *geminiClient) ListModels(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("models API %d: %s", resp.StatusCode, truncate(string(b), 200))
-	}
-	var result struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(result.Models))
-	for _, m := range result.Models {
-		id := strings.TrimPrefix(m.Name, "models/")
-		if id != "" {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-	return ids, nil
+	return fetchModelIDs(req, extractGeminiModelIDs)
 }
 
 func (c *geminiClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
-	timeout := c.requestTimeout
-	if timeout <= 0 {
-		timeout = defaultRequestTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := c.callContext(ctx)
 	defer cancel()
 
 	contents := make([]map[string]any, len(messages))

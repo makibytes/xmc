@@ -10,9 +10,10 @@ import (
 	"github.com/makibytes/xmc/log"
 )
 
-// ReceiveMessage receives a message from Artemis with routing-specific capabilities.
+// ReceiveMessage receives a message from Artemis with routing-specific
+// capabilities, via cache's cached receiver link (see amqpcommon.ReceiverCache).
 // The caller's ctx is honoured for cancellation (Ctrl-C / Esc).
-func ReceiveMessage(ctx context.Context, session *amqp.Session, args ReceiveArguments) (*amqp.Message, error) {
+func ReceiveMessage(ctx context.Context, session *amqp.Session, cache *amqpcommon.ReceiverCache, args ReceiveArguments) (*amqp.Message, error) {
 	var sourceCapabilities []string
 	if args.Multicast {
 		sourceCapabilities = append(sourceCapabilities, "topic")
@@ -22,7 +23,7 @@ func ReceiveMessage(ctx context.Context, session *amqp.Session, args ReceiveArgu
 		log.Verbose("with ANYCAST routing")
 	}
 
-	return amqpcommon.ReceiveMessage(ctx, session, amqpcommon.ReceiveOptions{
+	return cache.Receive(ctx, session, amqpcommon.ReceiveOptions{
 		Queue:               args.Queue,
 		Timeout:             args.Timeout,
 		Wait:                args.Wait,

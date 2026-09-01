@@ -14,7 +14,74 @@ import (
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
+	"github.com/spf13/cobra"
 )
+
+// registerConsumeFlags adds the flags shared by receive, peek, and subscribe.
+// waitDefault differs (subscribe defaults to true, wait indefinitely; receive
+// and peek default to false); countHelp's flag description differs slightly
+// per command; omit registers -o/--omit, which only receive and peek have.
+func registerConsumeFlags(cmd *cobra.Command, waitDefault bool, countHelp string, omit bool) {
+	cmd.Flags().VarP(newDurationValue(100*time.Millisecond, time.Second), "timeout", "t", "Time to wait for a message (e.g. \"100ms\", \"5s\")")
+	cmd.Flags().BoolP("quiet", "q", false, "Quiet about properties, show data only")
+	cmd.Flags().BoolP("wait", "w", waitDefault, "Wait (endless) for a message to arrive")
+	cmd.Flags().IntP("count", "n", 1, countHelp)
+	cmd.Flags().BoolP("json", "J", false, "Output messages as JSON")
+	cmd.Flags().StringP("format", "F", "", "Output format string, e.g. \"%i %s\\n\" (overrides --json)")
+	cmd.Flags().Bool("ndjson", false, "Output one lossless JSON record per line (overrides --format/--json)")
+	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
+	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
+	cmd.Flags().Bool("forever", false, "Stream until interrupted / until xmc quits (no time bound)")
+	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
+	if omit {
+		cmd.Flags().IntP("omit", "o", 0, "Skip (offset past) the first N messages before reading")
+	}
+}
+
+// consumeFlagValues holds the flag values shared by receive, peek, and
+// subscribe (everything except the destination and command-specific extras
+// like subscribe's --group/--durable).
+type consumeFlagValues struct {
+	timeout    float32
+	wait       bool
+	quiet      bool
+	count      int
+	jsonOutput bool
+	selector   string
+	format     string
+	ndjson     bool
+	omit       int // 0 when the command doesn't register --omit (subscribe)
+	streaming  StreamingFlags
+}
+
+// parseConsumeFlags reads the flags registerConsumeFlags adds, plus the
+// streaming flags (--for/--forever/--stats), applying the shared "count=0
+// when time-bounded and --count wasn't set explicitly" rule. hasOmit is false
+// for subscribe, which doesn't register --omit.
+func parseConsumeFlags(cmd *cobra.Command, hasOmit bool) (consumeFlagValues, error) {
+	var v consumeFlagValues
+	v.timeout = float32(getDuration(cmd, "timeout").Seconds())
+	v.wait, _ = cmd.Flags().GetBool("wait")
+	v.quiet, _ = cmd.Flags().GetBool("quiet")
+	v.count, _ = cmd.Flags().GetInt("count")
+	v.jsonOutput, _ = cmd.Flags().GetBool("json")
+	v.selector, _ = cmd.Flags().GetString("selector")
+	v.format, _ = cmd.Flags().GetString("format")
+	v.ndjson, _ = cmd.Flags().GetBool("ndjson")
+	if hasOmit {
+		v.omit, _ = cmd.Flags().GetInt("omit")
+	}
+
+	sf, err := ParseStreamingFlags(cmd)
+	if err != nil {
+		return consumeFlagValues{}, err
+	}
+	v.streaming = sf
+	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
+		v.count = 0
+	}
+	return v, nil
+}
 
 // dataWriter returns the configured data output writer, defaulting to os.Stdout.
 func (c consumeConfig) dataWriter() io.Writer {
@@ -190,7 +257,7 @@ func displayMessage(dataOut, metaOut io.Writer, message *backends.Message, verbo
 		}
 	}
 
-	fmt.Fprint(dataOut, string(message.Data))
+	_, _ = dataOut.Write(message.Data)
 	if shouldAddNewline(dataOut) {
 		fmt.Fprintln(dataOut)
 	}
@@ -221,7 +288,8 @@ func displayMessageJSON(w io.Writer, message *backends.Message, verbosity backen
 		return fmt.Errorf("failed to marshal message to JSON: %w", err)
 	}
 
-	fmt.Fprintln(w, string(data))
+	data = append(data, '\n')
+	_, _ = w.Write(data)
 	return nil
 }
 

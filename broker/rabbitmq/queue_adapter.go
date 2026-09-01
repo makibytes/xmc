@@ -27,6 +27,8 @@ type QueueAdapter struct {
 	connArgs   ConnArguments
 	connection *amqp.Conn
 	session    *amqp.Session
+	sendCache  amqpcommon.SenderCache
+	recvCache  amqpcommon.ReceiverCache
 }
 
 // NewQueueAdapter creates a new RabbitMQ queue adapter
@@ -58,7 +60,7 @@ func (a *QueueAdapter) Send(ctx context.Context, opts backends.SendOptions) erro
 		TTL:           opts.TTL,
 	}
 
-	return SendMessage(ctx, a.session, args)
+	return SendMessage(ctx, a.session, &a.sendCache, args)
 }
 
 // Receive implements backends.QueueBackend
@@ -71,7 +73,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		Wait:        opts.Wait,
 	}
 
-	message, err := ReceiveMessage(ctx, a.session, args)
+	message, err := ReceiveMessage(ctx, a.session, &a.recvCache, args)
 	if err != nil {
 		if !opts.Wait && errors.Is(err, context.DeadlineExceeded) {
 			return nil, backends.ErrNoMessageAvailable
@@ -110,6 +112,8 @@ func (a *QueueAdapter) Browse(ctx context.Context, opts backends.ReceiveOptions)
 
 // Close implements backends.QueueBackend
 func (a *QueueAdapter) Close() error {
+	_ = a.sendCache.Close()
+	_ = a.recvCache.Close()
 	if a.session != nil {
 		a.session.Close(context.Background())
 	}

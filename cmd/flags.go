@@ -90,3 +90,46 @@ func aliasNormalize(f *pflag.FlagSet, name string) pflag.NormalizedName {
 	}
 	return pflag.NormalizedName(name)
 }
+
+// registerProduceExchangeFlags wires up -e/--exchange, --routing-key, and
+// -q/--queue for a write command (send, publish) on an exchange-routed
+// broker (RabbitMQ) and switches its Use string; the exchange-routed form
+// also accepts an optional message positional alongside the destination
+// flags. When exchRouting is false or unset, only the bare positional
+// destination is required. exchangeHelp/queueHelp are the two flags' help
+// text, which differs in preposition and default-topic mention between send
+// and publish.
+func registerProduceExchangeFlags(cmd *cobra.Command, exchRouting []bool, use, exchangeHelp, queueHelp string) {
+	if len(exchRouting) > 0 && exchRouting[0] {
+		cmd.Use = use
+		cmd.Flags().StringP("exchange", "e", "", exchangeHelp)
+		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
+		cmd.Flags().StringP("queue", "q", "", queueHelp)
+		cmd.Args = cobra.MaximumNArgs(2)
+		return
+	}
+	// Resolver or not, the positional destination is always required without
+	// exchange routing.
+	cmd.Args = cobra.MinimumNArgs(1)
+}
+
+// registerConsumeExchangeFlags wires up --exchange/--routing-key/--queue for
+// a read command (receive, peek, subscribe) on an exchange-routed broker
+// (RabbitMQ) and switches its Use string. Long-form only: -q is --quiet and
+// -e isn't offered, for symmetry with -q, on read commands; --queue-name is
+// the deprecated spelling, kept working via aliasNormalize. When exchRouting
+// is false or unset, only the bare positional destination is required.
+// exchangeHelp/queueHelp are the two flags' help text, which differs in
+// preposition and default-topic mention across the three commands.
+func registerConsumeExchangeFlags(cmd *cobra.Command, exchRouting []bool, use, exchangeHelp, queueHelp string) {
+	if len(exchRouting) > 0 && exchRouting[0] {
+		cmd.Use = use
+		cmd.Flags().String("exchange", "", exchangeHelp)
+		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
+		cmd.Flags().String("queue", "", queueHelp)
+		cmd.Flags().SetNormalizeFunc(aliasNormalize)
+		cmd.Args = cobra.MaximumNArgs(1)
+		return
+	}
+	cmd.Args = cobra.MinimumNArgs(1)
+}

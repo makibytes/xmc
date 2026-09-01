@@ -1,8 +1,9 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +16,173 @@ func sortLabel(s sortMode, metrics []backends.Metric) string {
 		return "name"
 	}
 	return metrics[int(s)-1].Label
+}
+
+// sidebarPlan computes the per-window body-row allocation and collapse state
+// for renderSidebar's height budget, in three stages: natural fit, floor fit
+// with surplus distributed to the focused window, or auto-collapse (starting
+// from the window farthest from focus) until everything fits.
+type sidebarPlan struct {
+	m          *aiTUIModel
+	n          int
+	height     int
+	focusedIdx int   // -1 when chat is focused
+	nat        []int // natural (full) body row count per window
+
+	bodyAlloc     []int  // solve()'s output: body rows to render per window
+	autoCollapsed []bool // auto-collapsed by this plan (not user-set via Space)
+}
+
+func newSidebarPlan(m *aiTUIModel, height int) *sidebarPlan {
+	n := len(m.objTypes)
+	focusedIdx := -1
+	if m.focus > focusChat && int(m.focus)-1 < n {
+		focusedIdx = int(m.focus) - 1
+	}
+	nat := make([]int, n)
+	for i := range m.objTypes {
+		nat[i] = m.windowNaturalRows(i)
+	}
+	return &sidebarPlan{
+		m: m, n: n, height: height, focusedIdx: focusedIdx, nat: nat,
+		bodyAlloc: make([]int, n), autoCollapsed: make([]bool, n),
+	}
+}
+
+// collapsedCost: 1 (title) + 1 if there is a window below (margin).
+func (p *sidebarPlan) collapsedCost(i int) int {
+	if i < p.n-1 {
+		return 2
+	}
+	return 1
+}
+
+// expandedCost: 2 (title+underline) + body + 1 if there is a window below.
+func (p *sidebarPlan) expandedCost(i, body int) int {
+	if i < p.n-1 {
+		return 3 + body
+	}
+	return 2 + body
+}
+
+func (p *sidebarPlan) floor(i int) int {
+	if p.nat[i] < 3 {
+		return p.nat[i]
+	}
+	return 3
+}
+
+// isCollapsed reports whether window i renders collapsed right now — either
+// user-collapsed (Space) or auto-collapsed by this plan's stage 3.
+func (p *sidebarPlan) isCollapsed(i int) bool {
+	return p.m.objTypes[i].collapsed || p.autoCollapsed[i]
+}
+
+// total sums every window's current cost, using bodyAt(i) as the body row
+// count for an expanded window. Called with p.nat/p.floor/p.current at the
+// three points the original code recomputed this sum by hand.
+func (p *sidebarPlan) total(bodyAt func(i int) int) int {
+	sum := 0
+	for i := 0; i < p.n; i++ {
+		if p.isCollapsed(i) {
+			sum += p.collapsedCost(i)
+		} else {
+			sum += p.expandedCost(i, bodyAt(i))
+		}
+	}
+	return sum
+}
+
+func (p *sidebarPlan) natural(i int) int { return p.nat[i] }
+func (p *sidebarPlan) atFloor(i int) int { return p.floor(i) }
+func (p *sidebarPlan) current(i int) int { return p.bodyAlloc[i] }
+
+// solve fills bodyAlloc/autoCollapsed for the plan's height budget.
+func (p *sidebarPlan) solve() {
+	if p.total(p.natural) <= p.height {
+		for i := 0; i < p.n; i++ {
+			p.bodyAlloc[i] = p.nat[i]
+		}
+		return
+	}
+	if p.total(p.atFloor) <= p.height {
+		p.fitAtFloor()
+		return
+	}
+	p.autoCollapseToFit()
+}
+
+// fitAtFloor shrinks every expanded window to its floor and distributes the
+// remaining surplus to the focused window first, then the rest in order.
+func (p *sidebarPlan) fitAtFloor() {
+	surplus := p.height - p.total(p.atFloor)
+	for i := 0; i < p.n; i++ {
+		p.bodyAlloc[i] = p.floor(i)
+	}
+	if p.focusedIdx >= 0 && !p.m.objTypes[p.focusedIdx].collapsed {
+		add := min(p.nat[p.focusedIdx]-p.floor(p.focusedIdx), surplus)
+		p.bodyAlloc[p.focusedIdx] += add
+		surplus -= add
+	}
+	for i := 0; i < p.n; i++ {
+		if i == p.focusedIdx || p.m.objTypes[i].collapsed || surplus <= 0 {
+			continue
+		}
+		add := min(p.nat[i]-p.floor(i), surplus)
+		p.bodyAlloc[i] += add
+		surplus -= add
+	}
+}
+
+// autoCollapseToFit collapses non-focused windows, farthest from focus
+// first, until the total fits, then gives any remaining surplus to the
+// focused window.
+func (p *sidebarPlan) autoCollapseToFit() {
+	order := make([]int, 0, p.n)
+	if p.focusedIdx < 0 {
+		// No focused window — collapse from the bottom up.
+		for i := p.n - 1; i >= 0; i-- {
+			order = append(order, i)
+		}
+	} else {
+		// Interleave outward from focused index: bottom, top, alternating.
+		lo, hi := p.focusedIdx-1, p.focusedIdx+1
+		for lo >= 0 || hi < p.n {
+			if hi < p.n {
+				order = append(order, hi)
+				hi++
+			}
+			if lo >= 0 {
+				order = append(order, lo)
+				lo--
+			}
+		}
+	}
+
+	for i := 0; i < p.n; i++ {
+		p.bodyAlloc[i] = p.floor(i)
+	}
+	for _, i := range order {
+		if i == p.focusedIdx || p.m.objTypes[i].collapsed {
+			continue
+		}
+		p.autoCollapsed[i] = true
+		p.bodyAlloc[i] = 0
+		if p.total(p.current) <= p.height {
+			break
+		}
+	}
+
+	surplus := p.height - p.total(p.current)
+	if p.focusedIdx >= 0 && !p.m.objTypes[p.focusedIdx].collapsed && surplus > 0 {
+		add := p.nat[p.focusedIdx] - p.bodyAlloc[p.focusedIdx]
+		if add > surplus {
+			add = surplus
+		}
+		if add > 0 {
+			p.bodyAlloc[p.focusedIdx] += add
+		}
+	}
 }
 
 func (m aiTUIModel) renderSidebar(width, height int) (string, []int) {
@@ -37,181 +205,20 @@ func (m aiTUIModel) renderSidebar(width, height int) (string, []int) {
 		return b.String(), nil
 	}
 
-	// Determine which window is focused (if any; -1 when chat is focused).
-	focusedIdx := -1
-	if m.focus > focusChat && int(m.focus)-1 < n {
-		focusedIdx = int(m.focus) - 1
-	}
-
-	// Natural row count per window (body rows only, ignoring header/underline/margin).
-	nat := make([]int, n)
-	for i := range m.objTypes {
-		nat[i] = m.windowNaturalRows(i)
-	}
-
-	// Per-window height cost helpers.
-	// collapsedCost: 1 (title) + 1 if there is a window below (margin).
-	collapsedCost := func(i int) int {
-		if i < n-1 {
-			return 2 // title + margin
-		}
-		return 1 // title only (last window, no margin)
-	}
-	// expandedCost: 2 (title+underline) + body + 1 if there is a window below.
-	expandedCost := func(i, body int) int {
-		if i < n-1 {
-			return 3 + body // title + underline + body + margin
-		}
-		return 2 + body // no margin for last window
-	}
-	floor := func(i int) int {
-		if nat[i] < 3 {
-			return nat[i]
-		}
-		return 3
-	}
-
-	// Planner output: per-window body allocation and whether it is collapsed.
-	bodyAlloc := make([]int, n)
-	autoCollapsed := make([]bool, n) // auto-collapsed by the planner (not user-set)
-
-	// Stage 1: check if all non-user-collapsed windows fit at natural height.
-	total := 0
-	for i := range m.objTypes {
-		if m.objTypes[i].collapsed {
-			total += collapsedCost(i)
-		} else {
-			total += expandedCost(i, nat[i])
-		}
-	}
-
-	if total <= height {
-		// Natural fit: assign each window its full content.
-		for i := range m.objTypes {
-			bodyAlloc[i] = nat[i]
-		}
-	} else {
-		// Stage 2: shrink all expanded windows to floor rows.
-		floorTotal := 0
-		for i := range m.objTypes {
-			if m.objTypes[i].collapsed {
-				floorTotal += collapsedCost(i)
-			} else {
-				floorTotal += expandedCost(i, floor(i))
-			}
-		}
-
-		if floorTotal <= height {
-			// Fits at floor. Assign floors, then distribute surplus to windows
-			// starting with the focused window.
-			surplus := height - floorTotal
-			for i := range m.objTypes {
-				bodyAlloc[i] = floor(i)
-			}
-			// Give focused window extra first.
-			if focusedIdx >= 0 && !m.objTypes[focusedIdx].collapsed {
-				add := nat[focusedIdx] - floor(focusedIdx)
-				if add > surplus {
-					add = surplus
-				}
-				bodyAlloc[focusedIdx] += add
-				surplus -= add
-			}
-			// Then distribute to others in index order.
-			for i := range m.objTypes {
-				if i == focusedIdx || m.objTypes[i].collapsed || surplus <= 0 {
-					continue
-				}
-				add := nat[i] - floor(i)
-				if add > surplus {
-					add = surplus
-				}
-				bodyAlloc[i] += add
-				surplus -= add
-			}
-		} else {
-			// Stage 3: auto-collapse non-focused windows until everything fits.
-			// Start from the window farthest from the focused index.
-			order := make([]int, 0, n)
-			if focusedIdx < 0 {
-				// No focused window — collapse from the bottom up.
-				for i := n - 1; i >= 0; i-- {
-					order = append(order, i)
-				}
-			} else {
-				// Interleave outward from focused index: bottom, top, alternating.
-				lo, hi := focusedIdx-1, focusedIdx+1
-				for lo >= 0 || hi < n {
-					if hi < n {
-						order = append(order, hi)
-						hi++
-					}
-					if lo >= 0 {
-						order = append(order, lo)
-						lo--
-					}
-				}
-			}
-
-			// Initialise at floor.
-			for i := range m.objTypes {
-				bodyAlloc[i] = floor(i)
-			}
-			// Auto-collapse in collapse order until we fit.
-			for _, i := range order {
-				if i == focusedIdx || m.objTypes[i].collapsed {
-					continue
-				}
-				autoCollapsed[i] = true
-				bodyAlloc[i] = 0
-
-				// Recalculate total.
-				cur := 0
-				for j := range m.objTypes {
-					if m.objTypes[j].collapsed || autoCollapsed[j] {
-						cur += collapsedCost(j)
-					} else {
-						cur += expandedCost(j, bodyAlloc[j])
-					}
-				}
-				if cur <= height {
-					break
-				}
-			}
-
-			// Distribute remaining surplus to focused window.
-			cur := 0
-			for j := range m.objTypes {
-				if m.objTypes[j].collapsed || autoCollapsed[j] {
-					cur += collapsedCost(j)
-				} else {
-					cur += expandedCost(j, bodyAlloc[j])
-				}
-			}
-			surplus := height - cur
-			if focusedIdx >= 0 && !m.objTypes[focusedIdx].collapsed && surplus > 0 {
-				add := nat[focusedIdx] - bodyAlloc[focusedIdx]
-				if add > surplus {
-					add = surplus
-				}
-				if add > 0 {
-					bodyAlloc[focusedIdx] += add
-				}
-			}
-		}
-	}
+	plan := newSidebarPlan(&m, height)
+	plan.solve()
 
 	// Render each window. Junction rows are only recorded for expanded windows
 	// (collapsed windows have no underline so need no ├ junction).
 	junctionRows := make([]int, 0, n)
 	for i := range m.objTypes {
-		isCollapsed := m.objTypes[i].collapsed || autoCollapsed[i]
+		isCollapsed := plan.isCollapsed(i)
 		if isCollapsed {
 			junctionRows = append(junctionRows, -1) // no junction
 		} else {
 			junctionRows = append(junctionRows, lines+1) // underline is at lines+1
 		}
-		lines += m.writeObjectSection(&b, width, bodyAlloc[i], i, isCollapsed)
+		lines += m.writeObjectSection(&b, width, plan.bodyAlloc[i], i, isCollapsed)
 		// Add blank margin row after every window except the last.
 		if i < n-1 {
 			b.WriteString("\n")
@@ -257,49 +264,38 @@ func (m aiTUIModel) windowNaturalRows(idx int) int {
 	return len(items)
 }
 
-// writeObjectSection renders one object-type window and returns lines written.
-// collapsed=true renders only the title line (no underline, no body rows).
-func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx int, collapsed bool) int {
-	// Dispatch to the process-window renderer for the dedicated Processes pane.
-	if m.objTypes[idx].kind == objWindowProcs {
-		return m.writeProcessSection(b, width, bodyLines, collapsed)
-	}
-
+// writeWindow renders one sidebar window's shared chrome — disclosure glyph,
+// header (with focus styling), collapse, underline, "(none)"/scrolling
+// N-more — and delegates everything that differs between an object window
+// and the Processes window to its callers: extra (non-empty short-circuits
+// the row list entirely, for the loading/error states only object windows
+// have), and renderRow (the actual per-row formatting, which differs enough
+// — display fields, truncation budget, selection marker shape — that sharing
+// it would cost more clarity than the shared chrome saves). trailer, if
+// non-nil, appends one more line after the row list (object windows' filter
+// indicator).
+func (m aiTUIModel) writeWindow(
+	b *strings.Builder, width, bodyLines int, collapsed bool,
+	headerText string, focused bool,
+	extra string,
+	nRows, sel int, renderRow func(ri int, selected bool) string,
+	trailer func() (string, bool),
+) int {
 	lines := 0
-	w := m.objTypes[idx]
-	focused := int(m.focus)-1 == idx
-	items := m.getFilteredSortedNodes(idx)
 
-	// Disclosure glyph: ▸ when collapsed, ▾ when expanded.
 	glyph := "▾ "
 	if collapsed {
 		glyph = "▸ "
 	}
-
-	// Header.
-	headerText := glyph + fmt.Sprintf("%s (%d)", w.label, len(w.nodes))
-	if m.loadingObjects && w.nodes == nil {
-		headerText = glyph + w.label + " (…)"
-	}
-	if w.filter != "" {
-		if m.loadingObjects && w.nodes == nil {
-			headerText = glyph + w.label + fmt.Sprintf(" (%d/…)", len(items))
-		} else {
-			headerText = glyph + fmt.Sprintf("%s (%d/%d)", w.label, len(items), len(w.nodes))
-		}
-	}
-	if w.sortIdx != sortByName && len(w.nodes) > 0 {
-		metrics := firstMetrics(w.nodes)
-		headerText += " ↕" + sortLabel(w.sortIdx, metrics)
-	}
+	full := glyph + headerText
 	if focused {
-		pad := width - lipgloss.Width(headerText) - 4
+		pad := width - lipgloss.Width(full) - 4
 		if pad < 0 {
 			pad = 0
 		}
-		b.WriteString(m.theme().focusHeader().Render(headerText + strings.Repeat(" ", pad) + "◂"))
+		b.WriteString(m.theme().focusHeader().Render(full + strings.Repeat(" ", pad) + "◂"))
 	} else {
-		b.WriteString(histTitleStyle.Render(headerText))
+		b.WriteString(histTitleStyle.Render(full))
 	}
 	b.WriteString("\n")
 	lines++
@@ -313,12 +309,92 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 	b.WriteString("\n")
 	lines++
 
-	if m.loadingObjects && w.nodes == nil {
-		b.WriteString(dimStyle.Render("  loading…") + "\n")
+	if extra != "" {
+		b.WriteString(extra + "\n")
 		return lines + 1
 	}
 
-	if w.err != nil {
+	if nRows == 0 {
+		b.WriteString(dimStyle.Render("  (none)") + "\n")
+		return lines + 1
+	}
+
+	start, end := computeWindow(nRows, sel, bodyLines)
+
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ▲ %d more", start)) + "\n")
+		lines++
+		start++
+		if start > sel {
+			start = sel
+		}
+	}
+
+	showBottomHint := end < nRows
+	limit := end
+	if showBottomHint {
+		limit = end - 1
+		if limit < start {
+			limit = start
+		}
+	}
+
+	for ri := start; ri < limit; ri++ {
+		b.WriteString(renderRow(ri, focused && ri == sel))
+		b.WriteString("\n")
+		lines++
+	}
+
+	if showBottomHint {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ▼ %d more", nRows-limit)) + "\n")
+		lines++
+	}
+
+	if trailer != nil {
+		if line, ok := trailer(); ok {
+			b.WriteString(line)
+			lines++
+		}
+	}
+
+	return lines
+}
+
+// writeObjectSection renders one object-type window and returns lines written.
+// collapsed=true renders only the title line (no underline, no body rows).
+func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx int, collapsed bool) int {
+	// Dispatch to the process-window renderer for the dedicated Processes pane.
+	if m.objTypes[idx].kind == objWindowProcs {
+		return m.writeProcessSection(b, width, bodyLines, collapsed)
+	}
+
+	w := m.objTypes[idx]
+	focused := int(m.focus)-1 == idx
+	items := m.getFilteredSortedNodes(idx)
+
+	// Header text.
+	headerText := fmt.Sprintf("%s (%d)", w.label, len(w.nodes))
+	if m.loadingObjects && w.nodes == nil {
+		headerText = w.label + " (…)"
+	}
+	if w.filter != "" {
+		if m.loadingObjects && w.nodes == nil {
+			headerText = w.label + fmt.Sprintf(" (%d/…)", len(items))
+		} else {
+			headerText = fmt.Sprintf("%s (%d/%d)", w.label, len(items), len(w.nodes))
+		}
+	}
+	if w.sortIdx != sortByName && len(w.nodes) > 0 {
+		metrics := firstMetrics(w.nodes)
+		headerText += " ↕" + sortLabel(w.sortIdx, metrics)
+	}
+
+	// Loading/error short-circuit the row list entirely (see writeWindow's extra).
+	var extra string
+	switch {
+	case m.loadingObjects && w.nodes == nil:
+		extra = dimStyle.Render("  loading…")
+	case w.err != nil:
 		// Surface List() errors visibly rather than showing a silent "(none)".
 		// Common for cloud brokers on auth/permission failures.
 		msg := "⚠ " + w.err.Error()
@@ -329,13 +405,7 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		if len([]rune(msg)) > maxLen {
 			msg = string([]rune(msg)[:maxLen-1]) + "…"
 		}
-		b.WriteString(sidebarErrStyle.Render(msg) + "\n")
-		return lines + 1
-	}
-
-	if len(items) == 0 {
-		b.WriteString(dimStyle.Render("  (none)") + "\n")
-		return lines + 1
+		extra = sidebarErrStyle.Render(msg)
 	}
 
 	// Build display rows from the same flattened list used for selection
@@ -360,29 +430,7 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		rows[i] = displayRow{name: label, metric: fmtNodeMetric(r.node), indent: true}
 	}
 
-	selRow := w.sel
-
-	start, end := computeWindow(len(rows), selRow, bodyLines)
-
-	if start > 0 {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  ▲ %d more", start)) + "\n")
-		lines++
-		start++
-		if start > selRow {
-			start = selRow
-		}
-	}
-
-	showBottomHint := end < len(rows)
-	limit := end
-	if showBottomHint {
-		limit = end - 1
-		if limit < start {
-			limit = start
-		}
-	}
-
-	for ri := start; ri < limit; ri++ {
+	renderRow := func(ri int, selected bool) string {
 		r := rows[ri]
 		prefix := "  "
 		if r.indent {
@@ -399,46 +447,39 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 			name = string(nameRunes[:maxName-1]) + "…"
 		}
 
-		if focused && ri == w.sel && r.indent {
+		if selected && r.indent {
 			marker := "▸ └ "
 			pad := width - len(marker) - 2 - len(name) - len(metricStr)
 			if pad < 1 {
 				pad = 1
 			}
-			b.WriteString(sidebarSelStyle.Render(fmt.Sprintf("%s%s%s%s", marker, name, strings.Repeat(" ", pad), metricStr)))
-		} else if focused && ri == w.sel {
+			return sidebarSelStyle.Render(fmt.Sprintf("%s%s%s%s", marker, name, strings.Repeat(" ", pad), metricStr))
+		}
+		if selected {
 			pad := width - 4 - len(name) - len(metricStr)
 			if pad < 1 {
 				pad = 1
 			}
-			b.WriteString(sidebarSelStyle.Render(fmt.Sprintf("▸ %s%s%s", name, strings.Repeat(" ", pad), metricStr)))
-		} else {
-			pad := width - len(prefix) - len(name) - len(metricStr) - 1
-			if pad < 1 {
-				pad = 1
-			}
-			if metricStr != "" {
-				b.WriteString(fmt.Sprintf("%s%s%s%s", prefix, name, strings.Repeat(" ", pad), dimStyle.Render(metricStr)))
-			} else {
-				b.WriteString(prefix + name)
-			}
+			return sidebarSelStyle.Render(fmt.Sprintf("▸ %s%s%s", name, strings.Repeat(" ", pad), metricStr))
 		}
-		b.WriteString("\n")
-		lines++
+		pad := width - len(prefix) - len(name) - len(metricStr) - 1
+		if pad < 1 {
+			pad = 1
+		}
+		if metricStr != "" {
+			return fmt.Sprintf("%s%s%s%s", prefix, name, strings.Repeat(" ", pad), dimStyle.Render(metricStr))
+		}
+		return prefix + name
 	}
 
-	if showBottomHint {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  ▼ %d more", len(rows)-limit)) + "\n")
-		lines++
+	trailer := func() (string, bool) {
+		if focused && m.filtering {
+			return statusKeyStyle.Render("/") + w.filter + "▍", true
+		}
+		return "", false
 	}
 
-	// Filter indicator.
-	if focused && m.filtering {
-		b.WriteString(statusKeyStyle.Render("/") + w.filter + "▍\n")
-		lines++
-	}
-
-	return lines
+	return m.writeWindow(b, width, bodyLines, collapsed, headerText, focused, extra, len(rows), w.sel, renderRow, trailer)
 }
 
 // fmtNodeMetric formats the first metric of a node for compact sidebar display.
@@ -465,12 +506,24 @@ func firstMetrics(nodes []backends.ObjectNode) []backends.Metric {
 	return nil
 }
 
-// getFilteredSortedNodes returns the node list for window idx, filtered and sorted.
+// getFilteredSortedNodes returns the node list for window idx, filtered and
+// sorted. Memoized on the window (see objWindow.filteredCache): View() reruns
+// on every spinner tick and every status-bar hotkey resolution calls this too
+// (via sidebarRows), so without caching this filter+copy+sort work — cheap
+// once, wasteful dozens of times a second while idle — reran on every one of
+// them. The cache is invalidated by a filter edit, a sort cycle, or a data
+// refresh (dataGen); it deliberately does not depend on treeView, which
+// sidebarRows applies on top of this result, not before it.
 func (m aiTUIModel) getFilteredSortedNodes(idx int) []backends.ObjectNode {
 	if idx < 0 || idx >= len(m.objTypes) {
 		return nil
 	}
-	w := m.objTypes[idx]
+	w := &m.objTypes[idx]
+	key := filterSortCacheKey{filter: w.filter, sortIdx: w.sortIdx, dataGen: w.dataGen}
+	if w.filteredCacheValid && w.filteredCacheKey == key {
+		return w.filteredCache
+	}
+
 	items := w.nodes
 	if w.filter != "" {
 		lower := strings.ToLower(w.filter)
@@ -485,20 +538,24 @@ func (m aiTUIModel) getFilteredSortedNodes(idx int) []backends.ObjectNode {
 	sorted := make([]backends.ObjectNode, len(items))
 	copy(sorted, items)
 	if w.sortIdx == sortByName {
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		slices.SortFunc(sorted, func(a, b backends.ObjectNode) int { return strings.Compare(a.Name, b.Name) })
 	} else {
 		metricIdx := int(w.sortIdx) - 1
-		sort.Slice(sorted, func(i, j int) bool {
-			vi, vj := int64(0), int64(0)
-			if metricIdx < len(sorted[i].Metrics) {
-				vi = sorted[i].Metrics[metricIdx].Value
+		slices.SortFunc(sorted, func(a, b backends.ObjectNode) int {
+			va, vb := int64(0), int64(0)
+			if metricIdx < len(a.Metrics) {
+				va = a.Metrics[metricIdx].Value
 			}
-			if metricIdx < len(sorted[j].Metrics) {
-				vj = sorted[j].Metrics[metricIdx].Value
+			if metricIdx < len(b.Metrics) {
+				vb = b.Metrics[metricIdx].Value
 			}
-			return vi > vj
+			return -cmp.Compare(va, vb) // descending
 		})
 	}
+
+	w.filteredCache = sorted
+	w.filteredCacheKey = key
+	w.filteredCacheValid = true
 	return sorted
 }
 
@@ -533,16 +590,6 @@ func fmtCount(n int64) string {
 	default:
 		return fmt.Sprintf("%d", n)
 	}
-}
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 // collapseBlankLines tidies streamed reasoning output: solitary blank lines are

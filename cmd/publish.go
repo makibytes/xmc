@@ -20,19 +20,10 @@ func NewPublishCommand(backend backends.TopicBackend, resolver TargetResolver, p
 	}
 
 	registerProduceFlags(cmd)
-
-	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
-	if hasExchRouting {
-		cmd.Use = "publish [-e <exchange> [--routing-key <key>] | -q <queue>] [message]"
-		cmd.Flags().StringP("exchange", "e", "", "Exchange to publish to (default: amq.topic)")
-		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
-		cmd.Flags().StringP("queue", "q", "", "Queue to publish to (AMQP 1.0 v2: /queues/<name>)")
-		cmd.Args = cobra.MaximumNArgs(2)
-	} else if resolver != nil {
-		cmd.Args = cobra.MinimumNArgs(1)
-	} else {
-		cmd.Args = cobra.MinimumNArgs(1)
-	}
+	registerProduceExchangeFlags(cmd, exchRouting,
+		"publish [-e <exchange> [--routing-key <key>] | -q <queue>] [message]",
+		"Exchange to publish to (default: amq.topic)",
+		"Queue to publish to (AMQP 1.0 v2: /queues/<name>)")
 
 	return cmd
 }

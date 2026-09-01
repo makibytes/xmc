@@ -54,9 +54,8 @@ func GetRootCommand() *cobra.Command {
 			return extra
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
-			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("AMC_USER"), "Username for SASL PLAIN login")
-			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("AMC_PASSWORD"), "Password for SASL PLAIN login")
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "AMC_", defaultServer,
+				"Server URL", "Username for SASL PLAIN login", "Password for SASL PLAIN login")
 			c.PersistentFlags().StringVar(&brokerName, "broker-name", "", "Artemis broker name for Jolokia management")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
@@ -67,6 +66,7 @@ func GetRootCommand() *cobra.Command {
 			Objects: []cmd.ObjectType{
 				{
 					Label: "Queues",
+					Drain: true,
 					List: func() ([]backends.ObjectNode, error) {
 						queues, err := artemis.ListQueues(mgmtArgs())
 						if err != nil {
@@ -83,24 +83,23 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 				{
-					Label: "Addresses",
+					// An address has no reliable 1:1 mapping to a same-named
+					// queue (it's merely the default when a queue is created
+					// without an explicit --address, and may be bound to
+					// differently-named or multiple queues), so Drain stays
+					// false — purge/peek/receive by address name would
+					// silently target the wrong queue. Send still works via
+					// SendViaTopic for a pure-MULTICAST address.
+					Label:        "Addresses",
+					Singular:     "Address",
+					SendViaTopic: func(nodeKind string) bool { return nodeKind == "multicast" },
 					List: func() ([]backends.ObjectNode, error) {
 						return artemis.ListAddresses(mgmtArgs())
 					},
 				},
 			},
 			Purge: func(queue string) (int64, error) { return artemis.PurgeQueue(mgmtArgs(), queue) },
-			Stats: func(queue string) (*backends.QueueStats, error) {
-				stats, err := artemis.GetQueueStats(mgmtArgs(), queue)
-				if err != nil {
-					return nil, err
-				}
-				return &backends.QueueStats{
-					Name: stats.Name, MessageCount: stats.MessageCount,
-					ConsumerCount: stats.ConsumerCount, EnqueueCount: stats.EnqueueCount,
-					DequeueCount: stats.DequeueCount,
-				}, nil
-			},
+			Stats: func(queue string) (*backends.QueueStats, error) { return artemis.GetQueueStats(mgmtArgs(), queue) },
 			CreateQueue: &cmd.ManageAction{
 				SetupFlags: func(c *cobra.Command) {
 					createQueueCmd = c
@@ -172,33 +171,14 @@ address, delete it and bind it again.`
 				NewTopic: func() (backends.TopicBackend, error) {
 					return artemis.NewTopicAdapter(connArgs)
 				},
-				ListQueues: func(ctx context.Context) ([]mcp.QueueInfo, error) {
-					queues, err := artemis.ListQueues(mgmtArgs())
-					if err != nil {
-						return nil, err
-					}
-					out := make([]mcp.QueueInfo, 0, len(queues))
-					for _, q := range queues {
-						out = append(out, mcp.QueueInfo{
-							Name: q.Name, RoutingType: q.RoutingType,
-							MessageCount: int64(q.MessageCount), ConsumerCount: int64(q.ConsumerCount),
-						})
-					}
-					return out, nil
+				ListQueues: func(_ context.Context) ([]backends.QueueInfo, error) {
+					return artemis.ListQueues(mgmtArgs())
 				},
-				PurgeQueue: func(ctx context.Context, queue string) (int64, error) {
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
 					return artemis.PurgeQueue(mgmtArgs(), queue)
 				},
-				QueueStats: func(ctx context.Context, queue string) (*mcp.QueueStats, error) {
-					stats, err := artemis.GetQueueStats(mgmtArgs(), queue)
-					if err != nil {
-						return nil, err
-					}
-					return &mcp.QueueStats{
-						Name: stats.Name, MessageCount: int64(stats.MessageCount),
-						ConsumerCount: int64(stats.ConsumerCount), EnqueueCount: int64(stats.EnqueueCount),
-						DequeueCount: int64(stats.DequeueCount),
-					}, nil
+				QueueStats: func(_ context.Context, queue string) (*backends.QueueStats, error) {
+					return artemis.GetQueueStats(mgmtArgs(), queue)
 				},
 			}),
 		},

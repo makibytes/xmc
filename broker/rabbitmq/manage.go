@@ -39,22 +39,13 @@ func managementURL(amqpServer string) (string, error) {
 	return fmt.Sprintf("http://%s:15672/api", host), nil
 }
 
-// QueueInfo holds queue information from the RabbitMQ management API
-type QueueInfo struct {
-	Name          string
-	MessageCount  int64
-	ConsumerCount int
-	Vhost         string
-}
+// QueueInfo and QueueStats are aliases for the backends types (rather than
+// broker-local shadow types), so callers (including the MCP tool wiring in
+// broker/rabbitmq.go) can use either name interchangeably.
+type QueueInfo = backends.QueueInfo
 
-// QueueStats holds detailed queue statistics
-type QueueStats struct {
-	Name          string
-	MessageCount  int64
-	ConsumerCount int
-	EnqueueCount  int64
-	DequeueCount  int64
-}
+// QueueStats is an alias for backends.QueueStats; see the QueueInfo comment above.
+type QueueStats = backends.QueueStats
 
 // ListQueues lists all queues via the RabbitMQ Management API
 func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
@@ -84,7 +75,6 @@ func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
 			Name:          q.Name,
 			MessageCount:  q.Messages,
 			ConsumerCount: q.Consumers,
-			Vhost:         q.Vhost,
 		})
 	}
 

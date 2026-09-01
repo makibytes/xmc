@@ -70,11 +70,6 @@ type BrokerSpec struct {
 	// Ping creates a short-lived connection to verify broker reachability.
 	Ping Connector
 
-	// Manage is an optional pre-built "manage" command (see NewManageCommand).
-	// Deprecated: set ManageSpec instead — a fresh command is built per shell
-	// invocation so that IO routing and arg state are clean.
-	Manage *cobra.Command
-
 	// ManageSpec describes the broker's management capabilities. When set,
 	// NewRootCommand builds the "manage" command from it (and the shell can
 	// rebuild a fresh one per pipeline invocation).
@@ -201,13 +196,10 @@ func NewRootCommand(spec BrokerSpec) *cobra.Command {
 		rootCmd.AddCommand(WrapBridgeCommand(queueFactory, topicFactory))
 	}
 
-	// Management — prefer ManageSpec (fresh command per invocation in the shell)
-	// but fall back to a pre-built Manage command for backwards compatibility.
-	if spec.ManageSpec != nil && spec.Manage == nil {
-		spec.Manage = NewManageCommand(*spec.ManageSpec)
-	}
-	if spec.Manage != nil {
-		rootCmd.AddCommand(spec.Manage)
+	// Management — built fresh from ManageSpec here; the shell rebuilds its own
+	// fresh copy per pipeline invocation for clean IO routing.
+	if spec.ManageSpec != nil {
+		rootCmd.AddCommand(NewManageCommand(*spec.ManageSpec))
 	}
 
 	// Extra broker-specific commands.

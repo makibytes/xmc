@@ -21,13 +21,21 @@ type CommonConnArgs struct {
 type TLSConfig = tlsutil.TLSConfig
 
 // RegisterCommonFlags registers the --server/-s, --user/-u, --password/-p
-// persistent flags on c, reading defaults from environment variables with the
-// given prefix (e.g. "KMC_" → KMC_SERVER, KMC_USER, KMC_PASSWORD).
-func RegisterCommonFlags(c *cobra.Command, args *CommonConnArgs, envPrefix string, defaultServer string) {
+// persistent flags on c, bound to server/user/password and reading defaults
+// from environment variables with the given prefix (e.g. "KMC_" →
+// KMC_SERVER, KMC_USER, KMC_PASSWORD; defaultServer is used when
+// <prefix>SERVER is unset). Takes field pointers rather than a *CommonConnArgs
+// so brokers whose connection struct doesn't happen to match that shape
+// (Artemis/RabbitMQ share amqpcommon.ConnArguments, which has no Token field)
+// can still use it. serverHelp/userHelp/passwordHelp are the three flags'
+// descriptions, which vary by broker (Kafka's URL-format hint, MQTT's "MQTT
+// broker URL", SASL PLAIN login vs SASL vs plain "authentication", or no
+// suffix at all).
+func RegisterCommonFlags(c *cobra.Command, server, user, password *string, envPrefix, defaultServer, serverHelp, userHelp, passwordHelp string) {
 	flags := c.PersistentFlags()
-	flags.StringVarP(&args.Server, "server", "s", envOr(envPrefix+"SERVER", defaultServer), "Server URL")
-	flags.StringVarP(&args.User, "user", "u", envOr(envPrefix+"USER", ""), "Username")
-	flags.StringVarP(&args.Password, "password", "p", envOr(envPrefix+"PASSWORD", ""), "Password")
+	flags.StringVarP(server, "server", "s", envOr(envPrefix+"SERVER", defaultServer), serverHelp)
+	flags.StringVarP(user, "user", "u", envOr(envPrefix+"USER", ""), userHelp)
+	flags.StringVarP(password, "password", "p", envOr(envPrefix+"PASSWORD", ""), passwordHelp)
 }
 
 // RegisterTLSFlags registers the --tls, --ca-cert, --cert, --key-file,

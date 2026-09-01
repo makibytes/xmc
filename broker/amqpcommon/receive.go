@@ -3,15 +3,10 @@ package amqpcommon
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/Azure/go-amqp"
-	"github.com/makibytes/xmc/log"
 )
-
-var nextLinkID atomic.Uint64
 
 // ReceiveOptions configures an AMQP receive operation
 type ReceiveOptions struct {
@@ -23,78 +18,6 @@ type ReceiveOptions struct {
 	Selector            string   // JMS-style message selector (AMQP filter)
 	DurableSubscription bool     // create a durable subscription
 	SubscriptionName    string   // name for durable subscription
-}
-
-// ReceiveMessage receives a single message from an AMQP 1.0 session.
-// The caller's ctx is honoured for cancellation (Ctrl-C / Esc).
-func ReceiveMessage(ctx context.Context, session *amqp.Session, opts ReceiveOptions) (*amqp.Message, error) {
-	var receiveCtx context.Context
-	var cancel context.CancelFunc
-	if opts.Wait {
-		receiveCtx, cancel = context.WithCancel(ctx)
-	} else {
-		receiveCtx, cancel = context.WithTimeout(ctx, time.Duration(float64(opts.Timeout)*float64(time.Second)))
-	}
-	defer cancel()
-
-	durability := LinkDurability(opts.DurableSubscription)
-
-	expiryPolicy := amqp.ExpiryPolicyLinkDetach
-	linkName := fmt.Sprintf("xmc-%d", nextLinkID.Add(1))
-	if opts.DurableSubscription {
-		expiryPolicy = amqp.ExpiryPolicyNever
-		if opts.SubscriptionName != "" {
-			linkName = opts.SubscriptionName
-		}
-	}
-
-	receiverOptions := &amqp.ReceiverOptions{
-		SourceCapabilities: opts.SourceCapabilities,
-		SourceExpiryPolicy: expiryPolicy,
-		Durability:         durability,
-		Name:               linkName,
-		SourceDurability:   durability,
-		SettlementMode:     amqp.ReceiverSettleModeFirst.Ptr(),
-	}
-
-	// Add JMS selector as AMQP source filter
-	if opts.Selector != "" {
-		log.Verbose("applying selector filter: %s", opts.Selector)
-		receiverOptions.Filters = []amqp.LinkFilter{
-			amqp.NewSelectorFilter(opts.Selector),
-		}
-	}
-
-	log.Verbose("generating receiver for %s...", opts.Queue)
-	receiver, err := session.NewReceiver(receiveCtx, opts.Queue, receiverOptions)
-	if err != nil {
-		return nil, err
-	}
-	// Use a fresh context for the close so the DETACH handshake always completes,
-	// even if the operation's own ctx timed out (e.g. after draining an empty queue).
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = receiver.Close(closeCtx)
-	}()
-
-	log.Verbose("calling receive()...")
-	message, err := receiver.Receive(receiveCtx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if opts.Acknowledge {
-		if err := receiver.AcceptMessage(receiveCtx, message); err != nil {
-			return nil, fmt.Errorf("accepting message: %w", err)
-		}
-	} else {
-		if err := receiver.ReleaseMessage(receiveCtx, message); err != nil {
-			return nil, fmt.Errorf("releasing message: %w", err)
-		}
-	}
-
-	return message, nil
 }
 
 // QueueBrowser holds a long-lived AMQP receiver opened in distribution-mode

@@ -11,12 +11,15 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/makibytes/xmc/broker/backends"
 )
 
-// TopicInfo holds information about a Pulsar topic.
-type TopicInfo struct {
-	Name string
-}
+// TopicInfo is an alias for the backends type (rather than a broker-local
+// shadow), so callers (including the MCP tool wiring in broker/pulsar.go) can
+// use either name interchangeably. Pulsar's admin API only reports names here
+// (no partition/consumer counts), leaving those fields zero.
+type TopicInfo = backends.TopicInfo
 
 // applyAdminAuth adds the CLI's credentials to an Admin REST API request:
 // --token as a Bearer token, --user/--password as basic auth.

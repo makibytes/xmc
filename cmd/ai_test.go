@@ -279,6 +279,56 @@ func TestCappedBuffer_OverLimit(t *testing.T) {
 	}
 }
 
+// TestManageDestructiveCoverage guards against exactly the drift that once let
+// "manage delete-address" and "manage delete-consumer-group" run without a
+// destructive-confirmation prompt (both were registered ManageActions absent
+// from destructivePrefixes/objectPrefixes). It builds a ManageSpec with every
+// ManageAction/BindAction field wired to a no-op, builds the real command tree
+// via NewManageCommand, and checks that every delete-/unbind-/purge-shaped
+// subcommand is covered by isDestructive and every create-/delete-/bind-/
+// unbind-shaped one by mutatesObjects. Add a field here whenever ManageSpec
+// gains one, so this test — not silent drift — is what catches an omission.
+func TestManageDestructiveCoverage(t *testing.T) {
+	noop1 := func(string) error { return nil }
+	noop2 := func(string, string) error { return nil }
+	spec := ManageSpec{
+		CreateQueue:         &ManageAction{Run: noop1},
+		DeleteQueue:         &ManageAction{Run: noop1},
+		UpdateQueue:         &ManageAction{Run: noop1},
+		EnableQueue:         &ManageAction{Run: noop1},
+		DisableQueue:        &ManageAction{Run: noop1},
+		CreateTopic:         &ManageAction{Run: noop1},
+		DeleteTopic:         &ManageAction{Run: noop1},
+		UpdateTopic:         &ManageAction{Run: noop1},
+		CreateAddress:       &ManageAction{Run: noop1},
+		DeleteAddress:       &ManageAction{Run: noop1},
+		CreateExchange:      &ManageAction{Run: noop1},
+		DeleteExchange:      &ManageAction{Run: noop1},
+		BindQueue:           &BindAction{Run: noop2},
+		UnbindQueue:         &BindAction{Run: noop2},
+		DeleteConsumerGroup: &ManageAction{Run: noop1},
+		Purge:               func(string) (int64, error) { return 0, nil },
+		PurgeSubscription:   func(string, string) (int64, error) { return 0, nil },
+	}
+	mgmt := NewManageCommand(spec)
+
+	for _, c := range mgmt.Commands() {
+		name := c.Name()
+		full := "manage " + name + " x"
+
+		wantDestructive := strings.HasPrefix(name, "delete-") || strings.HasPrefix(name, "unbind-") || strings.HasPrefix(name, "purge")
+		if got := isDestructive(full); got != wantDestructive {
+			t.Errorf("isDestructive(%q) = %v, want %v — add \"manage %s\" to destructivePrefixes", full, got, wantDestructive, name)
+		}
+
+		wantObjectMutating := strings.HasPrefix(name, "create-") || strings.HasPrefix(name, "delete-") ||
+			name == "bind-queue" || name == "unbind-queue"
+		if got := mutatesObjects(full); got != wantObjectMutating {
+			t.Errorf("mutatesObjects(%q) = %v, want %v — add \"manage %s\" to objectPrefixes", full, got, wantObjectMutating, name)
+		}
+	}
+}
+
 func TestCappedBuffer_MultipleWrites(t *testing.T) {
 	var buf cappedBuffer
 	buf.max = 8

@@ -473,9 +473,6 @@ func (s *shellSession) buildVerbCommand(verb string, rootCmd *cobra.Command) (*c
 		if s.spec.ManageSpec != nil {
 			return NewManageCommand(*s.spec.ManageSpec), nil
 		}
-		if s.spec.Manage != nil {
-			return s.spec.Manage, nil
-		}
 	}
 
 	// Help: print help for the root command.

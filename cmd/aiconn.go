@@ -15,7 +15,6 @@ type connState struct {
 	reconnectAt       time.Time     // wall-clock time the next probe fires
 	reconnectBackoff  time.Duration // current wait interval (doubles each failure, capped at 3 min)
 	reconnectDisabled bool          // user ran /disconnect — stop auto-retry
-	reconnectBlink    bool          // toggled every 500ms for the title-bar yellow blink
 	reconnectStatus   string        // one-line countdown shown below the viewport
 }
 
@@ -26,16 +25,23 @@ const (
 
 // ---------- Connection probe ----------
 
-func (m aiTUIModel) startProbeConnection() tea.Cmd {
+// probe pings the broker and hands the result to mk, which wraps it as the
+// caller's own tea.Msg type — connMsg for the initial probe, reconnectProbeMsg
+// for the auto-reconnect loop, kept distinct so the two paths don't collide.
+func (m aiTUIModel) probe(mk func(error) tea.Msg) tea.Cmd {
 	ping := m.session.spec.Ping
 	return func() tea.Msg {
 		conn, err := ping()
 		if err != nil {
-			return connMsg{err: err}
+			return mk(err)
 		}
 		_ = conn.Close()
-		return connMsg{}
+		return mk(nil)
 	}
+}
+
+func (m aiTUIModel) startProbeConnection() tea.Cmd {
+	return m.probe(func(err error) tea.Msg { return connMsg{err: err} })
 }
 
 func (m aiTUIModel) handleConnDone(msg connMsg) (tea.Model, tea.Cmd) {
@@ -55,18 +61,9 @@ func (m aiTUIModel) handleConnDone(msg connMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
 }
 
-// startReconnectProbe fires the connection probe and returns the result as
-// reconnectProbeMsg (distinct from connMsg so the two paths don't collide).
+// startReconnectProbe fires the connection probe for the auto-reconnect loop.
 func (m aiTUIModel) startReconnectProbe() tea.Cmd {
-	ping := m.session.spec.Ping
-	return func() tea.Msg {
-		conn, err := ping()
-		if err != nil {
-			return reconnectProbeMsg{err: err}
-		}
-		_ = conn.Close()
-		return reconnectProbeMsg{}
-	}
+	return m.probe(func(err error) tea.Msg { return reconnectProbeMsg{err: err} })
 }
 
 func (m aiTUIModel) handleReconnectTick() (tea.Model, tea.Cmd) {
@@ -74,7 +71,6 @@ func (m aiTUIModel) handleReconnectTick() (tea.Model, tea.Cmd) {
 		m.conn.reconnectStatus = ""
 		return m, nil
 	}
-	m.conn.reconnectBlink = !m.conn.reconnectBlink
 
 	remaining := time.Until(m.conn.reconnectAt)
 	if remaining > 0 {

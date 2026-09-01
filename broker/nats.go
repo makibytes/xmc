@@ -59,9 +59,8 @@ func GetRootCommand() *cobra.Command {
 			return extra
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL")
-			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("NMC_USER"), "Username for authentication")
-			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("NMC_PASSWORD"), "Password for authentication")
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "NMC_", defaultServer,
+				"Server URL", "Username for authentication", "Password for authentication")
 			c.PersistentFlags().StringVar(&stream, "stream", "", "Default JetStream stream name (applied when --stream on verb is not set)")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
@@ -73,6 +72,7 @@ func GetRootCommand() *cobra.Command {
 				{
 					Label:        "Streams",
 					Hierarchical: true,
+					Drain:        true,
 					List: func() ([]backends.ObjectNode, error) {
 						return natspkg.ListStreamsWithConsumers(connArgs)
 					},
@@ -101,18 +101,28 @@ func GetRootCommand() *cobra.Command {
 				NewTopic: func() (backends.TopicBackend, error) {
 					return natspkg.NewTopicAdapter(connArgs)
 				},
-				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
-					return natspkg.PurgeStream(connArgs, queue)
-				},
-				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
-					s, err := natspkg.GetStreamStats(connArgs, queue)
+				ListQueues: func(_ context.Context) ([]backends.QueueInfo, error) {
+					nodes, err := natspkg.ListStreamsWithConsumers(connArgs)
 					if err != nil {
 						return nil, err
 					}
-					return &mcp.QueueStats{
-						Name: s.Name, MessageCount: s.MessageCount,
-						ConsumerCount: int64(s.ConsumerCount), EnqueueCount: s.EnqueueCount,
-					}, nil
+					infos := make([]backends.QueueInfo, len(nodes))
+					for i, n := range nodes {
+						var msgs int64
+						for _, m := range n.Metrics {
+							if m.Label == "msgs" {
+								msgs = m.Value
+							}
+						}
+						infos[i] = backends.QueueInfo{Name: n.Name, MessageCount: msgs, ConsumerCount: len(n.Children)}
+					}
+					return infos, nil
+				},
+				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
+					return natspkg.PurgeStream(connArgs, queue)
+				},
+				QueueStats: func(_ context.Context, queue string) (*backends.QueueStats, error) {
+					return natspkg.GetStreamStats(connArgs, queue)
 				},
 			}),
 		},

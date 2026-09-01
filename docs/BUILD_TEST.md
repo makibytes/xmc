@@ -39,7 +39,7 @@ See the main [README](../README.md) for the full build table and platform matrix
 Unit tests (no broker required):
 
 ```sh
-go test ./cmd/ ./log/ ./broker/backends/ ./broker/amqpcommon/ ./broker/tlsutil/
+go test ./cmd/ ./log/ ./broker/ ./broker/backends/ ./broker/amqpcommon/ ./broker/tlsutil/ ./mcp/
 ```
 
 Integration tests are based on the [bats testing framework](https://github.com/bats-core/bats-core)

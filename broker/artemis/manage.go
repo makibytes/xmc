@@ -512,20 +512,15 @@ func checkJolokiaError(body []byte) error {
 	return nil
 }
 
-type QueueInfo struct {
-	Name          string
-	RoutingType   string
-	MessageCount  int64
-	ConsumerCount int
-}
+// QueueInfo and QueueStats are aliases for the backends types (rather than
+// broker-local shadow types): Artemis's fields — including RoutingType,
+// which the JMS-derived ANYCAST/MULTICAST concept isn't unique to Artemis —
+// are exactly backends.QueueInfo/QueueStats, so callers (including the MCP
+// tool wiring in broker/artemis.go) can use either name interchangeably.
+type QueueInfo = backends.QueueInfo
 
-type QueueStats struct {
-	Name          string
-	MessageCount  int64
-	ConsumerCount int
-	EnqueueCount  int64
-	DequeueCount  int64
-}
+// QueueStats is an alias for backends.QueueStats; see the QueueInfo comment above.
+type QueueStats = backends.QueueStats
 
 func parseMBeanName(name string) QueueInfo {
 	qi := QueueInfo{}

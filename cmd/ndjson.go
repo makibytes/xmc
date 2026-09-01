@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -89,8 +89,9 @@ func displayMessageNDJSON(w io.Writer, message *backends.Message) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal message record: %w", err)
 	}
-	fmt.Fprintln(w, string(data))
-	return nil
+	data = append(data, '\n')
+	_, err = w.Write(data)
+	return err
 }
 
 // forEachRecord scans NDJSON records from r, invoking visit for each. Blank
@@ -102,12 +103,16 @@ func forEachRecord(r io.Reader, visit func(messageRecord) error) (int, error) {
 
 	processed := 0
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		// scanner.Bytes() is only valid until the next Scan() call, but
+		// json.Unmarshal copies any string/[]byte data it retains into rec's
+		// fields, so passing it directly (instead of copying via Text() then
+		// []byte(line)) is safe and avoids two full-payload copies per record.
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
 			continue
 		}
 		var rec messageRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil {
 			return processed, fmt.Errorf("parse record on line %d: %w", processed+1, err)
 		}
 		rec.Properties = pruneMap(rec.Properties)

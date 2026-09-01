@@ -109,7 +109,7 @@ func (a *aiSession) rebuildPrompt() {
 // and caches the result for the system prompt. Errors are swallowed —
 // topology is a nice-to-have, not a requirement.
 func (a *aiSession) refreshTopology() {
-	if a.session.spec.Manage == nil && a.session.spec.ManageSpec == nil {
+	if a.session.spec.ManageSpec == nil {
 		return
 	}
 
@@ -198,6 +198,8 @@ var destructivePrefixes = []string{
 	"manage delete-queue",
 	"manage delete-topic",
 	"manage delete-exchange",
+	"manage delete-address",
+	"manage delete-consumer-group",
 	"manage unbind-queue",
 	"manage purge",
 }
@@ -211,6 +213,9 @@ var objectPrefixes = []string{
 	"manage delete-topic",
 	"manage create-exchange",
 	"manage delete-exchange",
+	"manage create-address",
+	"manage delete-address",
+	"manage delete-consumer-group",
 	"manage bind-queue",
 	"manage unbind-queue",
 }

@@ -48,8 +48,8 @@ input, unreachable broker) come back as `isError` results with a message written
 for recovery, rather than as opaque protocol faults.
 
 Management tools are only registered for brokers that wire the corresponding
-hooks in `mcp.Deps` (for example Artemis, AWS, Azure, Google, Kafka, RabbitMQ,
-Redis, NATS, Pulsar where available per operation).
+hooks in `mcp.Deps` (Artemis, AWS, Azure, Google, Kafka, NATS, Pulsar, RabbitMQ,
+Redis).
 
 ### Request/reply and correlation ids
 

@@ -84,7 +84,7 @@ type objectsMsg struct { // broker objects fetch result
 }
 
 type connMsg struct{ err error }           // connection probe result
-type reconnectTickMsg struct{}             // 500ms ticker for reconnect countdown + blink
+type reconnectTickMsg struct{}             // 500ms ticker for the reconnect countdown
 type reconnectProbeMsg struct{ err error } // result of a reconnect probe attempt
 type refreshTickMsg struct{}               // time for the next periodic sidebar fetch
 type refreshWatchdogMsg struct{ gen int }  // fired after refreshWatchdogTimeout if a fetch is still in-flight
@@ -295,6 +295,71 @@ type objWindow struct {
 	collapsed    bool                                  // window collapsed to title only (Space to toggle)
 	createAction *ManageAction                         // optional: 'c' hotkey creates this object type
 	deleteAction *ManageAction                         // optional: 'd' hotkey deletes selected
+
+	// Sidebar P/S/R/peek capability, declared by the broker on ObjectType
+	// (cmd/manage.go) and copied through unchanged — see its field docs.
+	singular     string
+	drain        bool
+	sendViaTopic func(nodeKind string) bool
+	publish      bool
+	childKind    string
+
+	// dataGen counts how many times nodes has been reassigned (bumped once,
+	// in handleObjectsDone); part of filteredCacheKey so a data refresh
+	// invalidates the cache below without needing slice-content comparison.
+	dataGen int
+
+	// filteredCache memoizes getFilteredSortedNodes(idx)'s output — filtering
+	// and sorting the full node list, plus the copy sort needs — so it isn't
+	// redone on every render frame (View() reruns on every spinner tick) and
+	// every status-bar hotkey resolution. filteredCacheKey is compared
+	// against the window's live filter/sortIdx/dataGen on each call;
+	// treeView isn't part of it because it doesn't affect this level — see
+	// sidebarRows.
+	filteredCache      []backends.ObjectNode
+	filteredCacheKey   filterSortCacheKey
+	filteredCacheValid bool
+}
+
+// filterSortCacheKey is the set of objWindow fields getFilteredSortedNodes's
+// result depends on; a mismatch against the window's live values means the
+// cached result is stale.
+type filterSortCacheKey struct {
+	filter  string
+	sortIdx sortMode
+	dataGen int
+}
+
+// sendEligible reports whether "S" applies to this window's top-level rows —
+// either because they drain (Queues/Streams) or because sendViaTopic routes
+// through the topic adapter instead (Addresses/Exchanges). Replaces the old
+// label-matching sidebarWindowSupportsSRP.
+func (ow objWindow) sendEligible() bool {
+	return ow.drain || ow.sendViaTopic != nil
+}
+
+// sendsViaTopic reports whether "S" should dispatch via TopicBackend.Publish
+// for a node with the given Kind. Replaces the old label-matching
+// sidebarSendViaTopic.
+func (ow objWindow) sendsViaTopic(nodeKind string) bool {
+	return ow.sendViaTopic != nil && ow.sendViaTopic(nodeKind)
+}
+
+// subscriptionEligible reports whether a child row with the given Kind is a
+// genuine message-storing object (Purge/peek/Receive apply). Replaces the old
+// label-matching sidebarSubscriptionEligible.
+func (ow objWindow) subscriptionEligible(kind string) bool {
+	return ow.childKind != "" && kind == ow.childKind
+}
+
+// singularLabel returns the display singular form for this window's label
+// ("Queues" → "Queue", "Addresses" → "Address" when the broker set
+// ObjectType.Singular). Replaces the old package-level singular/irregularPlurals.
+func (ow objWindow) singularLabel() string {
+	if ow.singular != "" {
+		return ow.singular
+	}
+	return strings.TrimSuffix(ow.label, "s")
 }
 
 // ---------- Model ----------
@@ -336,8 +401,6 @@ type aiTUIModel struct {
 	// Statistics
 	totalIn  int
 	totalOut int
-	turnIn   int
-	turnOut  int
 
 	// Metadata peek rendering format (sidebar 'm' action): yaml or json.
 	metadataFormat metadataFormat
@@ -345,9 +408,6 @@ type aiTUIModel struct {
 	// Sidebar object windows (from ManageSpec.Objects)
 	objTypes       []objWindow
 	loadingObjects bool // true during the first (visible) load; false for periodic refreshes
-
-	// Input area height (grows as the user types, up to maxInputLines).
-	inputLines int
 
 	// Clipboard — copyable items accumulated this session (commands + payloads).
 	// Each item is registered with a ⧉N marker in the transcript; index N refers
@@ -401,7 +461,7 @@ type aiTUIModel struct {
 	promptObjIdx   int    // index into objTypes
 	promptName     string // typed name (create), object name (delete/purge), or typed payload (send)
 	promptTarget   string // send only: fixed queue/address name (captured when the prompt opens)
-	promptNodeKind string // send only: node.Kind captured when the prompt opens (drives sidebarSendViaTopic)
+	promptNodeKind string // send only: node.Kind captured when the prompt opens (drives objWindow.sendsViaTopic)
 
 	// Status bar hint scrolling (only used when the hint line is too wide to
 	// fit; advanced off the existing spinner tick rather than a dedicated
@@ -456,6 +516,11 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 				listFn:       ot.List,
 				createAction: c,
 				deleteAction: d,
+				singular:     ot.Singular,
+				drain:        ot.Drain,
+				sendViaTopic: ot.SendViaTopic,
+				publish:      ot.Publish,
+				childKind:    ot.ChildKind,
 			})
 		}
 	}
@@ -498,7 +563,6 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 		follow:         true,
 		objTypes:       windows,
 		loadingObjects: len(windows) > 0,
-		inputLines:     1,
 		refreshPeriod:  period,
 		refreshEnabled: refreshOn,
 		metadataFormat: mdFmt,
@@ -796,10 +860,10 @@ func (m aiTUIModel) renderPromptLine() string {
 	if wi < 0 || wi >= len(m.objTypes) {
 		return ""
 	}
-	label := m.objTypes[wi].label
+	ow := m.objTypes[wi]
 	switch m.promptKind {
 	case "create":
-		prompt := fmt.Sprintf("Enter name for new %s: %s█", singular(label), m.promptName)
+		prompt := fmt.Sprintf("Enter name for new %s: %s█", ow.singularLabel(), m.promptName)
 		return infoStyle.Render(prompt)
 	case "purge", "purge-subscription":
 		prompt := fmt.Sprintf("Purge \"%s\"?  (Enter=confirm, Esc=cancel)", m.promptName)
@@ -807,9 +871,16 @@ func (m aiTUIModel) renderPromptLine() string {
 	case "send", "publish":
 		prompt := fmt.Sprintf("Message payload for \"%s\": %s█", m.promptTarget, m.promptName)
 		return infoStyle.Render(prompt)
-	default: // "delete"
+	case "delete":
 		prompt := fmt.Sprintf("Delete \"%s\"?  (Enter=confirm, Esc=cancel)", m.promptName)
 		return warnStyle.Render(prompt)
+	default:
+		// Every kind startPrompt is ever called with (cmd/aisidebaractions.go)
+		// has an explicit case above and an entry in promptSpecs()
+		// (cmd/aikeys.go); an unrecognised kind here would mean the two have
+		// drifted, so render nothing rather than silently reusing "delete"'s
+		// wording for a prompt that isn't one.
+		return ""
 	}
 }
 
@@ -889,14 +960,8 @@ func (m aiTUIModel) renderStatusBar() string {
 		case "create":
 			verb = "create"
 		}
-		left := statusKeyStyle.Render("Enter") + statusStyle.Render(" "+verb) +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
-		pad := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-		if pad < 1 {
-			pad = 1
-		}
-		return left + strings.Repeat(" ", pad) + right
+		left := renderHintList([]hintKV{{"Enter", verb}, {"Esc", "cancel"}}, hintWidth, m.statusScrollOffset)
+		return padStatusBar(left, right, m.width)
 	}
 
 	var left string
@@ -909,27 +974,14 @@ func (m aiTUIModel) renderStatusBar() string {
 			if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) {
 				filter = m.objTypes[wi].filter
 			}
-			left = statusKeyStyle.Render("/") + statusStyle.Render(filter+"▍") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Enter") + statusStyle.Render(" apply") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Esc") + statusStyle.Render(" clear")
+			kvs := []hintKV{{"/", filter + "▍"}, {"Enter", "apply"}, {"Esc", "clear"}}
+			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
-			left = statusKeyStyle.Render("↑↓") + statusStyle.Render(" browse") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Enter") + statusStyle.Render(" view output") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("d") + statusStyle.Render(" remove") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("k") + statusStyle.Render(" kill") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("p") + statusStyle.Render(" purge done") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("D") + statusStyle.Render(" kill all") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Space") + statusStyle.Render(" collapse") +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Esc") + statusStyle.Render(" chat")
+			kvs := []hintKV{
+				{"↑↓", "browse"}, {"Enter", "view output"}, {"d", "remove"}, {"k", "kill"},
+				{"p", "purge done"}, {"D", "kill all"}, {"Space", "collapse"}, {"Esc", "chat"},
+			}
+			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else if m.focus != focusChat {
 			wi := int(m.focus) - 1
 			kvs := []hintKV{{"↑↓", "move"}, {"/", "filter"}, {"s", "sort"}, {"r", "refresh"}}
@@ -942,7 +994,7 @@ func (m aiTUIModel) renderStatusBar() string {
 			// a key that the dispatcher would then ignore, or vice versa —
 			// this used to be two hand-kept-in-sync copies of the same
 			// eligibility logic.
-			for _, a := range sidebarActions() {
+			for _, a := range sidebarActions {
 				if hint, _, ok := a.resolve(&m, wi); ok {
 					kvs = append(kvs, hintKV{a.key, hint})
 				}
@@ -954,80 +1006,56 @@ func (m aiTUIModel) renderStatusBar() string {
 			)
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else {
-			browseHint := ""
+			kvs := []hintKV{{"Enter", "send"}}
+			if m.mode == modeCmd {
+				kvs = append(kvs, hintKV{"Tab", "complete"})
+			}
 			if len(m.objTypes) > 0 {
 				if m.mode == modeCmd {
-					browseHint = statusStyle.Render("  ") +
-						statusKeyStyle.Render("Shift+Tab") + statusStyle.Render(" browse")
+					kvs = append(kvs, hintKV{"Shift+Tab", "browse"})
 				} else {
-					browseHint = statusStyle.Render("  ") +
-						statusKeyStyle.Render("Tab") + statusStyle.Render("/") +
-						statusKeyStyle.Render("Shift+Tab") + statusStyle.Render(" browse")
+					kvs = append(kvs, hintKV{"Tab/Shift+Tab", "browse"})
+				}
+			}
+			if m.viewport.TotalLineCount() > m.viewport.Height {
+				kvs = append(kvs, hintKV{"PgUp/PgDn", "scroll"})
+				if !m.follow {
+					kvs = append(kvs, hintKV{"End", "↓bottom"})
 				}
 			}
 			modeHint := "cmd"
 			if m.mode == modeCmd {
 				modeHint = "ask"
 			}
-			tabHint := ""
-			if m.mode == modeCmd {
-				tabHint = statusStyle.Render("  ") +
-					statusKeyStyle.Render("Tab") + statusStyle.Render(" complete")
-			}
-			scrollHint := ""
-			canScroll := m.viewport.TotalLineCount() > m.viewport.Height
-			if canScroll {
-				scrollHint = statusStyle.Render("  ") +
-					statusKeyStyle.Render("PgUp/PgDn") + statusStyle.Render(" scroll")
-				if !m.follow {
-					scrollHint += statusStyle.Render("  ") +
-						statusKeyStyle.Render("End") + statusStyle.Render(" ↓bottom")
-				}
-			}
-			left = statusKeyStyle.Render("Enter") + statusStyle.Render(" send") +
-				tabHint +
-				browseHint +
-				scrollHint +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("Esc") + statusStyle.Render(" "+modeHint) +
-				statusStyle.Render("  ") +
-				statusKeyStyle.Render("/help") + statusStyle.Render(" help")
+			kvs = append(kvs, hintKV{"Esc", modeHint}, hintKV{"/help", "help"})
+			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		}
 	case tuiThinking:
-		left = m.spinner.View() + " " +
-			statusStyle.Render("Thinking…") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
+		prefix := m.spinner.View() + " " + statusStyle.Render("Thinking…") + statusStyle.Render("  ")
+		left = prefix + renderHintList([]hintKV{{"Esc", "cancel"}}, hintWidth-lipgloss.Width(prefix), m.statusScrollOffset)
 	case tuiProposing:
-		left = statusKeyStyle.Render("Enter") + statusStyle.Render(" run") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("e") + statusStyle.Render(" edit") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("c") + statusStyle.Render(" chat") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("Esc") + statusStyle.Render(" discard")
+		kvs := []hintKV{{"Enter", "run"}, {"e", "edit"}, {"c", "chat"}, {"Esc", "discard"}}
+		left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 	case tuiEditing:
-		left = statusKeyStyle.Render("Enter") + statusStyle.Render(" accept") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
+		left = renderHintList([]hintKV{{"Enter", "accept"}, {"Esc", "cancel"}}, hintWidth, m.statusScrollOffset)
 	case tuiExecuting:
-		left = m.spinner.View() + " " +
-			statusStyle.Render("Running…") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
+		prefix := m.spinner.View() + " " + statusStyle.Render("Running…") + statusStyle.Render("  ")
+		left = prefix + renderHintList([]hintKV{{"Esc", "cancel"}}, hintWidth-lipgloss.Width(prefix), m.statusScrollOffset)
 	case tuiPicking:
-		left = statusKeyStyle.Render("↑/↓") + statusStyle.Render(" select") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("Enter") + statusStyle.Render(" confirm") +
-			statusStyle.Render("  ") +
-			statusKeyStyle.Render("Esc") + statusStyle.Render(" cancel")
+		kvs := []hintKV{{"↑/↓", "select"}, {"Enter", "confirm"}, {"Esc", "cancel"}}
+		left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 	}
 
-	pad := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	return padStatusBar(left, right, m.width)
+}
+
+// padStatusBar right-pads left with spaces (at least one) so right lands
+// flush against the terminal's right edge.
+func padStatusBar(left, right string, width int) string {
+	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if pad < 1 {
 		pad = 1
 	}
-
 	return left + strings.Repeat(" ", pad) + right
 }
 
@@ -1096,11 +1124,11 @@ func scrollingText(full string, width, offset int) string {
 	return string(out)
 }
 
+// fmtTokens formats a token count. It is fmtCount minus the "M" case for
+// millions — a per-turn/session token count realistically never reaches
+// that scale, so delegating is safe.
 func fmtTokens(n int) string {
-	if n >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
-	}
-	return fmt.Sprintf("%d", n)
+	return fmtCount(int64(n))
 }
 
 // ---------- Layout helpers ----------
@@ -1231,9 +1259,8 @@ func repeatSpaces(n int) []rune {
 // calls recalcLayout so that viewport height tracks any input-area changes.
 func (m *aiTUIModel) updateInputHeight() {
 	n := m.computeInputLines(m.input.Value())
-	if n != m.inputLines {
-		grew := n > m.inputLines
-		m.inputLines = n
+	if cur := m.input.Height(); n != cur {
+		grew := n > cur
 		m.input.SetHeight(n)
 		if grew {
 			m.resetInputScroll()

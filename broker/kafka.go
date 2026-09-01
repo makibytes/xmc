@@ -53,9 +53,9 @@ func GetRootCommand() *cobra.Command {
 			return extra
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "Server URL (kafka://broker1:9092 or kafka://broker1:9092,broker2:9092)")
-			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("KMC_USER"), "Username for SASL authentication")
-			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("KMC_PASSWORD"), "Password for SASL authentication")
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "KMC_", defaultServer,
+				"Server URL (kafka://broker1:9092 or kafka://broker1:9092,broker2:9092)",
+				"Username for SASL authentication", "Password for SASL authentication")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
 		Topic: topicFactory,
@@ -63,7 +63,8 @@ func GetRootCommand() *cobra.Command {
 		ManageSpec: &cmd.ManageSpec{
 			Objects: []cmd.ObjectType{
 				{
-					Label: "Topics",
+					Label:   "Topics",
+					Publish: true,
 					List: func() ([]backends.ObjectNode, error) {
 						topics, err := kafka.ListTopics(connArgs)
 						if err != nil {
@@ -149,16 +150,8 @@ func GetRootCommand() *cobra.Command {
 				NewTopic: func() (backends.TopicBackend, error) {
 					return kafka.NewTopicAdapter(connArgs)
 				},
-				ListTopics: func(_ context.Context) ([]mcp.TopicInfo, error) {
-					topics, err := kafka.ListTopics(connArgs)
-					if err != nil {
-						return nil, err
-					}
-					out := make([]mcp.TopicInfo, len(topics))
-					for i, t := range topics {
-						out[i] = mcp.TopicInfo{Name: t.Name, Partitions: int64(t.PartitionCount)}
-					}
-					return out, nil
+				ListTopics: func(_ context.Context) ([]backends.TopicInfo, error) {
+					return kafka.ListTopics(connArgs)
 				},
 			}),
 		},

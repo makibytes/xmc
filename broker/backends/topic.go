@@ -43,9 +43,10 @@ type TopicBackend interface {
 	Close() error
 }
 
-// TopicInfo contains basic information about a topic
+// TopicInfo contains basic information about a topic. JSON tags let this type
+// double as the MCP server's topic-listing result (see QueueInfo).
 type TopicInfo struct {
-	Name           string
-	PartitionCount int // Kafka-specific
-	ConsumerGroups int
+	Name           string `json:"name"`
+	PartitionCount int    `json:"partitions,omitempty"` // Kafka-specific
+	ConsumerGroups int    `json:"consumerGroups,omitempty"`
 }

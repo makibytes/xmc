@@ -68,6 +68,7 @@ func GetRootCommand() *cobra.Command {
 			Objects: []cmd.ObjectType{
 				{
 					Label: "Queues",
+					Drain: true,
 					List: func() ([]backends.ObjectNode, error) {
 						queues, err := awspkg.ListQueues(connArgs)
 						if err != nil {
@@ -84,8 +85,14 @@ func GetRootCommand() *cobra.Command {
 					},
 				},
 				{
+					// SNS subscription children are routing pointers (Kind is
+					// the SNS protocol, e.g. "sqs", never "subscription") to
+					// an already-listed SQS queue, so ChildKind stays unset —
+					// no child of this window is ever message-eligible; the
+					// backing queue is independently reachable via Queues.
 					Label:        "Topics",
 					Hierarchical: true,
+					Publish:      true,
 					List: func() ([]backends.ObjectNode, error) {
 						return awspkg.ListTopicsWithSubscriptions(connArgs)
 					},
@@ -109,40 +116,17 @@ func GetRootCommand() *cobra.Command {
 				NewTopic: func() (backends.TopicBackend, error) {
 					return awspkg.NewTopicAdapter(connArgs)
 				},
-				ListQueues: func(_ context.Context) ([]mcp.QueueInfo, error) {
-					queues, err := awspkg.ListQueues(connArgs)
-					if err != nil {
-						return nil, err
-					}
-					out := make([]mcp.QueueInfo, len(queues))
-					for i, q := range queues {
-						out[i] = mcp.QueueInfo{Name: q.Name, MessageCount: q.MessageCount}
-					}
-					return out, nil
+				ListQueues: func(_ context.Context) ([]backends.QueueInfo, error) {
+					return awspkg.ListQueues(connArgs)
 				},
 				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
 					return awspkg.PurgeQueue(connArgs, queue)
 				},
-				ListTopics: func(_ context.Context) ([]mcp.TopicInfo, error) {
-					topics, err := awspkg.ListTopics(connArgs)
-					if err != nil {
-						return nil, err
-					}
-					out := make([]mcp.TopicInfo, len(topics))
-					for i, t := range topics {
-						out[i] = mcp.TopicInfo{Name: t.Name, Partitions: int64(t.PartitionCount)}
-					}
-					return out, nil
+				ListTopics: func(_ context.Context) ([]backends.TopicInfo, error) {
+					return awspkg.ListTopics(connArgs)
 				},
-				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
-					s, err := awspkg.GetQueueStats(connArgs, queue)
-					if err != nil {
-						return nil, err
-					}
-					return &mcp.QueueStats{
-						Name: s.Name, MessageCount: s.MessageCount, ConsumerCount: int64(s.ConsumerCount),
-						EnqueueCount: s.EnqueueCount, DequeueCount: s.DequeueCount,
-					}, nil
+				QueueStats: func(_ context.Context, queue string) (*backends.QueueStats, error) {
+					return awspkg.GetQueueStats(connArgs, queue)
 				},
 			}),
 		},

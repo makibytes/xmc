@@ -215,10 +215,14 @@ func TestNotificationGetsNoResponse(t *testing.T) {
 
 func TestManagementToolsRegisteredWhenHooksProvided(t *testing.T) {
 	s := NewServerFromDeps(Deps{
-		NewQueue:   func() (backends.QueueBackend, error) { return &fakeQueue{}, nil },
-		ListQueues: func(context.Context) ([]QueueInfo, error) { return []QueueInfo{{Name: "q1", MessageCount: 3}}, nil },
+		NewQueue: func() (backends.QueueBackend, error) { return &fakeQueue{}, nil },
+		ListQueues: func(context.Context) ([]backends.QueueInfo, error) {
+			return []backends.QueueInfo{{Name: "q1", MessageCount: 3}}, nil
+		},
 		PurgeQueue: func(context.Context, string) (int64, error) { return 5, nil },
-		QueueStats: func(context.Context, string) (*QueueStats, error) { return &QueueStats{Name: "q1"}, nil },
+		QueueStats: func(context.Context, string) (*backends.QueueStats, error) {
+			return &backends.QueueStats{Name: "q1"}, nil
+		},
 	})
 	resp := call(t, s, "tools/list", nil)
 	b, _ := json.Marshal(resp.Result)

@@ -319,7 +319,7 @@ func runCommandOrRecover(command string, data []byte, out, errw io.Writer) ([]by
 // operator can recover it after a command or send failure. Callers pass
 // cmd.OutOrStdout() so that the output is captured in background-process mode.
 func emitUndelivered(w io.Writer, data []byte) {
-	fmt.Fprint(w, string(data))
+	_, _ = w.Write(data)
 	if shouldAddNewline(w) {
 		fmt.Fprintln(w)
 	}

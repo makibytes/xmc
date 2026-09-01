@@ -140,8 +140,6 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.turnIn = msg.usage.InputTokens
-	m.turnOut = msg.usage.OutputTokens
 	m.totalIn += msg.usage.InputTokens
 	m.totalOut += msg.usage.OutputTokens
 

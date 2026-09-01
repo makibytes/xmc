@@ -22,20 +22,10 @@ func NewSendCommand(backend backends.QueueBackend, resolver TargetResolver, prod
 	}
 
 	registerProduceFlags(cmd)
-
-	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
-	if hasExchRouting {
-		cmd.Use = "send [-e <exchange> [--routing-key <key>] | -q <queue>] [message]"
-		cmd.Flags().StringP("exchange", "e", "", "Exchange to send to")
-		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
-		cmd.Flags().StringP("queue", "q", "", "Queue to send to (AMQP 1.0 v2: /queues/<name>)")
-		cmd.Args = cobra.MaximumNArgs(2)
-	} else if resolver != nil {
-		// Resolver without exchange routing: positional still required.
-		cmd.Args = cobra.MinimumNArgs(1)
-	} else {
-		cmd.Args = cobra.MinimumNArgs(1)
-	}
+	registerProduceExchangeFlags(cmd, exchRouting,
+		"send [-e <exchange> [--routing-key <key>] | -q <queue>] [message]",
+		"Exchange to send to",
+		"Queue to send to (AMQP 1.0 v2: /queues/<name>)")
 
 	return cmd
 }

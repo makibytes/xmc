@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 )
 
@@ -165,8 +165,6 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m.input.Reset()
 		m.histIdx = -1
-		// Unconditional height reset (fixes stale inputLines glitch after multi-line input).
-		m.inputLines = 1
 		m.input.SetHeight(1)
 		m.recalcLayout()
 
@@ -204,8 +202,6 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fixAttempts = 0
 		m.state = tuiThinking
 		m.streamBuf.Reset()
-		m.turnIn = 0
-		m.turnOut = 0
 
 		return m, m.startAIRequest()
 
@@ -219,8 +215,7 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// scroll content out of view when the text wraps to a new visual row.
 		// predictValue avoids calling Update() twice (which caused double-insertion
 		// due to shared backing arrays in the textarea's [][]rune value).
-		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.inputLines {
-			m.inputLines = n
+		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
 			m.input.SetHeight(n)
 			m.recalcLayout()
 		}
@@ -280,8 +275,6 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.transcript.Reset()
 		m.totalIn = 0
 		m.totalOut = 0
-		m.turnIn = 0
-		m.turnOut = 0
 		m.setViewportContent()
 		m.appendTranscript(dimStyle.Render("(conversation reset)") + "\n\n")
 
@@ -483,7 +476,6 @@ func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Freeze with a green ✓ and run (or background if --for).
 		m.appendTranscript(freezeProposal(cmd, "✓", false, m.proposedDestructive))
 		m.input.SetValue("")
-		m.inputLines = 1
 		m.input.SetHeight(1)
 		m.recalcLayout()
 		if commandHasFor(cmd) {
@@ -495,7 +487,6 @@ func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Freeze with a grey ✗ marker and return to idle.
 		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", true, false))
 		m.input.SetValue("")
-		m.inputLines = 1
 		m.input.SetHeight(1)
 		m.state = tuiIdle
 		m.input.Focus()
@@ -503,8 +494,7 @@ func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
-		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.inputLines {
-			m.inputLines = n
+		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
 			m.input.SetHeight(n)
 			m.recalcLayout()
 		}
@@ -655,6 +645,183 @@ func (m *aiTUIModel) startPrompt(kind string, objIdx int, name string) {
 	m.input.Blur()
 }
 
+// promptSpec describes one sidebar prompt kind's key handling: whether it
+// accepts free-text input beyond Enter/Esc (and whether that includes a
+// literal space), and what happens on Enter. confirm returns (m, nil)
+// unmodified-except-for-blur to no-op when the required action/hook isn't
+// wired; the four kinds with no promptSpec entry (i.e. none — every kind
+// startPrompt is ever called with has one) fall through to a plain no-op.
+type promptSpec struct {
+	textEntry  bool // Backspace/Runes accepted (create/send/publish); not delete/purge/purge-subscription, which just confirm a fixed name
+	allowSpace bool // also accept KeySpace as input (send/publish only — a payload may contain spaces; create's name may not)
+	confirm    func(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd)
+}
+
+func promptSpecs() map[string]promptSpec {
+	return map[string]promptSpec{
+		"create":             {textEntry: true, confirm: confirmCreatePrompt},
+		"delete":             {confirm: confirmDeletePrompt},
+		"purge":              {confirm: confirmPurgePrompt},
+		"purge-subscription": {confirm: confirmPurgeSubscriptionPrompt},
+		"send":               {textEntry: true, allowSpace: true, confirm: confirmSendPrompt},
+		"publish":            {textEntry: true, allowSpace: true, confirm: confirmPublishPrompt},
+	}
+}
+
+func confirmCreatePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
+	name := strings.TrimSpace(m.promptName)
+	if name == "" {
+		return m, nil
+	}
+	action := ow.createAction
+	if action == nil {
+		m.promptActive = false
+		m.input.Focus()
+		return m, nil
+	}
+	desc := fmt.Sprintf("▶ create %s \"%s\"", ow.singularLabel(), name)
+	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+	m.promptActive = false
+	initManageAction(action)
+	m.state = tuiExecuting
+	return m, func() tea.Msg {
+		err := action.Run(name)
+		return sideActionMsg{err: err}
+	}
+}
+
+func confirmDeletePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
+	action := ow.deleteAction
+	if action == nil {
+		m.promptActive = false
+		m.input.Focus()
+		return m, nil
+	}
+	desc := fmt.Sprintf("▶ delete %s \"%s\"", ow.singularLabel(), m.promptName)
+	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+	m.promptActive = false
+	initManageAction(action)
+	m.state = tuiExecuting
+	return m, func() tea.Msg {
+		err := action.Run(m.promptName)
+		return sideActionMsg{err: err}
+	}
+}
+
+func confirmPurgePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
+	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
+		m.promptActive = false
+		m.input.Focus()
+		return m, nil
+	}
+	name := m.promptName
+	desc := fmt.Sprintf("▶ purge %s \"%s\"", ow.singularLabel(), name)
+	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+	m.promptActive = false
+	m.state = tuiExecuting
+	purge := m.session.spec.ManageSpec.Purge
+	return m, func() tea.Msg {
+		count, err := purge(name)
+		if err != nil {
+			return sideActionMsg{err: err}
+		}
+		if count > 0 {
+			return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
+		}
+		return sideActionMsg{action: "   └ purged"}
+	}
+}
+
+func confirmPurgeSubscriptionPrompt(m aiTUIModel, _ *objWindow) (tea.Model, tea.Cmd) {
+	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
+		m.promptActive = false
+		m.input.Focus()
+		return m, nil
+	}
+	sub := m.promptName
+	topic := m.promptTarget
+	desc := fmt.Sprintf("▶ purge Subscription \"%s\"", sub)
+	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+	m.promptActive = false
+	m.state = tuiExecuting
+	purge := m.session.spec.ManageSpec.PurgeSubscription
+	return m, func() tea.Msg {
+		count, err := purge(topic, sub)
+		if err != nil {
+			return sideActionMsg{err: err}
+		}
+		if count > 0 {
+			return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
+		}
+		return sideActionMsg{action: "   └ purged"}
+	}
+}
+
+func confirmSendPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
+	payload := m.promptName
+	if payload == "" {
+		return m, nil
+	}
+	target := m.promptTarget
+	useTopic := ow.sendsViaTopic(m.promptNodeKind)
+	verb := "send"
+	if useTopic {
+		verb = "publish"
+	}
+	desc := fmt.Sprintf("▶ %s %s \"%s\"", verb, ow.singularLabel(), target)
+	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+	m.promptActive = false
+	m.state = tuiExecuting
+	session := m.session
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if useTopic {
+			ta, err := session.getTopicAdapter()
+			if err != nil {
+				return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+			}
+			if err := ta.Publish(ctx, backends.PublishOptions{Topic: target, Message: []byte(payload)}); err != nil {
+				return sideActionMsg{err: err}
+			}
+			return sideActionMsg{action: "   └ published"}
+		}
+		qa, err := session.getQueueAdapter()
+		if err != nil {
+			return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+		}
+		if err := qa.Send(ctx, backends.SendOptions{Queue: target, Message: []byte(payload)}); err != nil {
+			return sideActionMsg{err: err}
+		}
+		return sideActionMsg{action: "   └ sent"}
+	}
+}
+
+func confirmPublishPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
+	payload := m.promptName
+	if payload == "" {
+		return m, nil
+	}
+	target := m.promptTarget
+	desc := fmt.Sprintf("▶ publish %s \"%s\"", ow.singularLabel(), target)
+	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+	m.promptActive = false
+	m.state = tuiExecuting
+	session := m.session
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ta, err := session.getTopicAdapter()
+		if err != nil {
+			return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+		}
+		if err := ta.Publish(ctx, backends.PublishOptions{Topic: target, Message: []byte(payload)}); err != nil {
+			return sideActionMsg{err: err}
+		}
+		return sideActionMsg{action: "   └ published"}
+	}
+}
+
 func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	wi := m.promptObjIdx
 	if wi < 0 || wi >= len(m.objTypes) {
@@ -664,237 +831,35 @@ func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	ow := &m.objTypes[wi]
 
-	switch m.promptKind {
-	case "create":
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.promptActive = false
-			m.input.Focus()
-			return m, nil
-		case tea.KeyEnter:
-			name := strings.TrimSpace(m.promptName)
-			if name == "" {
-				return m, nil
-			}
-			action := ow.createAction
-			if action == nil {
-				m.promptActive = false
-				m.input.Focus()
-				return m, nil
-			}
-			desc := fmt.Sprintf("▶ create %s \"%s\"", singular(ow.label), name)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.promptActive = false
-			initManageAction(action)
-			m.state = tuiExecuting
-			return m, func() tea.Msg {
-				err := action.Run(name)
-				return sideActionMsg{err: err}
-			}
-		case tea.KeyBackspace:
-			if len(m.promptName) > 0 {
-				m.promptName = m.promptName[:len(m.promptName)-1]
-			}
-			return m, nil
-		case tea.KeyRunes:
+	spec, ok := promptSpecs()[m.promptKind]
+	if !ok {
+		return m, nil
+	}
+
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.promptActive = false
+		m.input.Focus()
+		return m, nil
+	case tea.KeyEnter:
+		return spec.confirm(m, ow)
+	case tea.KeyBackspace:
+		if spec.textEntry && len(m.promptName) > 0 {
+			m.promptName = m.promptName[:len(m.promptName)-1]
+		}
+		return m, nil
+	case tea.KeyRunes:
+		if spec.textEntry {
 			m.promptName += msg.String()
-			return m, nil
 		}
-
-	case "delete":
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.promptActive = false
-			m.input.Focus()
-			return m, nil
-		case tea.KeyEnter:
-			action := ow.deleteAction
-			if action == nil {
-				m.promptActive = false
-				m.input.Focus()
-				return m, nil
-			}
-			desc := fmt.Sprintf("▶ delete %s \"%s\"", singular(ow.label), m.promptName)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.promptActive = false
-			initManageAction(action)
-			m.state = tuiExecuting
-			return m, func() tea.Msg {
-				err := action.Run(m.promptName)
-				return sideActionMsg{err: err}
-			}
-		}
-
-	case "purge":
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.promptActive = false
-			m.input.Focus()
-			return m, nil
-		case tea.KeyEnter:
-			if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
-				m.promptActive = false
-				m.input.Focus()
-				return m, nil
-			}
-			name := m.promptName
-			desc := fmt.Sprintf("▶ purge %s \"%s\"", singular(ow.label), name)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.promptActive = false
-			m.state = tuiExecuting
-			purge := m.session.spec.ManageSpec.Purge
-			return m, func() tea.Msg {
-				count, err := purge(name)
-				if err != nil {
-					return sideActionMsg{err: err}
-				}
-				if count > 0 {
-					return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
-				}
-				return sideActionMsg{action: "   └ purged"}
-			}
-		}
-
-	case "purge-subscription":
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.promptActive = false
-			m.input.Focus()
-			return m, nil
-		case tea.KeyEnter:
-			if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
-				m.promptActive = false
-				m.input.Focus()
-				return m, nil
-			}
-			sub := m.promptName
-			topic := m.promptTarget
-			desc := fmt.Sprintf("▶ purge Subscription \"%s\"", sub)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.promptActive = false
-			m.state = tuiExecuting
-			purge := m.session.spec.ManageSpec.PurgeSubscription
-			return m, func() tea.Msg {
-				count, err := purge(topic, sub)
-				if err != nil {
-					return sideActionMsg{err: err}
-				}
-				if count > 0 {
-					return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
-				}
-				return sideActionMsg{action: "   └ purged"}
-			}
-		}
-
-	case "send":
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.promptActive = false
-			m.input.Focus()
-			return m, nil
-		case tea.KeyEnter:
-			payload := m.promptName
-			if payload == "" {
-				return m, nil
-			}
-			target := m.promptTarget
-			useTopic := sidebarSendViaTopic(ow.label, m.promptNodeKind)
-			verb := "send"
-			if useTopic {
-				verb = "publish"
-			}
-			desc := fmt.Sprintf("▶ %s %s \"%s\"", verb, singular(ow.label), target)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.promptActive = false
-			m.state = tuiExecuting
-			session := m.session
-			return m, func() tea.Msg {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if useTopic {
-					ta, err := session.getTopicAdapter()
-					if err != nil {
-						return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
-					}
-					if err := ta.Publish(ctx, backends.PublishOptions{Topic: target, Message: []byte(payload)}); err != nil {
-						return sideActionMsg{err: err}
-					}
-					return sideActionMsg{action: "   └ published"}
-				}
-				qa, err := session.getQueueAdapter()
-				if err != nil {
-					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
-				}
-				if err := qa.Send(ctx, backends.SendOptions{Queue: target, Message: []byte(payload)}); err != nil {
-					return sideActionMsg{err: err}
-				}
-				return sideActionMsg{action: "   └ sent"}
-			}
-		case tea.KeyBackspace:
-			if len(m.promptName) > 0 {
-				m.promptName = m.promptName[:len(m.promptName)-1]
-			}
-			return m, nil
-		case tea.KeyRunes, tea.KeySpace:
+		return m, nil
+	case tea.KeySpace:
+		if spec.textEntry && spec.allowSpace {
 			m.promptName += msg.String()
-			return m, nil
 		}
-
-	case "publish":
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.promptActive = false
-			m.input.Focus()
-			return m, nil
-		case tea.KeyEnter:
-			payload := m.promptName
-			if payload == "" {
-				return m, nil
-			}
-			target := m.promptTarget
-			desc := fmt.Sprintf("▶ publish %s \"%s\"", singular(ow.label), target)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.promptActive = false
-			m.state = tuiExecuting
-			session := m.session
-			return m, func() tea.Msg {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				ta, err := session.getTopicAdapter()
-				if err != nil {
-					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
-				}
-				if err := ta.Publish(ctx, backends.PublishOptions{Topic: target, Message: []byte(payload)}); err != nil {
-					return sideActionMsg{err: err}
-				}
-				return sideActionMsg{action: "   └ published"}
-			}
-		case tea.KeyBackspace:
-			if len(m.promptName) > 0 {
-				m.promptName = m.promptName[:len(m.promptName)-1]
-			}
-			return m, nil
-		case tea.KeyRunes, tea.KeySpace:
-			m.promptName += msg.String()
-			return m, nil
-		}
+		return m, nil
 	}
 	return m, nil
-}
-
-// singular strips a trailing "s" from a plural label for display purposes
-// (e.g. "Queues" → "Queue", "Addresses" → "Address").
-func singular(label string) string {
-	if s, ok := irregularPlurals[label]; ok {
-		return s
-	}
-	return strings.TrimSuffix(label, "s")
-}
-
-// irregularPlurals maps plural labels to their singular form for labels that
-// don't follow the simple "trim trailing s" rule.
-var irregularPlurals = map[string]string{
-	"Addresses": "Address",
 }
 
 // initManageAction calls SetupFlags on a throwaway command to initialise
@@ -1016,13 +981,26 @@ func (m aiTUIModel) startLoadObjects() tea.Cmd {
 			windows: make([][]backends.ObjectNode, len(fns)),
 			errs:    make([]error, len(fns)),
 		}
+		// Each window's List() is an independent broker call; fetch them
+		// concurrently so refresh latency is the slowest window instead of
+		// their sum. Each goroutine writes only its own index of
+		// msg.windows/msg.errs, so no lock is needed, and a window's own
+		// error never aborts the others — g.Go always returns nil, since a
+		// per-window failure is reported via msg.errs[i], not by failing the
+		// whole refresh.
+		var g errgroup.Group
 		for i, f := range fns {
-			if f.fn != nil {
+			if f.fn == nil {
+				continue
+			}
+			g.Go(func() error {
 				nodes, err := f.fn()
 				msg.windows[i] = nodes
 				msg.errs[i] = err
-			}
+				return nil
+			})
 		}
+		_ = g.Wait()
 		return msg
 	}
 }
@@ -1055,6 +1033,7 @@ func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 		}
 		if i < len(msg.windows) {
 			m.objTypes[i].nodes = msg.windows[i]
+			m.objTypes[i].dataGen++ // invalidate getFilteredSortedNodes's cache
 		}
 		if i < len(msg.errs) {
 			m.objTypes[i].err = msg.errs[i]
@@ -1176,7 +1155,7 @@ func (m *aiTUIModel) moveSel(delta int) {
 	if len(rows) == 0 {
 		return
 	}
-	m.objTypes[wi].sel = clampInt(m.objTypes[wi].sel+delta, 0, len(rows)-1)
+	m.objTypes[wi].sel = min(max(m.objTypes[wi].sel+delta, 0), len(rows)-1)
 }
 
 // selectedNode returns the full ObjectNode for the currently selected row in
@@ -1244,53 +1223,10 @@ func (m *aiTUIModel) selectedChildNode() (node backends.ObjectNode, parentName s
 	return row.node, row.parentName, true
 }
 
-// sidebarWindowSupportsSRP reports whether Purge/Send/Receive apply, in
-// principle, to a window with this label. Per-node Kind gating (Artemis
-// Addresses) is applied separately via sidebarPurgeReceiveAllowed/sidebarSendViaTopic.
-func sidebarWindowSupportsSRP(label string) bool {
-	switch label {
-	case "Queues", "Streams", "Addresses", "Exchanges":
-		return true
-	}
-	return false
-}
-
-// sidebarPurgeReceiveAllowed reports whether Purge/Receive apply to node.
-// Artemis's Addresses window and RabbitMQ's Exchanges window never allow
-// them, regardless of Kind: both are routing entities with no reliable 1:1
-// mapping to a queue of the same name — an address is merely the default
-// when a queue is created without an explicit --address (and may equally be
-// bound to differently-named or multiple queues), and an exchange routes to
-// whatever queues its bindings name. Purging/receiving "by address/exchange
-// name" would then silently target the wrong queue (or nothing). Use the
-// Queues window, which purges/receives by an actual queue name, instead.
-func sidebarPurgeReceiveAllowed(label string, _ backends.ObjectNode) bool {
-	if label == "Addresses" || label == "Exchanges" {
-		return false
-	}
-	return true // Queues/Streams — already gated by sidebarWindowSupportsSRP
-}
-
-// sidebarSendViaTopic reports whether Send should dispatch through
-// TopicBackend.Publish instead of QueueBackend.Send. True for a
-// pure-MULTICAST Artemis address (no anycast component) or any RabbitMQ
-// exchange (always routing-only); everything else (Queues, Streams,
-// anycast/any-multi/unknown-Kind Addresses) sends via the queue adapter.
-func sidebarSendViaTopic(label, kind string) bool {
-	return (label == "Addresses" && kind == "multicast") || label == "Exchanges"
-}
-
-// sidebarSubscriptionEligible reports whether a Topics-window child node is a
-// genuine message-storing subscription (Purge/peek/Receive apply), as opposed
-// to a routing pointer. Azure and Google both tag real subscriptions with
-// Kind == "subscription"; AWS's SNS subscription children use Kind == <SNS
-// protocol> (e.g. "sqs") instead, so this naturally and correctly excludes
-// them without any broker-identity check — their backing SQS queue is
-// already independently reachable (and already S/R/P-enabled) via the flat
-// Queues window.
-func sidebarSubscriptionEligible(label, kind string) bool {
-	return label == "Topics" && kind == "subscription"
-}
+// Sidebar S/P/R/peek/subscription eligibility is declared per broker on
+// ObjectType (cmd/manage.go) and read off the focused objWindow via its
+// sendEligible/sendsViaTopic/subscriptionEligible/singularLabel methods
+// (cmd/aitui.go) — see those for the rules this used to hand-match on Label.
 
 // isNoMessage reports whether err means "the source was empty this read" —
 // either the explicit sentinel or a bare receive/poll timeout. The AMQP
@@ -1335,7 +1271,7 @@ func (m *aiTUIModel) toggleInputMode() {
 	// header, so the active mode is unmistakable everywhere at once.
 	m.setPromptTheme(m.theme())
 	// Re-layout: prompt width may have changed (e.g. "ask> " vs "awsmc> ").
-	// updateInputHeight recomputes inputLines for the new prompt width, then calls recalcLayout.
+	// updateInputHeight recomputes the input area's height for the new prompt width, then calls recalcLayout.
 	m.updateInputHeight()
 }
 
@@ -1470,7 +1406,7 @@ func (m aiTUIModel) copyIdxForLine(clickedLine int) int {
 // isMessageReadCommand reports whether cmd is one that consumes / peeks
 // messages and therefore produces payload output on stdout.
 func isMessageReadCommand(cmd string) bool {
-	cmd = stripKnownBinaryPrefix(cmd)
+	cmd = stripBinaryPrefix(cmd)
 	verbs := []string{"receive ", "receive\n", "get ", "get\n", "peek ", "peek\n", "subscribe ", "subscribe\n"}
 	cmd = strings.TrimSpace(cmd)
 	for _, v := range verbs {
@@ -1484,24 +1420,6 @@ func isMessageReadCommand(cmd string) bool {
 		return true
 	}
 	return false
-}
-
-func stripKnownBinaryPrefix(cmd string) string {
-	cmd = strings.TrimSpace(cmd)
-	if cmd == "" {
-		return cmd
-	}
-	fields := strings.Fields(cmd)
-	if len(fields) < 2 {
-		return cmd
-	}
-	first := strings.TrimPrefix(filepath.Base(fields[0]), "./")
-	switch first {
-	case "xmc", "amc", "awsmc", "azmc", "gmc", "imc", "kmc", "mmc", "nmc", "pmc", "rmc", "redmc":
-		return strings.Join(fields[1:], " ")
-	default:
-		return cmd
-	}
 }
 
 // renderMessagePayload renders a message payload (or multiple NDJSON records)

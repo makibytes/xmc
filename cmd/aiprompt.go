@@ -189,7 +189,7 @@ Never use "body", "payload", or "message" — the exact field names are:
 
 ## Strict command syntax rules
 
-- Do NOT prefix with the binary name: write "send q1 hi", NOT "rmc send q1 hi"
+- Do NOT prefix with the binary name: write "send q1 hi", NOT "%s send q1 hi"
 - By default the first positional is the destination, the second is the message payload
 - With -e <exchange> the single positional is the message body (no routing key); use --routing-key for direct/topic exchanges — see broker docs below for details
 - Use ONLY the exact flags listed below — do not invent flags
@@ -202,7 +202,7 @@ Never use "body", "payload", or "message" — the exact field names are:
 ## Destructive operations
 
 ONLY these commands are destructive (require explicit user confirmation):
-  manage delete-queue, manage delete-topic, manage delete-exchange, manage unbind-queue, manage purge
+  manage delete-queue, manage delete-topic, manage delete-exchange, manage delete-address, manage delete-consumer-group, manage unbind-queue, manage purge
 
 All other commands — including receive, peek, move, forward, subscribe (even with -n 0 to drain a queue) — are NON-DESTRUCTIVE read or relay operations. Do NOT warn about or ask confirmation for these.
 
@@ -218,7 +218,7 @@ Available commands and flags:
 - If impossible: # cannot: <brief reason>
 - If ambiguous: # ask: <clarifying question>
 - No other "#" comment, confirmation question, or explanation is allowed — "# cannot:" and "# ask:" are the only two.
-`, caps, brokerSection, connectionSection, topologySection, aliasesSection)
+`, binBaseName(), caps, brokerSection, connectionSection, topologySection, aliasesSection)
 }
 
 func extractCommand(response string) string {

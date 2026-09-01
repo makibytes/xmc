@@ -50,10 +50,58 @@ func (a *BindAction) targetNoun() string {
 // broker fills in its own set (e.g. RabbitMQ: Queues, Exchanges; Kafka: Topics,
 // Consumer Groups). Hierarchical types (exchange→binding→queue) populate
 // Children on the returned nodes when expanded.
+//
+// The fields below (Singular, Drain, SendViaTopic, Publish, ChildKind) are
+// what the AI TUI sidebar's P/S/R/peek hotkeys key off of, declared here so a
+// new broker (or a new object type on an existing one) gets correct sidebar
+// behaviour automatically — the shared UI code (cmd/aikeys.go,
+// cmd/aisidebaractions.go) reads these fields instead of matching on Label,
+// so it never needs a broker-specific case added when a 12th broker or a new
+// object type arrives.
 type ObjectType struct {
 	Label        string                                // window title: "Queues", "Exchanges", "Subscriptions"
 	Hierarchical bool                                  // true → expand hotkey reveals Children as a tree
 	List         func() ([]backends.ObjectNode, error) // returns the current objects
+
+	// Singular overrides the display form used in sidebar action transcripts
+	// (e.g. `▶ create Address "x"`). Defaults to trimming a trailing "s" off
+	// Label; set this for irregular plurals ("Addresses" → "Address").
+	Singular string
+
+	// Drain declares whether Purge/Peek/Receive may target this window's
+	// top-level rows by name — i.e. whether a row genuinely IS a same-named
+	// queue. False for routing entities with no reliable 1:1 mapping to a
+	// queue (Artemis Addresses, RabbitMQ Exchanges): purging or receiving "by
+	// address/exchange name" would silently target the wrong queue (or
+	// nothing) — the Queues window, which purges/receives by an actual queue
+	// name, is used instead. "S" (send) is still available on a non-Drain
+	// window when SendViaTopic is set.
+	Drain bool
+
+	// SendViaTopic, when non-nil, routes "S" (send) through
+	// TopicBackend.Publish instead of QueueBackend.Send for this window,
+	// deciding per node from its Kind — e.g. a RabbitMQ Exchange always
+	// returns true (always routing-only); an Artemis Address returns true
+	// only for a pure-MULTICAST node (anycast/multi/unknown Kind sends via
+	// the queue adapter instead). Leave nil for a window that always sends
+	// via the queue adapter (Queues, Streams) or never sends via "S" at all
+	// (Topics, which publishes via "P" instead — see Publish).
+	SendViaTopic func(nodeKind string) bool
+
+	// Publish declares that "P" on a top-level row of this window means
+	// publish (Topics windows publishing to the selected topic) rather than
+	// purge. A window with Publish true is expected to have Drain false at
+	// the top level; its children may still be drain-eligible via ChildKind.
+	Publish bool
+
+	// ChildKind is the ObjectNode.Kind value that marks a child row (in a
+	// Hierarchical window) as a genuine message-storing object — eligible
+	// for peek/receive/purge via "P" (purge-subscription), "p"/"m" (peek),
+	// and "R" (receive) — as opposed to a routing pointer (e.g. AWS's SNS
+	// subscription children, which use the SNS protocol as Kind instead and
+	// are reachable via the flat Queues window). Empty means no child of
+	// this window is ever message-eligible.
+	ChildKind string
 }
 
 // SidebarActions returns the create and delete ManageAction for a given object

@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"context"
 	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -34,7 +35,7 @@ func GetRootCommand() *cobra.Command {
 			return pulsarpkg.ResolveTarget(t.IsTopic, t.To, tenant, namespace, nonPersistent)
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs, "PMC_", defaultServer)
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "PMC_", defaultServer, "Server URL", "Username", "Password")
 			c.PersistentFlags().StringVar(&connArgs.Token, "token", os.Getenv("PMC_TOKEN"), "Authentication token (mutually exclusive with --user/--password)")
 			c.PersistentFlags().StringVar(&tenant, "tenant", "public", "Pulsar tenant")
 			c.PersistentFlags().StringVar(&namespace, "namespace", "default", "Pulsar namespace")
@@ -50,7 +51,8 @@ func GetRootCommand() *cobra.Command {
 			},
 			Objects: []cmd.ObjectType{
 				{
-					Label: "Topics",
+					Label:   "Topics",
+					Publish: true,
 					List: func() ([]backends.ObjectNode, error) {
 						topics, err := pulsarpkg.ListTopics(connArgs, adminPort, tenant, namespace, nonPersistent)
 						if err != nil {
@@ -90,6 +92,9 @@ func GetRootCommand() *cobra.Command {
 				},
 				NewTopic: func() (backends.TopicBackend, error) {
 					return pulsarpkg.NewTopicAdapter(connArgs)
+				},
+				ListTopics: func(_ context.Context) ([]backends.TopicInfo, error) {
+					return pulsarpkg.ListTopics(connArgs, adminPort, tenant, namespace, nonPersistent)
 				},
 			}),
 		},

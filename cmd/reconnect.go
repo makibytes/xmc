@@ -54,6 +54,13 @@ func isConnectionError(err error) bool {
 		return false
 	}
 
+	// The single most common result in a polling loop (forward, bridge, --for):
+	// "nothing to read this poll" is not a connection error. Checked before
+	// the substring scan below, which it would otherwise run on every poll.
+	if errors.Is(err, backends.ErrNoMessageAvailable) {
+		return false
+	}
+
 	// Standard I/O sentinels produced when a connection is closed or broken.
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
@@ -109,16 +116,12 @@ func isConnectionError(err error) bool {
 
 // --- generic reconnecting adapter ---
 
-// Closer is satisfied by any adapter with a Close method.
-type Closer interface {
-	Close() error
-}
-
 // reconnectingAdapter provides shared reconnect logic for any adapter type.
 // The factory is called to create a fresh adapter on initial connect and on
 // reconnection. Embed this in a type-specific wrapper that adds the domain
-// methods (Send/Receive, Publish/Subscribe).
-type reconnectingAdapter[T Closer] struct {
+// methods (Send/Receive, Publish/Subscribe). Closeable (declared in ping.go)
+// is reused here rather than redeclaring the same one-method interface.
+type reconnectingAdapter[T Closeable] struct {
 	mu      sync.Mutex
 	factory func() (T, error)
 	opts    ReconnectOptions
@@ -209,6 +212,61 @@ func (r *reconnectingAdapter[T]) retryOp(ctx context.Context, desc string, op fu
 	}
 }
 
+// adapterDo runs op against the connected adapter of r, retrying with
+// reconnect backoff if op fails with a connection error. Shared by the
+// wrapper methods that return only an error (Send, Publish).
+func adapterDo[T Closeable](ctx context.Context, r *reconnectingAdapter[T], desc string, op func(T) error) error {
+	r.mu.Lock()
+	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	adapter := r.adapter
+	r.mu.Unlock()
+
+	err := op(adapter)
+	if err == nil || !isConnectionError(err) {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.retryOp(ctx, desc, func() error {
+		return op(r.adapter)
+	})
+}
+
+// adapterCall runs op against the connected adapter of r, retrying with
+// reconnect backoff if op fails with a connection error. Shared by the
+// wrapper methods that return a value plus an error (Receive, Request,
+// Subscribe). Methods can't take type parameters, so this — like adapterDo —
+// is a free function rather than a method on reconnectingAdapter.
+func adapterCall[T Closeable, R any](ctx context.Context, r *reconnectingAdapter[T], desc string, op func(T) (R, error)) (R, error) {
+	r.mu.Lock()
+	if err := r.ensureConnected(); err != nil {
+		r.mu.Unlock()
+		var zero R
+		return zero, err
+	}
+	adapter := r.adapter
+	r.mu.Unlock()
+
+	result, err := op(adapter)
+	if err == nil || !isConnectionError(err) {
+		return result, err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var final R
+	retryErr := r.retryOp(ctx, desc, func() error {
+		var innerErr error
+		final, innerErr = op(r.adapter)
+		return innerErr
+	})
+	return final, retryErr
+}
+
 // --- reconnecting queue adapter ---
 
 // reconnectingQueue wraps a QueueAdapterFactory and transparently reconnects
@@ -218,49 +276,15 @@ type reconnectingQueue struct {
 }
 
 func (r *reconnectingQueue) Send(ctx context.Context, opts backends.SendOptions) error {
-	r.mu.Lock()
-	if err := r.ensureConnected(); err != nil {
-		r.mu.Unlock()
-		return err
-	}
-	adapter := r.adapter
-	r.mu.Unlock()
-
-	err := adapter.Send(ctx, opts)
-	if err == nil || !isConnectionError(err) {
-		return err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.retryOp(ctx, fmt.Sprintf("send to %s", opts.Queue), func() error {
-		return r.adapter.Send(ctx, opts)
+	return adapterDo(ctx, &r.reconnectingAdapter, fmt.Sprintf("send to %s", opts.Queue), func(a backends.QueueBackend) error {
+		return a.Send(ctx, opts)
 	})
 }
 
 func (r *reconnectingQueue) Receive(ctx context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
-	r.mu.Lock()
-	if err := r.ensureConnected(); err != nil {
-		r.mu.Unlock()
-		return nil, err
-	}
-	adapter := r.adapter
-	r.mu.Unlock()
-
-	msg, err := adapter.Receive(ctx, opts)
-	if err == nil || !isConnectionError(err) {
-		return msg, err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var result *backends.Message
-	retryErr := r.retryOp(ctx, fmt.Sprintf("receive from %s", opts.Queue), func() error {
-		var innerErr error
-		result, innerErr = r.adapter.Receive(ctx, opts)
-		return innerErr
+	return adapterCall(ctx, &r.reconnectingAdapter, fmt.Sprintf("receive from %s", opts.Queue), func(a backends.QueueBackend) (*backends.Message, error) {
+		return a.Receive(ctx, opts)
 	})
-	return result, retryErr
 }
 
 // Request implements backends.RequestReplyBackend by dispatching through
@@ -270,28 +294,9 @@ func (r *reconnectingQueue) Receive(ctx context.Context, opts backends.ReceiveOp
 // the broker-neutral default. Like Send, a retried request is re-sent, so
 // reconnect keeps at-least-once semantics.
 func (r *reconnectingQueue) Request(ctx context.Context, opts backends.RequestOptions) (*backends.Message, error) {
-	r.mu.Lock()
-	if err := r.ensureConnected(); err != nil {
-		r.mu.Unlock()
-		return nil, err
-	}
-	adapter := r.adapter
-	r.mu.Unlock()
-
-	msg, err := backends.Request(ctx, adapter, opts)
-	if err == nil || !isConnectionError(err) {
-		return msg, err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var result *backends.Message
-	retryErr := r.retryOp(ctx, fmt.Sprintf("request to %s", opts.Address), func() error {
-		var innerErr error
-		result, innerErr = backends.Request(ctx, r.adapter, opts)
-		return innerErr
+	return adapterCall(ctx, &r.reconnectingAdapter, fmt.Sprintf("request to %s", opts.Address), func(a backends.QueueBackend) (*backends.Message, error) {
+		return backends.Request(ctx, a, opts)
 	})
-	return result, retryErr
 }
 
 // Browse implements backends.BrowseBackend by delegating to the underlying
@@ -322,49 +327,15 @@ type reconnectingTopic struct {
 }
 
 func (r *reconnectingTopic) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	r.mu.Lock()
-	if err := r.ensureConnected(); err != nil {
-		r.mu.Unlock()
-		return err
-	}
-	adapter := r.adapter
-	r.mu.Unlock()
-
-	err := adapter.Publish(ctx, opts)
-	if err == nil || !isConnectionError(err) {
-		return err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.retryOp(ctx, fmt.Sprintf("publish to %s", opts.Topic), func() error {
-		return r.adapter.Publish(ctx, opts)
+	return adapterDo(ctx, &r.reconnectingAdapter, fmt.Sprintf("publish to %s", opts.Topic), func(a backends.TopicBackend) error {
+		return a.Publish(ctx, opts)
 	})
 }
 
 func (r *reconnectingTopic) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	r.mu.Lock()
-	if err := r.ensureConnected(); err != nil {
-		r.mu.Unlock()
-		return nil, err
-	}
-	adapter := r.adapter
-	r.mu.Unlock()
-
-	msg, err := adapter.Subscribe(ctx, opts)
-	if err == nil || !isConnectionError(err) {
-		return msg, err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var result *backends.Message
-	retryErr := r.retryOp(ctx, fmt.Sprintf("subscribe on %s", opts.Topic), func() error {
-		var innerErr error
-		result, innerErr = r.adapter.Subscribe(ctx, opts)
-		return innerErr
+	return adapterCall(ctx, &r.reconnectingAdapter, fmt.Sprintf("subscribe on %s", opts.Topic), func(a backends.TopicBackend) (*backends.Message, error) {
+		return a.Subscribe(ctx, opts)
 	})
-	return result, retryErr
 }
 
 // --- factory wrappers ---

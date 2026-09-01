@@ -84,9 +84,8 @@ func GetRootCommand() *cobra.Command {
 			return extra
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			c.PersistentFlags().StringVarP(&connArgs.Server, "server", "s", defaultServer, "MQTT broker URL")
-			c.PersistentFlags().StringVarP(&connArgs.User, "user", "u", os.Getenv("MMC_USER"), "Username")
-			c.PersistentFlags().StringVarP(&connArgs.Password, "password", "p", os.Getenv("MMC_PASSWORD"), "Password")
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "MMC_", defaultServer,
+				"MQTT broker URL", "Username", "Password")
 			c.PersistentFlags().StringVar(&connArgs.ClientID, "client-id", "", "MQTT client ID (auto-generated if empty)")
 			// Named --queue-group (not --group) to avoid clashing with the
 			// per-command -g/--group consumer-group flag on subscribe/forward/
@@ -103,8 +102,8 @@ func GetRootCommand() *cobra.Command {
 				ServerName:    "xmc-mqtt",
 				ServerVersion: cmd.Version(),
 				Target:        connArgs.Server,
-				NewQueue: newQueue,
-				NewTopic: newTopic,
+				NewQueue:      newQueue,
+				NewTopic:      newTopic,
 			}),
 		},
 	})

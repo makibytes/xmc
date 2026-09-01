@@ -15,6 +15,8 @@ type TopicAdapter struct {
 	connArgs   ConnArguments
 	connection *amqp.Conn
 	session    *amqp.Session
+	sendCache  amqpcommon.SenderCache
+	recvCache  amqpcommon.ReceiverCache
 }
 
 // NewTopicAdapter creates a new Artemis topic adapter
@@ -52,7 +54,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 		TTL:           opts.TTL,
 	}
 
-	return SendMessage(ctx, a.session, args)
+	return SendMessage(ctx, a.session, &a.sendCache, args)
 }
 
 // Subscribe implements backends.TopicBackend
@@ -76,7 +78,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		Wait:                opts.Wait,
 	}
 
-	message, err := ReceiveMessage(ctx, a.session, args)
+	message, err := ReceiveMessage(ctx, a.session, &a.recvCache, args)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +91,8 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 
 // Close implements backends.TopicBackend
 func (a *TopicAdapter) Close() error {
+	_ = a.sendCache.Close()
+	_ = a.recvCache.Close()
 	if a.session != nil {
 		a.session.Close(context.Background())
 	}

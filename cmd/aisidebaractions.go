@@ -29,24 +29,25 @@ type sidebarAction struct {
 	resolve func(m *aiTUIModel, wi int) (hint string, run func() (tea.Model, tea.Cmd), ok bool)
 }
 
-// sidebarActions returns the ordered table of sidebar object hotkeys. Order
+// sidebarActions is the ordered table of sidebar object hotkeys. Order
 // determines status-bar hint order, matching the pre-refactor visual layout:
-// create, delete, purge/publish, peek, metadata, send, receive.
-func sidebarActions() []sidebarAction {
-	return []sidebarAction{
-		{"c", resolveCreateAction},
-		{"d", resolveDeleteAction},
-		{"P", resolvePurgePublishAction},
-		{"p", resolvePeekAction(false)},
-		{"m", resolvePeekAction(true)},
-		{"S", resolveSendAction},
-		{"R", resolveReceiveAction},
-	}
+// create, delete, purge/publish, peek, metadata, send, receive. Static — the
+// resolve funcs close over no per-call state — so it's built once rather
+// than reallocated (with fresh resolveReadAction closures) on every call;
+// renderStatusBar ranges over it on every frame.
+var sidebarActions = []sidebarAction{
+	{"c", resolveCreateAction},
+	{"d", resolveDeleteAction},
+	{"P", resolvePurgePublishAction},
+	{"p", resolveReadAction("peek", "peek", false, backends.VerbosityQuiet, payloadOnlyRender)},
+	{"m", resolveReadAction("metadata", "peek metadata", false, backends.VerbosityVerbose, withMetadataRender)},
+	{"S", resolveSendAction},
+	{"R", resolveReadAction("receive", "receive", true, backends.VerbosityQuiet, payloadOnlyRender)},
 }
 
 // lookupSidebarAction finds the action bound to key, if any.
 func lookupSidebarAction(key string) (sidebarAction, bool) {
-	for _, a := range sidebarActions() {
+	for _, a := range sidebarActions {
 		if a.key == key {
 			return a, true
 		}
@@ -92,11 +93,11 @@ func resolvePurgePublishAction(m *aiTUIModel, wi int) (string, func() (tea.Model
 	if wi < 0 || wi >= len(m.objTypes) {
 		return "", nil, false
 	}
-	label := m.objTypes[wi].label
+	ow := m.objTypes[wi]
 
-	if label == "Topics" {
+	if ow.publish {
 		if child, parentName, ok := m.selectedChildNode(); ok {
-			if !sidebarSubscriptionEligible(label, child.Kind) || child.Name == "" {
+			if !ow.subscriptionEligible(child.Kind) || child.Name == "" {
 				return "", nil, false
 			}
 			if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
@@ -121,14 +122,14 @@ func resolvePurgePublishAction(m *aiTUIModel, wi int) (string, func() (tea.Model
 		}, true
 	}
 
-	if !sidebarWindowSupportsSRP(label) {
+	if !ow.sendEligible() {
 		return "", nil, false
 	}
 	node, ok := m.selectedTopLevelNode()
 	if !ok || node.Name == "" {
 		return "", nil, false
 	}
-	if !sidebarPurgeReceiveAllowed(label, node) {
+	if !ow.drain {
 		return "", nil, false
 	}
 	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
@@ -141,10 +142,10 @@ func resolvePurgePublishAction(m *aiTUIModel, wi int) (string, func() (tea.Model
 	}, true
 }
 
-// resolveSendAction: "S" applies to any SRP-eligible window (Queues, Streams,
+// resolveSendAction: "S" applies to any send-eligible window (Queues, Streams,
 // Addresses, Exchanges) on a selected top-level row.
 func resolveSendAction(m *aiTUIModel, wi int) (string, func() (tea.Model, tea.Cmd), bool) {
-	if wi < 0 || wi >= len(m.objTypes) || !sidebarWindowSupportsSRP(m.objTypes[wi].label) {
+	if wi < 0 || wi >= len(m.objTypes) || !m.objTypes[wi].sendEligible() {
 		return "", nil, false
 	}
 	node, ok := m.selectedTopLevelNode()
@@ -160,124 +161,43 @@ func resolveSendAction(m *aiTUIModel, wi int) (string, func() (tea.Model, tea.Cm
 	}, true
 }
 
-// resolveReceiveAction: "R" applies to a selected Subscription child (Topics
-// window, Azure/Google only) or a top-level row on a purge/receive-eligible
-// window (Queues/Streams — never Addresses/Exchanges).
-func resolveReceiveAction(m *aiTUIModel, wi int) (string, func() (tea.Model, tea.Cmd), bool) {
-	if wi < 0 || wi >= len(m.objTypes) {
-		return "", nil, false
-	}
-	label := m.objTypes[wi].label
-
-	if child, parentName, ok := m.selectedChildNode(); ok {
-		if !sidebarSubscriptionEligible(label, child.Kind) || child.Name == "" {
-			return "", nil, false
-		}
-		childName := child.Name
-		return "receive", func() (tea.Model, tea.Cmd) {
-			desc := fmt.Sprintf("▶ receive Subscription \"%s\"", childName)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.state = tuiExecuting
-			topic, sub, session := parentName, childName, m.session
-			return *m, func() tea.Msg {
-				ta, err := session.getTopicAdapter()
-				if err != nil {
-					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
-				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				msg, err := ta.Subscribe(ctx, backends.SubscribeOptions{
-					Topic:       topic,
-					Extra:       map[string]string{"subscription": sub},
-					Acknowledge: true,
-					Timeout:     1,
-					Wait:        false,
-				})
-				if err != nil {
-					if isNoMessage(err) {
-						return sideActionMsg{action: "   └ (no messages available)"}
-					}
-					return sideActionMsg{err: err}
-				}
-				return formatMessagePayloadForSideAction(msg)
-			}
-		}, true
-	}
-
-	if !sidebarWindowSupportsSRP(label) {
-		return "", nil, false
-	}
-	node, ok := m.selectedTopLevelNode()
-	if !ok || node.Name == "" {
-		return "", nil, false
-	}
-	if !sidebarPurgeReceiveAllowed(label, node) {
-		return "", nil, false
-	}
-	name := node.Name
-	return "receive", func() (tea.Model, tea.Cmd) {
-		desc := fmt.Sprintf("▶ receive %s \"%s\"", singular(label), name)
-		m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-		m.state = tuiExecuting
-		queue := name
-		return *m, func() tea.Msg {
-			qa, err := m.session.getQueueAdapter()
-			if err != nil {
-				return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			msg, err := qa.Receive(ctx, backends.ReceiveOptions{
-				Queue:       queue,
-				Acknowledge: true,
-				Timeout:     1,
-				Wait:        false,
-			})
-			if err != nil {
-				if isNoMessage(err) {
-					return sideActionMsg{action: "   └ (no messages available)"}
-				}
-				return sideActionMsg{err: err}
-			}
-			return formatMessagePayloadForSideAction(msg)
-		}
-	}, true
+// payloadOnlyRender and withMetadataRender are the two ways resolveReadAction
+// turns a read message into a sideActionMsg; fmtMode is always captured by
+// the caller (even payloadOnlyRender's caller) so both share one closure shape.
+func payloadOnlyRender(msg *backends.Message, _ metadataFormat) sideActionMsg {
+	return formatMessagePayloadForSideAction(msg)
 }
 
-// resolvePeekAction returns a resolve func for "p" (metadataOnly=false) or
-// "m" (metadataOnly=true): peek applies to a selected Subscription child
-// (Topics window, Azure/Google only) or a top-level row on Queues/Streams.
-func resolvePeekAction(metadataOnly bool) func(m *aiTUIModel, wi int) (string, func() (tea.Model, tea.Cmd), bool) {
-	hint := "peek"
-	if metadataOnly {
-		hint = "metadata"
-	}
-	verbosity := backends.VerbosityQuiet
-	if metadataOnly {
-		// Metadata peek must request full metadata from adapters, otherwise
-		// some backends intentionally omit properties/internal metadata.
-		verbosity = backends.VerbosityVerbose
-	}
+func withMetadataRender(msg *backends.Message, fmtMode metadataFormat) sideActionMsg {
+	return formatMessageMetadataForSideAction(msg, fmtMode)
+}
 
+// resolveReadAction returns a resolve func for "R" (receive: hint="receive",
+// descVerb="receive", ack=true), "p" (peek: hint="peek", descVerb="peek",
+// ack=false), or "m" (peek metadata: hint="metadata", descVerb="peek
+// metadata", ack=false, verbosity=Verbose so adapters that otherwise omit
+// properties/internal metadata include them). Applies to a selected
+// Subscription child (a Topics-shaped window with ChildKind set — Azure/
+// Google only) or a top-level row on a drain-eligible window (Queues/
+// Streams — never Addresses/Exchanges, which have no reliable 1:1 queue
+// mapping).
+func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbosity, render func(*backends.Message, metadataFormat) sideActionMsg) func(m *aiTUIModel, wi int) (string, func() (tea.Model, tea.Cmd), bool) {
 	return func(m *aiTUIModel, wi int) (string, func() (tea.Model, tea.Cmd), bool) {
 		if wi < 0 || wi >= len(m.objTypes) {
 			return "", nil, false
 		}
-		label := m.objTypes[wi].label
+		ow := m.objTypes[wi]
 
 		if child, parentName, ok := m.selectedChildNode(); ok {
-			if !sidebarSubscriptionEligible(label, child.Kind) || child.Name == "" {
+			if !ow.subscriptionEligible(child.Kind) || child.Name == "" {
 				return "", nil, false
 			}
-			childName := child.Name
+			childName, session, fmtMode := child.Name, m.session, m.metadataFormat
 			return hint, func() (tea.Model, tea.Cmd) {
-				desc := fmt.Sprintf("▶ peek Subscription \"%s\"", childName)
-				if metadataOnly {
-					desc = fmt.Sprintf("▶ peek metadata Subscription \"%s\"", childName)
-				}
+				desc := fmt.Sprintf("▶ %s Subscription \"%s\"", descVerb, childName)
 				m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 				m.state = tuiExecuting
-				topic, sub, session, fmtMode := parentName, childName, m.session, m.metadataFormat
+				topic, sub := parentName, childName
 				return *m, func() tea.Msg {
 					ta, err := session.getTopicAdapter()
 					if err != nil {
@@ -288,7 +208,7 @@ func resolvePeekAction(metadataOnly bool) func(m *aiTUIModel, wi int) (string, f
 					msg, err := ta.Subscribe(ctx, backends.SubscribeOptions{
 						Topic:       topic,
 						Extra:       map[string]string{"subscription": sub},
-						Acknowledge: false,
+						Acknowledge: ack,
 						Verbosity:   verbosity,
 						Timeout:     1,
 						Wait:        false,
@@ -299,34 +219,26 @@ func resolvePeekAction(metadataOnly bool) func(m *aiTUIModel, wi int) (string, f
 						}
 						return sideActionMsg{err: err}
 					}
-					if metadataOnly {
-						return formatMessageMetadataForSideAction(msg, fmtMode)
-					}
-					return formatMessagePayloadForSideAction(msg)
+					return render(msg, fmtMode)
 				}
 			}, true
 		}
 
+		if !ow.drain {
+			return "", nil, false
+		}
 		node, ok := m.selectedTopLevelNode()
 		if !ok || node.Name == "" {
 			return "", nil, false
 		}
-		switch label {
-		case "Queues", "Streams":
-		default:
-			return "", nil, false
-		}
-		name := node.Name
+		name, session, fmtMode := node.Name, m.session, m.metadataFormat
 		return hint, func() (tea.Model, tea.Cmd) {
-			desc := fmt.Sprintf("▶ peek %s \"%s\"", singular(label), name)
-			if metadataOnly {
-				desc = fmt.Sprintf("▶ peek metadata %s \"%s\"", singular(label), name)
-			}
+			desc := fmt.Sprintf("▶ %s %s \"%s\"", descVerb, ow.singularLabel(), name)
 			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 			m.state = tuiExecuting
-			queue, fmtMode := name, m.metadataFormat
+			queue := name
 			return *m, func() tea.Msg {
-				qa, err := m.session.getQueueAdapter()
+				qa, err := session.getQueueAdapter()
 				if err != nil {
 					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
 				}
@@ -334,7 +246,7 @@ func resolvePeekAction(metadataOnly bool) func(m *aiTUIModel, wi int) (string, f
 				defer cancel()
 				msg, err := qa.Receive(ctx, backends.ReceiveOptions{
 					Queue:       queue,
-					Acknowledge: false,
+					Acknowledge: ack,
 					Verbosity:   verbosity,
 					Timeout:     1,
 					Wait:        false,
@@ -345,10 +257,7 @@ func resolvePeekAction(metadataOnly bool) func(m *aiTUIModel, wi int) (string, f
 					}
 					return sideActionMsg{err: err}
 				}
-				if metadataOnly {
-					return formatMessageMetadataForSideAction(msg, fmtMode)
-				}
-				return formatMessagePayloadForSideAction(msg)
+				return render(msg, fmtMode)
 			}
 		}, true
 	}

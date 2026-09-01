@@ -569,63 +569,9 @@ func (m *aiTUIModel) killAllProcs() {
 // collapsed=true renders only the title line (no underline, no body rows).
 func (m aiTUIModel) writeProcessSection(b *strings.Builder, width, bodyLines int, collapsed bool) int {
 	focused := m.procWinIdx >= 0 && int(m.focus)-1 == m.procWinIdx
-	lines := 0
+	headerText := fmt.Sprintf("Processes (%d)", len(m.procs))
 
-	// Disclosure glyph: ▸ when collapsed, ▾ when expanded.
-	glyph := "▾ "
-	if collapsed {
-		glyph = "▸ "
-	}
-
-	// Header.
-	headerText := glyph + fmt.Sprintf("Processes (%d)", len(m.procs))
-	if focused {
-		pad := width - lipgloss.Width(headerText) - 4
-		if pad < 0 {
-			pad = 0
-		}
-		b.WriteString(m.theme().focusHeader().Render(headerText + strings.Repeat(" ", pad) + "◂"))
-	} else {
-		b.WriteString(histTitleStyle.Render(headerText))
-	}
-	b.WriteString("\n")
-	lines++
-
-	// When collapsed, stop here.
-	if collapsed {
-		return lines
-	}
-
-	b.WriteString(dimStyle.Render(strings.Repeat("─", width-1)))
-	b.WriteString("\n")
-	lines++
-
-	if len(m.procs) == 0 {
-		b.WriteString(dimStyle.Render("  (none)") + "\n")
-		return lines + 1
-	}
-
-	start, end := computeWindow(len(m.procs), m.procSel, bodyLines)
-
-	if start > 0 {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  ▲ %d more", start)) + "\n")
-		lines++
-		start++
-		if start > m.procSel {
-			start = m.procSel
-		}
-	}
-
-	showBottomHint := end < len(m.procs)
-	limit := end
-	if showBottomHint {
-		limit = end - 1
-		if limit < start {
-			limit = start
-		}
-	}
-
-	for i := start; i < limit; i++ {
+	renderRow := func(i int, selected bool) string {
 		p := m.procs[i]
 		// p.done and p.err are UI-goroutine-only fields; no lock needed.
 		var glyph string
@@ -653,19 +599,11 @@ func (m aiTUIModel) writeProcessSection(b *strings.Builder, width, bodyLines int
 			name = procErrStyle.Render(name)
 		}
 
-		if focused && i == m.procSel {
-			b.WriteString(sidebarSelStyle.Render(fmt.Sprintf("▸ %s %s", glyph, name)))
-		} else {
-			b.WriteString(fmt.Sprintf("  %s %s", glyph, name))
+		if selected {
+			return sidebarSelStyle.Render(fmt.Sprintf("▸ %s %s", glyph, name))
 		}
-		b.WriteString("\n")
-		lines++
+		return fmt.Sprintf("  %s %s", glyph, name)
 	}
 
-	if showBottomHint {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  ▼ %d more", len(m.procs)-limit)) + "\n")
-		lines++
-	}
-
-	return lines
+	return m.writeWindow(b, width, bodyLines, collapsed, headerText, focused, "", len(m.procs), m.procSel, renderRow, nil)
 }

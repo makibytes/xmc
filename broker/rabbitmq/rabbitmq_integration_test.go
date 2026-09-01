@@ -29,6 +29,8 @@ var testQueues = []string{
 	"test.peek",
 	"test.timeout.empty",
 	"test.correlation",
+	"test.repeated.a",
+	"test.repeated.b",
 }
 
 func TestMain(m *testing.M) {
@@ -418,5 +420,61 @@ func TestRabbitMQ_TopicSubscribe_Ephemeral(t *testing.T) {
 		if q.Name == subQueue {
 			t.Errorf("ephemeral queue %s still exists after Close", subQueue)
 		}
+	}
+}
+
+// TestRabbitMQ_QueueRepeatedSendReceive exercises the exact pattern the AMQP
+// link cache targets: many Send/Receive calls in a row on ONE adapter (the
+// shape of send -l/--ndjson/-n and receive -n loops), instead of a fresh
+// adapter per call like the other tests here. It proves the cached sender and
+// receiver links survive repeated use, deliver every message intact and in
+// order, and that a link reused after a queue-name change (mid-adapter)
+// reattaches correctly.
+func TestRabbitMQ_QueueRepeatedSendReceive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	queueA := "test.repeated.a"
+	queueB := "test.repeated.b"
+
+	sender, err := NewQueueAdapter(newConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapter (sender): %v", err)
+	}
+	defer sender.Close()
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		if err := sender.Send(ctx, backends.SendOptions{Queue: queueA, Message: fmt.Appendf(nil, "msg-%d", i)}); err != nil {
+			t.Fatalf("Send #%d: %v", i, err)
+		}
+	}
+	// A destination change mid-adapter must force the cached sender to
+	// reattach rather than keep sending to queueA.
+	if err := sender.Send(ctx, backends.SendOptions{Queue: queueB, Message: []byte("to-b")}); err != nil {
+		t.Fatalf("Send to queueB: %v", err)
+	}
+
+	receiver, err := NewQueueAdapter(newConnArgs())
+	if err != nil {
+		t.Fatalf("NewQueueAdapter (receiver): %v", err)
+	}
+	defer receiver.Close()
+
+	for i := 0; i < n; i++ {
+		msg, err := receiver.Receive(ctx, backends.ReceiveOptions{Queue: queueA, Acknowledge: true, Timeout: 5})
+		if err != nil {
+			t.Fatalf("Receive #%d: %v", i, err)
+		}
+		want := fmt.Sprintf("msg-%d", i)
+		if string(msg.Data) != want {
+			t.Errorf("Receive #%d: got %q, want %q", i, string(msg.Data), want)
+		}
+	}
+	msg, err := receiver.Receive(ctx, backends.ReceiveOptions{Queue: queueB, Acknowledge: true, Timeout: 5})
+	if err != nil {
+		t.Fatalf("Receive from queueB: %v", err)
+	}
+	if string(msg.Data) != "to-b" {
+		t.Errorf("Receive from queueB: got %q, want %q", string(msg.Data), "to-b")
 	}
 }

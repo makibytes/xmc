@@ -43,6 +43,7 @@ func GetRootCommand() *cobra.Command {
 			Objects: []cmd.ObjectType{
 				{
 					Label: "Queues",
+					Drain: true,
 					List: func() ([]backends.ObjectNode, error) {
 						queues, err := azpkg.ListQueues(connArgs)
 						if err != nil {
@@ -61,6 +62,8 @@ func GetRootCommand() *cobra.Command {
 				{
 					Label:        "Topics",
 					Hierarchical: true,
+					Publish:      true,
+					ChildKind:    "subscription",
 					List: func() ([]backends.ObjectNode, error) {
 						return azpkg.ListTopicsWithSubscriptions(connArgs)
 					},
@@ -87,40 +90,17 @@ func GetRootCommand() *cobra.Command {
 				NewTopic: func() (backends.TopicBackend, error) {
 					return azpkg.NewTopicAdapter(connArgs)
 				},
-				ListQueues: func(_ context.Context) ([]mcp.QueueInfo, error) {
-					queues, err := azpkg.ListQueues(connArgs)
-					if err != nil {
-						return nil, err
-					}
-					out := make([]mcp.QueueInfo, len(queues))
-					for i, q := range queues {
-						out[i] = mcp.QueueInfo{Name: q.Name, MessageCount: q.MessageCount}
-					}
-					return out, nil
+				ListQueues: func(_ context.Context) ([]backends.QueueInfo, error) {
+					return azpkg.ListQueues(connArgs)
 				},
 				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
 					return azpkg.PurgeQueue(connArgs, queue)
 				},
-				ListTopics: func(_ context.Context) ([]mcp.TopicInfo, error) {
-					topics, err := azpkg.ListTopics(connArgs)
-					if err != nil {
-						return nil, err
-					}
-					out := make([]mcp.TopicInfo, len(topics))
-					for i, t := range topics {
-						out[i] = mcp.TopicInfo{Name: t.Name, Partitions: int64(t.PartitionCount)}
-					}
-					return out, nil
+				ListTopics: func(_ context.Context) ([]backends.TopicInfo, error) {
+					return azpkg.ListTopics(connArgs)
 				},
-				QueueStats: func(_ context.Context, queue string) (*mcp.QueueStats, error) {
-					s, err := azpkg.GetQueueStats(connArgs, queue)
-					if err != nil {
-						return nil, err
-					}
-					return &mcp.QueueStats{
-						Name: s.Name, MessageCount: s.MessageCount, ConsumerCount: int64(s.ConsumerCount),
-						EnqueueCount: s.EnqueueCount, DequeueCount: s.DequeueCount,
-					}, nil
+				QueueStats: func(_ context.Context, queue string) (*backends.QueueStats, error) {
+					return azpkg.GetQueueStats(connArgs, queue)
 				},
 			}),
 		},

@@ -165,16 +165,16 @@ func TestIsStdoutRedirected_WithPipe(t *testing.T) {
 }
 
 func TestIsStdoutRedirected_WithCharDevice(t *testing.T) {
-tty, err := os.Open("/dev/tty")
-if err != nil {
-t.Skip("cannot open /dev/tty (headless environment): " + err.Error())
-}
-defer tty.Close()
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		t.Skip("cannot open /dev/tty (headless environment): " + err.Error())
+	}
+	defer tty.Close()
 
-old := os.Stdout
-os.Stdout = tty
-defer func() { os.Stdout = old }()
+	old := os.Stdout
+	os.Stdout = tty
+	defer func() { os.Stdout = old }()
 
-// Calling with a char device exercises the syscall.Stat_t path
-_ = isStdoutRedirected()
+	// Calling with a char device exercises the syscall.Stat_t path
+	_ = isStdoutRedirected()
 }

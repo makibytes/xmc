@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
@@ -24,53 +22,19 @@ func NewReceiveCommand(backend backends.QueueBackend, resolver TargetResolver, c
 		},
 	}
 
-	cmd.Flags().VarP(newDurationValue(100*time.Millisecond, time.Second), "timeout", "t", "Time to wait for a message (e.g. \"100ms\", \"5s\")")
-	cmd.Flags().BoolP("quiet", "q", false, "Quiet about properties, show data only")
-	cmd.Flags().BoolP("wait", "w", false, "Wait (endless) for a message to arrive")
-	cmd.Flags().IntP("count", "n", 1, "Number of messages to receive (0 = drain all available)")
-	cmd.Flags().BoolP("json", "J", false, "Output messages as JSON")
-	cmd.Flags().StringP("format", "F", "", "Output format string, e.g. \"%i %s\\n\" (overrides --json)")
-	cmd.Flags().Bool("ndjson", false, "Output one lossless JSON record per line (overrides --format/--json)")
-	cmd.Flags().StringP("selector", "S", "", "Filter messages by property expression (e.g. \"color='red'\")")
-	cmd.Flags().String("for", "", "Stream for a bounded duration then stop (e.g. \"30s\", \"5m\")")
-	cmd.Flags().Bool("forever", false, "Stream until interrupted / until xmc quits (no time bound)")
-	cmd.Flags().Bool("stats", false, "Print live throughput statistics to stderr while streaming")
-	cmd.Flags().IntP("omit", "o", 0, "Skip (offset past) the first N messages before reading")
-
-	hasExchRouting := len(exchRouting) > 0 && exchRouting[0]
-	if hasExchRouting {
-		cmd.Use = "receive [--exchange <exchange> [--routing-key <key>] | --queue <queue>] [<to>]"
-		cmd.Flags().String("exchange", "", "Exchange to receive from")
-		cmd.Flags().String("routing-key", "", "Routing key for the exchange (omit for fanout/headers)")
-		// Long-form only: -q is --quiet on read commands. --queue-name is the
-		// deprecated spelling, kept working via aliasNormalize.
-		cmd.Flags().String("queue", "", "Queue to receive from (AMQP 1.0 v2: /queues/<name>)")
-		cmd.Flags().SetNormalizeFunc(aliasNormalize)
-		cmd.Args = cobra.MaximumNArgs(1)
-	} else {
-		cmd.Args = cobra.MinimumNArgs(1)
-	}
+	registerConsumeFlags(cmd, false, "Number of messages to receive (0 = drain all available)", true)
+	registerConsumeExchangeFlags(cmd, exchRouting,
+		"receive [--exchange <exchange> [--routing-key <key>] | --queue <queue>] [<to>]",
+		"Exchange to receive from",
+		"Queue to receive from (AMQP 1.0 v2: /queues/<name>)")
 
 	return cmd
 }
 
 func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend, acknowledge bool, resolver TargetResolver, extraFn func(*cobra.Command) map[string]string) error {
-	timeout := float32(getDuration(cmd, "timeout").Seconds())
-	wait, _ := cmd.Flags().GetBool("wait")
-	quiet, _ := cmd.Flags().GetBool("quiet")
-	count, _ := cmd.Flags().GetInt("count")
-	jsonOutput, _ := cmd.Flags().GetBool("json")
-	selector, _ := cmd.Flags().GetString("selector")
-	format, _ := cmd.Flags().GetString("format")
-	ndjson, _ := cmd.Flags().GetBool("ndjson")
-	omit, _ := cmd.Flags().GetInt("omit")
-
-	sf, err := ParseStreamingFlags(cmd)
+	v, err := parseConsumeFlags(cmd, true)
 	if err != nil {
 		return err
-	}
-	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
-		count = 0
 	}
 
 	queue, err := resolveConsumeTarget(cmd, args, resolver, false)
@@ -85,22 +49,22 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 
 	opts := backends.ReceiveOptions{
 		Queue:       queue,
-		Timeout:     timeout,
-		Wait:        wait,
+		Timeout:     v.timeout,
+		Wait:        v.wait,
 		Acknowledge: acknowledge,
-		Verbosity:   commandVerbosity(quiet),
-		Selector:    selector,
+		Verbosity:   commandVerbosity(v.quiet),
+		Selector:    v.selector,
 		Extra:       extra,
 	}
 
 	cfg := consumeConfig{
-		count:      count,
-		jsonOutput: jsonOutput,
+		count:      v.count,
+		jsonOutput: v.jsonOutput,
 		verbosity:  opts.Verbosity,
-		format:     format,
-		ndjson:     ndjson,
-		follow:     sf.Follow,
-		omit:       omit,
+		format:     v.format,
+		ndjson:     v.ndjson,
+		follow:     v.streaming.Follow,
+		omit:       v.omit,
 		dataOut:    cmd.OutOrStdout(),
 		metaOut:    cmd.ErrOrStderr(),
 	}
@@ -110,33 +74,28 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 	// context.Background(), so cancellation relies on SIGINT as before.
 	parentCtx := cmd.Context()
 
-	// When peeking (acknowledge=false) and the backend supports stateful
-	// browsing, open a single browse cursor for the whole invocation.  This
-	// fixes "peek -n 0" which would otherwise repeat the first message forever
-	// because each stateless Receive call re-reads the queue head.
+	// When peeking (acknowledge=false), open a browse cursor for the whole
+	// invocation. backends.Browse uses the backend's native cursor when
+	// available (fixing "peek -n 0", which would otherwise repeat the first
+	// message forever because a stateless Receive re-reads the queue head
+	// every call) and falls back to exactly that stateless Receive loop
+	// otherwise, so non-browse brokers are unaffected.
 	//
 	// In shell/AI mode the backend is always a *reconnectingQueue wrapper
 	// (cmd/reconnect.go), which itself implements BrowseBackend by delegating
-	// to the underlying adapter. If the adapter does not support browsing the
-	// wrapper returns backends.ErrBrowseUnsupported — treat that as "fall
-	// through" to the normal Receive loop so non-browse brokers are unaffected.
+	// to the underlying adapter.
 	if !acknowledge {
-		if bb, ok := backend.(backends.BrowseBackend); ok {
-			browser, err := bb.Browse(parentCtx, opts)
-			switch {
-			case err == nil:
-				defer browser.Close()
-				return runConsume(browser.Next, cfg, sf.Duration, sf.Stats, parentCtx)
-			case !errors.Is(err, backends.ErrBrowseUnsupported):
-				return err
-				// ErrBrowseUnsupported: fall through to the plain Receive loop below
-			}
+		browser, err := backends.Browse(parentCtx, backend, opts)
+		if err != nil {
+			return err
 		}
+		defer browser.Close()
+		return runConsume(browser.Next, cfg, v.streaming.Duration, v.streaming.Stats, parentCtx)
 	}
 
 	return runConsume(func(ctx context.Context) (*backends.Message, error) {
 		return backend.Receive(ctx, opts)
-	}, cfg, sf.Duration, sf.Stats, parentCtx)
+	}, cfg, v.streaming.Duration, v.streaming.Stats, parentCtx)
 }
 
 // resolveConsumeTarget parses --exchange/--queue/<to> for receive/subscribe

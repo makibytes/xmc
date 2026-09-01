@@ -13,11 +13,10 @@ import (
 	kafkago "github.com/segmentio/kafka-go"
 )
 
-// TopicInfo holds topic information
-type TopicInfo struct {
-	Name           string
-	PartitionCount int
-}
+// TopicInfo is an alias for the backends type (rather than a broker-local
+// shadow), so callers (including the MCP tool wiring in broker/kafka.go) can
+// use either name interchangeably.
+type TopicInfo = backends.TopicInfo
 
 // CreateTopic creates a topic on the Kafka cluster.
 func CreateTopic(connArgs ConnArguments, topic string, partitions, replicationFactor int, configs map[string]string) error {

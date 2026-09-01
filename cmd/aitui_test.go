@@ -240,9 +240,6 @@ func TestAITUI_HandleAIDone_TokenUsage(t *testing.T) {
 	if model.totalOut != 20 {
 		t.Errorf("totalOut = %d, want 20", model.totalOut)
 	}
-	if model.turnIn != 100 {
-		t.Errorf("turnIn = %d, want 100", model.turnIn)
-	}
 }
 
 func TestAITUI_ProposingEscDiscards(t *testing.T) {
@@ -441,6 +438,111 @@ func newTestModelWithObjects() aiTUIModel {
 	return m
 }
 
+// newTestModelWithNWindows builds a model with one flat "Queues"-style window
+// per entry in counts, each holding that many already-loaded nodes (so
+// windowNaturalRows returns exactly counts[i] for window i) — precise control
+// over sidebarPlan's per-window nat[] input, for exercising its three sizing
+// stages (natural fit / floor fit / auto-collapse) directly.
+func newTestModelWithNWindows(counts []int) aiTUIModel {
+	objTypes := make([]ObjectType, len(counts))
+	nodeSets := make([][]backends.ObjectNode, len(counts))
+	for i, n := range counts {
+		nodes := make([]backends.ObjectNode, n)
+		for j := range nodes {
+			nodes[j] = backends.ObjectNode{Name: fmt.Sprintf("w%d-n%d", i, j)}
+		}
+		nodeSets[i] = nodes
+		idx := i
+		objTypes[i] = ObjectType{
+			Label: fmt.Sprintf("Win%d", i),
+			Drain: true,
+			List:  func() ([]backends.ObjectNode, error) { return nodeSets[idx], nil },
+		}
+	}
+	ms := &ManageSpec{Objects: objTypes}
+	m := newAITUIModel(&aiSession{}, &shellSession{spec: BrokerSpec{ManageSpec: ms}}, nil, "test", "")
+	m.loadingObjects = false
+	for i, nodes := range nodeSets {
+		m.objTypes[i].nodes = nodes
+	}
+	return m
+}
+
+// TestSidebarPlan_NaturalFit verifies stage 1: when every window's natural
+// content fits within height, solve() assigns each its full nat[i] and
+// collapses nothing.
+func TestSidebarPlan_NaturalFit(t *testing.T) {
+	m := newTestModelWithNWindows([]int{5, 5, 5})
+	// 3 windows: each costs 3 (title+underline+margin) + body, minus 1 for the
+	// last window's missing margin = 3*3 + 5*3 - 1 = 23.
+	plan := newSidebarPlan(&m, 30)
+	plan.solve()
+	for i := 0; i < plan.n; i++ {
+		if plan.isCollapsed(i) {
+			t.Errorf("window %d: collapsed, want expanded (height comfortably fits natural size)", i)
+		}
+		if plan.bodyAlloc[i] != plan.nat[i] {
+			t.Errorf("window %d: bodyAlloc = %d, want natural %d", i, plan.bodyAlloc[i], plan.nat[i])
+		}
+	}
+}
+
+// TestSidebarPlan_FloorFit verifies stage 2: when natural doesn't fit but
+// floor (min(nat,3) per window) does, every window stays expanded (none
+// collapsed) and the focused window gets surplus rows first.
+func TestSidebarPlan_FloorFit(t *testing.T) {
+	m := newTestModelWithNWindows([]int{10, 10, 10})
+	m.focus = 1 // window 0 focused
+	// floorTotal: each window costs 3(chrome)+floor(3) = 6, minus 1 for last's
+	// margin = 17. Pick a height between floorTotal (17) and natural (10*3+8=38
+	// -1=37) to land in stage 2.
+	plan := newSidebarPlan(&m, 25)
+	plan.solve()
+	for i := 0; i < plan.n; i++ {
+		if plan.isCollapsed(i) {
+			t.Errorf("window %d: collapsed, want expanded (stage 2 never collapses)", i)
+		}
+		if plan.bodyAlloc[i] < plan.floor(i) {
+			t.Errorf("window %d: bodyAlloc = %d, below floor %d", i, plan.bodyAlloc[i], plan.floor(i))
+		}
+	}
+	if plan.bodyAlloc[0] <= plan.floor(0) {
+		t.Errorf("focused window 0: bodyAlloc = %d, want more than floor %d (surplus goes to focus first)", plan.bodyAlloc[0], plan.floor(0))
+	}
+	if got := plan.total(plan.current); got > 25 {
+		t.Errorf("total rendered cost = %d, want <= height 25", got)
+	}
+}
+
+// TestSidebarPlan_AutoCollapse verifies stage 3: when even floor doesn't fit,
+// solve() collapses windows farthest from focus first and keeps the focused
+// window expanded as long as possible.
+func TestSidebarPlan_AutoCollapse(t *testing.T) {
+	m := newTestModelWithNWindows([]int{10, 10, 10, 10, 10})
+	m.focus = 3 // window 2 (middle) focused
+	// floorTotal for 5 windows at floor 3: 5*6-1 = 29. Force stage 3.
+	plan := newSidebarPlan(&m, 15)
+	plan.solve()
+
+	if plan.isCollapsed(2) {
+		t.Error("focused window 2 should stay expanded as long as possible")
+	}
+	collapsedCount := 0
+	for i := 0; i < plan.n; i++ {
+		if plan.isCollapsed(i) {
+			collapsedCount++
+		}
+	}
+	if collapsedCount == 0 {
+		t.Fatal("expected at least one window auto-collapsed at this height")
+	}
+	// Window farthest from focus (index 4, distance 2) must collapse before
+	// window 1 or 3 (distance 1) — collapse order is strictly outside-in.
+	if !plan.autoCollapsed[4] {
+		t.Error("window 4 (farthest from focused window 2) should be the first auto-collapsed")
+	}
+}
+
 func TestAITUI_ObjectsLoaded_QueueCount(t *testing.T) {
 	m := newTestModelWithObjects()
 	sidebar, _ := m.renderSidebar(35, 20)
@@ -557,6 +659,63 @@ func TestAITUI_FilterNarrowsList(t *testing.T) {
 	if !strings.Contains(sidebar, "1/3") {
 		t.Errorf("filtered sidebar should show 1/3, got:\n%s", sidebar)
 	}
+}
+
+// TestAITUI_GetFilteredSortedNodes_CacheInvalidation guards
+// getFilteredSortedNodes's memoization (objWindow.filteredCache*): a filter
+// edit, a sort change, and a data refresh (dataGen) must each invalidate the
+// cached result, not silently return what an earlier filter/sort/dataset
+// produced.
+func TestAITUI_GetFilteredSortedNodes_CacheInvalidation(t *testing.T) {
+	m := newTestModelWithObjects()
+
+	// Warm the cache with no filter: all 3 queues.
+	if got := len(m.getFilteredSortedNodes(0)); got != 3 {
+		t.Fatalf("unfiltered: got %d nodes, want 3", got)
+	}
+
+	// Filter edit must invalidate: cache must not still return 3.
+	m.objTypes[0].filter = "pay"
+	items := m.getFilteredSortedNodes(0)
+	if len(items) != 1 || items[0].Name != "payments" {
+		t.Errorf("after filter=%q: got %v, want just [payments]", m.objTypes[0].filter, items)
+	}
+
+	// Clearing the filter must invalidate back to all 3 (not the filtered-to-1 cache).
+	m.objTypes[0].filter = ""
+	if got := len(m.getFilteredSortedNodes(0)); got != 3 {
+		t.Errorf("after clearing filter: got %d nodes, want 3 (stale filtered cache?)", got)
+	}
+
+	// Sort change must invalidate: sortByName vs sort-by-metric produce
+	// different orderings for this fixture (orders=1234, payments=34, dlq=0).
+	byName := m.getFilteredSortedNodes(0)
+	if byName[0].Name != "dlq" {
+		t.Fatalf("sortByName: got order %v, want dlq first", names(byName))
+	}
+	m.objTypes[0].sortIdx = sortByName + 1 // first metric, descending
+	byMetric := m.getFilteredSortedNodes(0)
+	if byMetric[0].Name != "orders" {
+		t.Errorf("after sort change: got order %v, want orders first (highest msgs) — stale name-sorted cache?", names(byMetric))
+	}
+
+	// A data refresh (dataGen bump) must invalidate even with filter/sort
+	// unchanged: the exact scenario handleObjectsDone drives on every
+	// periodic sidebar refresh.
+	m.objTypes[0].nodes = []backends.ObjectNode{{Name: "new-queue", Metrics: []backends.Metric{{Label: "msgs", Value: 1}}}}
+	m.objTypes[0].dataGen++
+	refreshed := m.getFilteredSortedNodes(0)
+	if len(refreshed) != 1 || refreshed[0].Name != "new-queue" {
+		t.Errorf("after data refresh: got %v, want just [new-queue] — stale pre-refresh cache?", names(refreshed))
+	}
+}
+
+func names(nodes []backends.ObjectNode) []string {
+	out := make([]string, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.Name
+	}
+	return out
 }
 
 func TestAITUI_SortByMetric(t *testing.T) {
@@ -986,7 +1145,7 @@ func TestIsMessageReadCommand(t *testing.T) {
 		{"receive orders -n 5", true},
 		{"receive", true},
 		{"peek dlq", true},
-		{"./rmc peek dlq", true},
+		{"./" + binBaseName() + " peek dlq", true},
 		{"peek", true},
 		{"subscribe events", true},
 		{"subscribe events --durable", true},
@@ -1140,7 +1299,29 @@ func TestAppendTranscript_Cap(t *testing.T) {
 
 // ---------- P/S/R sidebar hotkeys (purge/send/receive) ----------
 
-func TestSidebarWindowSupportsSRP(t *testing.T) {
+// testWindow builds an objWindow with the same S/P/R-capability field values
+// a real broker would declare on ObjectType for the given label, mirroring
+// the fixtures in cmd/artemis.go (Addresses), cmd/rabbitmq.go (Exchanges),
+// and the generic Queues/Streams/Topics/Consumer-Groups shapes used
+// elsewhere. Used to exercise objWindow's S/P/R eligibility methods directly
+// (formerly the label-matching sidebarWindowSupportsSRP/sidebarPurgeReceive
+// Allowed/sidebarSendViaTopic free functions).
+func testWindow(label string) objWindow {
+	switch label {
+	case "Queues", "Streams":
+		return objWindow{label: label, drain: true}
+	case "Addresses":
+		return objWindow{label: label, singular: "Address", sendViaTopic: func(kind string) bool { return kind == "multicast" }}
+	case "Exchanges":
+		return objWindow{label: label, sendViaTopic: func(string) bool { return true }}
+	case "Topics":
+		return objWindow{label: label, publish: true, childKind: "subscription"}
+	default: // "Consumer Groups" and anything else: no S/P/R capability at all
+		return objWindow{label: label}
+	}
+}
+
+func TestSidebarWindowSendEligible(t *testing.T) {
 	cases := []struct {
 		label string
 		want  bool
@@ -1153,13 +1334,13 @@ func TestSidebarWindowSupportsSRP(t *testing.T) {
 		{"Consumer Groups", false},
 	}
 	for _, c := range cases {
-		if got := sidebarWindowSupportsSRP(c.label); got != c.want {
-			t.Errorf("sidebarWindowSupportsSRP(%q) = %v, want %v", c.label, got, c.want)
+		if got := testWindow(c.label).sendEligible(); got != c.want {
+			t.Errorf("testWindow(%q).sendEligible() = %v, want %v", c.label, got, c.want)
 		}
 	}
 }
 
-func TestSidebarPurgeReceiveAllowed(t *testing.T) {
+func TestSidebarWindowDrain(t *testing.T) {
 	cases := []struct {
 		label string
 		kind  string
@@ -1180,14 +1361,13 @@ func TestSidebarPurgeReceiveAllowed(t *testing.T) {
 		{"Streams", "", true},
 	}
 	for _, c := range cases {
-		node := backends.ObjectNode{Kind: c.kind}
-		if got := sidebarPurgeReceiveAllowed(c.label, node); got != c.want {
-			t.Errorf("sidebarPurgeReceiveAllowed(%q, Kind=%q) = %v, want %v", c.label, c.kind, got, c.want)
+		if got := testWindow(c.label).drain; got != c.want {
+			t.Errorf("testWindow(%q).drain = %v, want %v (Kind=%q is irrelevant to drain)", c.label, got, c.want, c.kind)
 		}
 	}
 }
 
-func TestSidebarSendViaTopic(t *testing.T) {
+func TestSidebarWindowSendsViaTopic(t *testing.T) {
 	cases := []struct {
 		label string
 		kind  string
@@ -1203,8 +1383,8 @@ func TestSidebarSendViaTopic(t *testing.T) {
 		{"Queues", "multicast", false}, // never topic-routed outside Addresses/Exchanges
 	}
 	for _, c := range cases {
-		if got := sidebarSendViaTopic(c.label, c.kind); got != c.want {
-			t.Errorf("sidebarSendViaTopic(%q, %q) = %v, want %v", c.label, c.kind, got, c.want)
+		if got := testWindow(c.label).sendsViaTopic(c.kind); got != c.want {
+			t.Errorf("testWindow(%q).sendsViaTopic(%q) = %v, want %v", c.label, c.kind, got, c.want)
 		}
 	}
 }
@@ -1215,6 +1395,7 @@ func newTestModelWithQueueWindow(qb backends.QueueBackend, tb backends.TopicBack
 	ms := &ManageSpec{
 		Objects: []ObjectType{{
 			Label: "Queues",
+			Drain: true,
 			List: func() ([]backends.ObjectNode, error) {
 				return []backends.ObjectNode{{Name: "orders"}}, nil
 			},
@@ -1241,8 +1422,10 @@ func newTestModelWithAddressesWindow(kind string, qb backends.QueueBackend, tb b
 	node := backends.ObjectNode{Name: "orders", Kind: kind}
 	ms := &ManageSpec{
 		Objects: []ObjectType{{
-			Label: "Addresses",
-			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
+			Label:        "Addresses",
+			Singular:     "Address",
+			SendViaTopic: func(nodeKind string) bool { return nodeKind == "multicast" },
+			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
 		}},
 		Purge: purge,
 	}
@@ -1268,6 +1451,7 @@ func newTestModelWithExchangesWindow(qb backends.QueueBackend, tb backends.Topic
 		Objects: []ObjectType{{
 			Label:        "Exchanges",
 			Hierarchical: true,
+			SendViaTopic: func(string) bool { return true },
 			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
 		}},
 		Purge: purge,
@@ -1372,8 +1556,10 @@ func TestAITUI_SendPrompt_AccumulatesAndBackspaces(t *testing.T) {
 func TestAITUI_ReceiveHotkey_WrongWindow_NoOp(t *testing.T) {
 	ms := &ManageSpec{
 		Objects: []ObjectType{{
-			Label: "Topics",
-			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
+			Label:     "Topics",
+			Publish:   true,
+			ChildKind: "subscription",
+			List:      func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
 		}},
 	}
 	m := newAITUIModel(&aiSession{}, &shellSession{spec: BrokerSpec{ManageSpec: ms}}, nil, "test", "")
@@ -1431,8 +1617,10 @@ func TestAITUI_StatusBar_HidesPurgeReceiveButShowsSend_OnAddressesWindow(t *test
 func TestAITUI_StatusBar_HidesPSRHints_OnTopicsWindow(t *testing.T) {
 	ms := &ManageSpec{
 		Objects: []ObjectType{{
-			Label: "Topics",
-			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
+			Label:     "Topics",
+			Publish:   true,
+			ChildKind: "subscription",
+			List:      func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
 		}},
 	}
 	m := newAITUIModel(&aiSession{}, &shellSession{spec: BrokerSpec{ManageSpec: ms}}, nil, "test", "")
@@ -1961,6 +2149,7 @@ func newTestModelWithExchangeChildren(purge func(string) (int64, error), deleteA
 		Objects: []ObjectType{{
 			Label:        "Exchanges",
 			Hierarchical: true,
+			SendViaTopic: func(string) bool { return true },
 			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
 		}},
 		Purge:       purge,
@@ -2136,8 +2325,10 @@ func TestAITUI_StatusBar_HidesDeadHints_OnChildRowSelected(t *testing.T) {
 func newTestModelWithTopicsWindow(tb backends.TopicBackend) aiTUIModel {
 	ms := &ManageSpec{
 		Objects: []ObjectType{{
-			Label: "Topics",
-			List:  func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
+			Label:     "Topics",
+			Publish:   true,
+			ChildKind: "subscription",
+			List:      func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{{Name: "events"}}, nil },
 		}},
 	}
 	session := &shellSession{spec: BrokerSpec{ManageSpec: ms}}
@@ -2221,7 +2412,7 @@ func TestAITUI_StatusBar_ShowsPublishHint_OnTopicsWindow(t *testing.T) {
 
 // ---------- Subscription children on Topics windows (P purge / p peek / R receive) ----------
 
-func TestSidebarSubscriptionEligible(t *testing.T) {
+func TestSidebarWindowSubscriptionEligible(t *testing.T) {
 	cases := []struct {
 		label string
 		kind  string
@@ -2231,12 +2422,12 @@ func TestSidebarSubscriptionEligible(t *testing.T) {
 		{"Topics", "sqs", false},         // AWS: routing pointer, Kind is the SNS protocol
 		{"Topics", "http", false},        // AWS: another protocol
 		{"Topics", "", false},
-		{"Exchanges", "subscription", false}, // wrong window
-		{"Queues", "subscription", false},
+		{"Exchanges", "subscription", false}, // wrong window: Exchanges declares no ChildKind
+		{"Queues", "subscription", false},    // wrong window: Queues declares no ChildKind
 	}
 	for _, c := range cases {
-		if got := sidebarSubscriptionEligible(c.label, c.kind); got != c.want {
-			t.Errorf("sidebarSubscriptionEligible(%q, %q) = %v, want %v", c.label, c.kind, got, c.want)
+		if got := testWindow(c.label).subscriptionEligible(c.kind); got != c.want {
+			t.Errorf("testWindow(%q).subscriptionEligible(%q) = %v, want %v", c.label, c.kind, got, c.want)
 		}
 	}
 }
@@ -2255,6 +2446,8 @@ func newTestModelWithTopicSubscriptions(tb backends.TopicBackend, purgeSub func(
 		Objects: []ObjectType{{
 			Label:        "Topics",
 			Hierarchical: true,
+			Publish:      true,
+			ChildKind:    "subscription",
 			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
 		}},
 		PurgeSubscription: purgeSub,
@@ -2418,6 +2611,8 @@ func TestAITUI_SubscriptionHotkeys_NoOpOnNonSubscriptionChild(t *testing.T) {
 		Objects: []ObjectType{{
 			Label:        "Topics",
 			Hierarchical: true,
+			Publish:      true,
+			ChildKind:    "subscription",
 			List:         func() ([]backends.ObjectNode, error) { return []backends.ObjectNode{node}, nil },
 		}},
 		PurgeSubscription: func(string, string) (int64, error) { return 0, nil },
@@ -2563,13 +2758,13 @@ func TestAITUI_StatusBar_ScrollOffsetAdvances_OnSpinnerTick(t *testing.T) {
 
 // TestSidebarActions_ResolveMatchesExpectedEligibility guards the
 // cmd/aisidebaractions.go table directly: the status-bar hint renderer and
-// the key dispatcher both call sidebarActions()[i].resolve, so asserting the
+// the key dispatcher both call sidebarActions[i].resolve, so asserting the
 // resolved key/hint set here for representative selections exercises both at
 // once and pins down the actual (not just internally-consistent) behavior.
 func TestSidebarActions_ResolveMatchesExpectedEligibility(t *testing.T) {
 	resolvedHints := func(m aiTUIModel, wi int) map[string]string {
 		got := map[string]string{}
-		for _, a := range sidebarActions() {
+		for _, a := range sidebarActions {
 			if hint, _, ok := a.resolve(&m, wi); ok {
 				got[a.key] = hint
 			}

@@ -78,18 +78,22 @@ type QueueBackend interface {
 	Close() error
 }
 
-// QueueInfo contains basic information about a queue
+// QueueInfo contains basic information about a queue. JSON tags let this type
+// double as the MCP server's queue-listing result, so a broker's management
+// layer and its MCP tool report identical shapes.
 type QueueInfo struct {
-	Name          string
-	MessageCount  int64
-	ConsumerCount int
+	Name          string `json:"name"`
+	RoutingType   string `json:"routingType,omitempty"` // Artemis: ANYCAST/MULTICAST; empty elsewhere
+	MessageCount  int64  `json:"messageCount"`
+	ConsumerCount int    `json:"consumerCount"`
 }
 
-// QueueStats contains detailed statistics for a queue
+// QueueStats contains detailed statistics for a queue. JSON tags let this type
+// double as the MCP server's queue-stats result (see QueueInfo).
 type QueueStats struct {
-	Name          string
-	MessageCount  int64
-	ConsumerCount int
-	EnqueueCount  int64 // total messages enqueued (lifetime)
-	DequeueCount  int64 // total messages dequeued (lifetime)
+	Name          string `json:"name"`
+	MessageCount  int64  `json:"messageCount"`
+	ConsumerCount int    `json:"consumerCount"`
+	EnqueueCount  int64  `json:"enqueueCount"` // total messages enqueued (lifetime)
+	DequeueCount  int64  `json:"dequeueCount"` // total messages dequeued (lifetime)
 }

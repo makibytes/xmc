@@ -20,34 +20,15 @@ type QueueFactory func() (backends.QueueBackend, error)
 // tools; not registered in the default set).
 type TopicFactory func() (backends.TopicBackend, error)
 
-// QueueInfo / QueueStats are neutral management result types so the mcp package
-// stays broker-agnostic; each broker maps its native results into these.
-type QueueInfo struct {
-	Name          string `json:"name"`
-	RoutingType   string `json:"routingType,omitempty"`
-	MessageCount  int64  `json:"messageCount"`
-	ConsumerCount int64  `json:"consumerCount"`
-}
-
-type QueueStats struct {
-	Name          string `json:"name"`
-	MessageCount  int64  `json:"messageCount"`
-	ConsumerCount int64  `json:"consumerCount"`
-	EnqueueCount  int64  `json:"enqueueCount"`
-	DequeueCount  int64  `json:"dequeueCount"`
-}
-
-// TopicInfo is the neutral result type for topic listings (e.g. Kafka topics
-// with partition counts).
-type TopicInfo struct {
-	Name       string `json:"name"`
-	Partitions int64  `json:"partitions,omitempty"`
-}
-
 // Deps is everything a broker wires in to build its MCP server. Connection
 // credentials are captured in these closures, so they never appear as tool
 // parameters and never enter the model's context. Management hooks are
 // optional: a tool is only registered when its hook is non-nil.
+//
+// The management hooks return backends.QueueInfo/QueueStats/TopicInfo
+// directly (JSON-tagged for exactly this purpose) rather than mcp-local
+// shadow types, so a broker's management layer and its MCP tool report the
+// same shape without a re-mapping step.
 type Deps struct {
 	ServerName    string
 	ServerVersion string
@@ -56,10 +37,10 @@ type Deps struct {
 	NewQueue QueueFactory // optional on topic-only brokers (e.g. Kafka)
 	NewTopic TopicFactory // optional on queue-only brokers (e.g. IBM MQ)
 
-	ListQueues func(ctx context.Context) ([]QueueInfo, error)
+	ListQueues func(ctx context.Context) ([]backends.QueueInfo, error)
 	PurgeQueue func(ctx context.Context, queue string) (int64, error)
-	QueueStats func(ctx context.Context, queue string) (*QueueStats, error)
-	ListTopics func(ctx context.Context) ([]TopicInfo, error)
+	QueueStats func(ctx context.Context, queue string) (*backends.QueueStats, error)
+	ListTopics func(ctx context.Context) ([]backends.TopicInfo, error)
 }
 
 // NewServerFromDeps builds a Server with the standard messaging tool set plus
@@ -339,24 +320,20 @@ func readMessages(ctx context.Context, d Deps, a readArgs, acknowledge bool) (*T
 			Selector:    a.Selector,
 		}
 
-		// Peek on a browse-capable backend uses a stateful cursor, exactly
-		// like the CLI (cmd/receive.go): stateless Receive(ack=false) re-reads
-		// the queue head, so count>1 would return the same message repeatedly.
+		// Peek uses backends.Browse, exactly like the CLI (cmd/receive.go): on
+		// a browse-capable backend that's a stateful cursor; otherwise a
+		// stateless Receive(ack=false) loop, which re-reads the queue head, so
+		// count>1 would return the same message repeatedly.
 		next := func(ctx context.Context) (*backends.Message, error) {
 			return q.Receive(ctx, opts)
 		}
 		if !acknowledge {
-			if bb, ok := q.(backends.BrowseBackend); ok {
-				browser, err := bb.Browse(callCtx, opts)
-				switch {
-				case err == nil:
-					defer browser.Close()
-					next = browser.Next
-				case !errors.Is(err, backends.ErrBrowseUnsupported):
-					return nil, fmt.Errorf("browse failed: %v", err)
-					// ErrBrowseUnsupported: fall back to the Receive loop
-				}
+			browser, err := backends.Browse(callCtx, q, opts)
+			if err != nil {
+				return nil, fmt.Errorf("browse failed: %v", err)
 			}
+			defer browser.Close()
+			next = browser.Next
 		}
 
 		messages := make([]messageJSON, 0, count)

@@ -20,6 +20,8 @@ type TopicAdapter struct {
 	connArgs   ConnArguments
 	connection *amqp.Conn
 	session    *amqp.Session
+	sendCache  amqpcommon.SenderCache
+	recvCache  amqpcommon.ReceiverCache
 	mu         sync.Mutex
 	subQueues  map[string]string // (exchange|key|group|durable) → ensured subscription queue
 	ephemeral  []string          // subscription queues to delete on Close
@@ -89,7 +91,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 		TTL:           opts.TTL,
 	}
 
-	return SendMessage(ctx, a.session, args)
+	return SendMessage(ctx, a.session, &a.sendCache, args)
 }
 
 // Subscribe implements backends.TopicBackend.
@@ -113,7 +115,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		source = "/queues/" + escapeName(queueName)
 	}
 
-	message, err := ReceiveMessage(ctx, a.session, ReceiveArguments{
+	message, err := ReceiveMessage(ctx, a.session, &a.recvCache, ReceiveArguments{
 		Queue:       source,
 		Acknowledge: true,
 		Selector:    opts.Selector,
@@ -194,6 +196,8 @@ func (a *TopicAdapter) Close() error {
 	for _, q := range ephemeral {
 		DeleteQueue(mgmt, q) //nolint:errcheck
 	}
+	_ = a.sendCache.Close()
+	_ = a.recvCache.Close()
 	if a.session != nil {
 		a.session.Close(context.Background())
 	}

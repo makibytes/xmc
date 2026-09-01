@@ -13,10 +13,11 @@ type QueueAdapterFactory func() (backends.QueueBackend, error)
 // TopicAdapterFactory creates a TopicBackend from the current command context.
 type TopicAdapterFactory func() (backends.TopicBackend, error)
 
-// WrapQueueCommand creates a command using a nil backend for flag definitions,
-// then overrides RunE to lazily create the real adapter at execution time.
-func WrapQueueCommand(newCmd func(backends.QueueBackend) *cobra.Command, factory QueueAdapterFactory) *cobra.Command {
-	cmd := newCmd(nil)
+// wrapCommand creates a command using a nil backend for flag definitions, then
+// overrides RunE to lazily create the real adapter at execution time.
+func wrapCommand[T Closeable](newCmd func(T) *cobra.Command, factory func() (T, error)) *cobra.Command {
+	var zero T
+	cmd := newCmd(zero)
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		adapter, err := factory()
 		if err != nil {
@@ -32,21 +33,14 @@ func WrapQueueCommand(newCmd func(backends.QueueBackend) *cobra.Command, factory
 	return cmd
 }
 
+// WrapQueueCommand creates a command using a nil backend for flag definitions,
+// then overrides RunE to lazily create the real adapter at execution time.
+func WrapQueueCommand(newCmd func(backends.QueueBackend) *cobra.Command, factory QueueAdapterFactory) *cobra.Command {
+	return wrapCommand(newCmd, factory)
+}
+
 // WrapTopicCommand creates a command using a nil backend for flag definitions,
 // then overrides RunE to lazily create the real adapter at execution time.
 func WrapTopicCommand(newCmd func(backends.TopicBackend) *cobra.Command, factory TopicAdapterFactory) *cobra.Command {
-	cmd := newCmd(nil)
-	cmd.RunE = func(c *cobra.Command, args []string) error {
-		adapter, err := factory()
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if cerr := adapter.Close(); cerr != nil {
-				log.Verbose("close: %s", cerr)
-			}
-		}()
-		return newCmd(adapter).RunE(c, args)
-	}
-	return cmd
+	return wrapCommand(newCmd, factory)
 }
