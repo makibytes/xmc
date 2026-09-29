@@ -554,14 +554,18 @@ commands run in your real shell:
 amc> subscribe events | send archive-queue        # verb-to-verb bridge
 amc> receive dlq | grep -i error | jq .           # filter with external tools
 amc> receive dlq -n 0 | jq . | xxd                # chain multiple externals
+amc> put orders hello                              # verb aliases work too (put/get/respond)
+amc> ping                                          # connectivity check
 amc> !ls -la                                       # escape to full shell
 amc> help                                          # list available commands
+amc> help send                                     # a command's flags
 amc> exit                                          # leave the shell (or Ctrl-D)
 ```
 
-The shell holds one connection for the entire session and automatically
-reconnects on transient failures. Command history is saved to `~/.xmc/<binary>-sh.log`
-with arrow-key recall and Ctrl-R reverse search.
+Lines without any xmc verb run in your system shell as typed, so shell syntax such
+as `a || b` works. The shell holds one connection for the entire session and
+automatically reconnects on transient failures. Command history is saved to
+`~/.xmc/<binary>-sh.log` with arrow-key recall and Ctrl-R reverse search.
 
 ## AI Shell
 
@@ -611,33 +615,66 @@ xmc ai
 The AI Shell has two input modes, toggled with **Esc**:
 
 - **`ask>`** — type a natural-language request. The AI generates an xmc command
-  and shows it as a proposal. Press **Enter** to execute it, or **Ctrl+C** to
-  discard.
-- **`xmc>`** — type xmc commands directly (like the regular shell), with
-  **Tab** autocomplete. Useful when you already know the command and want to
-  stay in the same TUI.
+  and shows it as a proposal: **Enter** runs it, **e** edits it first, **c**
+  keeps talking about it without running it, and **Esc** discards it. If a
+  command fails, the AI sees the error and proposes a fix (up to twice).
+- **`xmc>`** — type xmc commands directly, exactly as in the regular shell
+  (pipelines, aliases, `help`, `!cmd`), with **Tab** autocomplete. Useful when
+  you already know the command and want to stay in the same TUI.
 
 Commands typed in `xmc>` mode run immediately, with no confirmation step —
 unlike `ask>` mode, where every AI-generated command (destructive or not) is
 shown as a proposal you must accept, edit, or discard first. Use `xmc>` mode
 only when you're confident in the command you're typing.
 
+A command's output appears below it as it runs, including what the terminal
+would show on stderr (message properties, `--stats`); **Esc** cancels it. A
+command with `--for <duration>` (or `--forever`) runs as a background process
+instead, so you can keep working while e.g. a `subscribe` or `forward` streams.
+
 The right side of the screen shows a sidebar with your broker's objects (queues,
 topics, exchanges) and their message counts, refreshed automatically in the
-background.
+background. It needs a terminal at least 90 columns wide.
 
-Key bindings:
+Key bindings (type `/help` inside for the full list):
 
 ```text
-Esc          toggle between ask> (AI) and xmc> (command) mode
-Enter        execute the proposed command
-Ctrl+C       discard the proposal / cancel thinking
-Tab          autocomplete (command mode) · browse sidebar forward (AI mode)
-Shift+Tab    browse sidebar backward
+Esc          toggle between ask> (AI) and xmc> (command) mode · cancel a running command
+Enter        send the prompt / run the command
+Tab          autocomplete (command mode) · browse the sidebar (AI mode)
+Shift+Tab    browse the sidebar
 Up/Down      recall mode-specific history
-PgUp/PgDn    scroll conversation
-m            peek message metadata (where peek is available, includes internal/broker metadata)
-J / Y        switch metadata format for `m` (JSON / YAML; persisted)
+Ctrl+C       clear the input line; quit when it is empty (also Ctrl+D)
+Ctrl+L       clear the display
+PgUp/PgDn    scroll conversation · Home/End jump to top/bottom (when the input is empty)
+click ⧉      copy that command or message payload to the clipboard
+```
+
+Sidebar keys (once a window has focus; the status bar lists those that apply to
+the selected row):
+
+```text
+↑↓ / j k     move                       Enter    insert the name at the cursor
+/            filter                     s        sort (name, then each metric)
+x            tree view (children)       Space    collapse the window
+r            refresh                    Esc      back to the input
+c / d        create / delete (with confirmation)
+p / m        peek a message / peek with all metadata (J / Y: JSON or YAML, persisted)
+R            receive (consume) a message
+S            send a message (on exchanges and multicast addresses: publish through it)
+P            purge a queue (with confirmation) · publish on a topic
+```
+
+On brokers whose topics have message-storing subscriptions (Azure Service Bus,
+Google Pub/Sub), `p`, `m`, `R` and `P` (purge) also work on a selected
+subscription row in tree view.
+
+Processes window (background `--for` commands):
+
+```text
+↑↓ / j k     move                       Enter / p  show the output so far
+K            kill (keep the entry)      d          kill and remove
+P            purge finished entries     D          kill and remove all
 ```
 
 History behavior is shared and persistent:
@@ -653,17 +690,17 @@ Inside AI Shell, these slash commands are available:
 | --- | --- |
 | `/model` | Pick a model interactively from the provider's model list |
 | `/model <name>` | Switch to a specific model directly (persisted to config) |
-| `/effort` | Pick reasoning effort interactively |
-| `/effort low\|med\|high` | Set provider-aware reasoning effort directly |
+| `/effort` | Pick reasoning effort interactively (persisted to config) |
+| `/effort low\|med\|high` | Set provider-aware reasoning effort directly (persisted to config) |
 | `/refresh` | Reload broker objects now (one-shot) |
 | `/refresh <dur>` | Set the periodic refresh interval (e.g. `3s`, `3m`; minimum `1s`; persisted to config) |
 | `/refresh off` | Disable periodic sidebar refresh |
 | `/connect` | Reconnect to the broker (enables auto-reconnect) |
 | `/disconnect` | Stop auto-reconnect |
-| `/reset` | Clear conversation history |
-| `/clear` | Clear the display |
+| `/reset` | Start a new conversation (the session's token count is kept) |
+| `/clear` | Clear the display (also Ctrl+L) |
 | `/help` | Show available slash commands and keybindings |
-| `/exit` | Quit |
+| `/exit` | Quit (also `/quit`) |
 
 Effort defaults to `low` for cost-efficient command generation. For current
 reasoning models, xmc sends the provider's native effort control: Anthropic's
@@ -703,7 +740,9 @@ select the specific provider and model xmc should use:
 ai:
   provider: opencode
   model: deepseek-v4-flash-free
-  metadata-format: yaml
+  effort: low               # low | medium | high (set by /effort)
+  metadata-format: yaml     # yaml | json (set by J / Y)
+  refresh-interval: 5s      # sidebar refresh, or "off" (set by /refresh)
 ```
 
 An explicit `ai.model` is always preserved. Remove that setting if you want to
