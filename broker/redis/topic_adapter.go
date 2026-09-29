@@ -69,13 +69,15 @@ func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, _ 
 		return nil, err
 	}
 
-	result, err := a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    group,
-		Consumer: "xmc",
-		Streams:  []string{key, ">"},
-		Count:    1,
-		Block:    timeout,
-	}).Result()
+	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+		return a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    group,
+			Consumer: "xmc",
+			Streams:  []string{key, ">"},
+			Count:    1,
+			Block:    block,
+		}).Result()
+	})
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, backends.ErrNoMessageAvailable
@@ -111,11 +113,13 @@ func (a *TopicAdapter) subscribeIndependent(ctx context.Context, key string, tim
 		a.lastID[key] = startID
 	}
 
-	result, err := a.client.XRead(ctx, &redis.XReadArgs{
-		Streams: []string{key, startID},
-		Count:   1,
-		Block:   timeout,
-	}).Result()
+	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+		return a.client.XRead(ctx, &redis.XReadArgs{
+			Streams: []string{key, startID},
+			Count:   1,
+			Block:   block,
+		}).Result()
+	})
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, backends.ErrNoMessageAvailable

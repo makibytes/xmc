@@ -37,6 +37,10 @@ func Connect(args ConnArguments) (*redis.Client, error) {
 		opt.TLSConfig = tlsCfg
 	}
 
+	// Honour context deadlines on every command (the per-message send/receive
+	// timeouts, --for bounds); cancellation of blocking reads is handled by
+	// blockingRead.
+	opt.ContextTimeoutEnabled = true
 	client := redis.NewClient(opt)
 
 	if err := client.Ping(context.Background()).Err(); err != nil {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -59,13 +60,15 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
-	result, err := a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    xmcQueueGroup,
-		Consumer: "xmc",
-		Streams:  []string{opts.Queue, ">"},
-		Count:    1,
-		Block:    timeout,
-	}).Result()
+	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+		return a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    xmcQueueGroup,
+			Consumer: "xmc",
+			Streams:  []string{opts.Queue, ">"},
+			Count:    1,
+			Block:    block,
+		}).Result()
+	})
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, backends.ErrNoMessageAvailable
@@ -99,11 +102,13 @@ func (a *QueueAdapter) peek(ctx context.Context, key string, opts backends.Recei
 	}
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-	result, err := a.client.XRead(ctx, &redis.XReadArgs{
-		Streams: []string{key, "0"},
-		Count:   1,
-		Block:   timeout,
-	}).Result()
+	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+		return a.client.XRead(ctx, &redis.XReadArgs{
+			Streams: []string{key, "0"},
+			Count:   1,
+			Block:   block,
+		}).Result()
+	})
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, backends.ErrNoMessageAvailable
