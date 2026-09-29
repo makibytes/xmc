@@ -117,7 +117,7 @@ func TestExtractCommand_ProseAndCodeFenceMultiLine(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsCapabilities(t *testing.T) {
-	prompt := systemPrompt("## send\nSend a message\n", "", "", "", nil)
+	prompt := systemPrompt("## send\nSend a message\n", "", "", "", nil, nil)
 	if !strings.Contains(prompt, "## send") {
 		t.Error("system prompt should include capabilities")
 	}
@@ -127,7 +127,7 @@ func TestSystemPrompt_ContainsCapabilities(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsNDJSONSchema(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	for _, field := range []string{`"data"`, `"dataBase64"`, `"properties"`, `"messageId"`, `"correlationId"`, `"key"`} {
 		if !strings.Contains(prompt, field) {
 			t.Errorf("system prompt should document NDJSON field %s", field)
@@ -139,7 +139,7 @@ func TestSystemPrompt_ContainsNDJSONSchema(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsFramingRules(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	if !strings.Contains(prompt, "auto-injected") {
 		t.Error("system prompt should describe verb|verb auto-injection")
 	}
@@ -149,7 +149,7 @@ func TestSystemPrompt_ContainsFramingRules(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsPipelineExamples(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	if !strings.Contains(prompt, "jq -cs") {
 		t.Error("system prompt should include a jq pipeline example")
 	}
@@ -159,7 +159,7 @@ func TestSystemPrompt_ContainsPipelineExamples(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsBrokerContext(t *testing.T) {
-	prompt := systemPrompt("## send\n", "RabbitMQ uses exchanges for routing.", "", "", nil)
+	prompt := systemPrompt("## send\n", "RabbitMQ uses exchanges for routing.", "", "", nil, nil)
 	if !strings.Contains(prompt, "exchanges for routing") {
 		t.Error("system prompt should include broker context when provided")
 	}
@@ -169,14 +169,14 @@ func TestSystemPrompt_ContainsBrokerContext(t *testing.T) {
 }
 
 func TestSystemPrompt_OmitsBrokerContextWhenEmpty(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	if strings.Contains(prompt, "Broker-specific documentation") {
 		t.Error("system prompt should not include broker section when context is empty")
 	}
 }
 
 func TestSystemPrompt_ContainsServerURL(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "amqp://broker.example.com:5672", "", nil)
+	prompt := systemPrompt("## send\n", "", "amqp://broker.example.com:5672", "", nil, nil)
 	if !strings.Contains(prompt, "amqp://broker.example.com:5672") {
 		t.Error("system prompt should include the server URL")
 	}
@@ -186,14 +186,14 @@ func TestSystemPrompt_ContainsServerURL(t *testing.T) {
 }
 
 func TestSystemPrompt_OmitsServerWhenEmpty(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	if strings.Contains(prompt, "## Connection") {
 		t.Error("system prompt should not include connection section when server is empty")
 	}
 }
 
 func TestSystemPrompt_ContainsTopology(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "Queues:\n  orders (5 messages)\n  events (0 messages)", nil)
+	prompt := systemPrompt("## send\n", "", "", "Queues:\n  orders (5 messages)\n  events (0 messages)", nil, nil)
 	if !strings.Contains(prompt, "orders") {
 		t.Error("system prompt should include topology queue names")
 	}
@@ -203,21 +203,21 @@ func TestSystemPrompt_ContainsTopology(t *testing.T) {
 }
 
 func TestSystemPrompt_OmitsTopologyWhenEmpty(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	if strings.Contains(prompt, "Current topology") {
 		t.Error("system prompt should not include topology section when empty")
 	}
 }
 
 func TestSystemPrompt_ContainsAskDirective(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	if !strings.Contains(prompt, "# ask:") {
 		t.Error("system prompt should document the # ask: output form")
 	}
 }
 
 func TestSystemPrompt_ContainsMultiTurnGuidance(t *testing.T) {
-	prompt := systemPrompt("## send\n", "", "", "", nil)
+	prompt := systemPrompt("## send\n", "", "", "", nil, nil)
 	if !strings.Contains(prompt, "multi-turn") {
 		t.Error("system prompt should explain multi-turn conversation support")
 	}

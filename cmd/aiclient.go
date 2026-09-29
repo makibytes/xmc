@@ -777,14 +777,20 @@ func extractGeminiModelIDs(r io.Reader) ([]string, error) {
 	return ids, nil
 }
 
+// geminiKeyHeader carries the API key. Gemini also accepts it as a "?key="
+// URL parameter, but a URL ends up verbatim in Go's transport errors
+// ("Post \"https://…?key=…\": dial tcp …"), which the AI shell prints — so
+// the key must never be part of the URL.
+const geminiKeyHeader = "x-goog-api-key"
+
 func (c *geminiClient) ListModels(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
 	defer cancel()
-	url := fmt.Sprintf("%s/v1beta/models?key=%s", c.baseURL, c.apiKey)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/v1beta/models", nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set(geminiKeyHeader, c.apiKey)
 	return fetchModelIDs(req, extractGeminiModelIDs)
 }
 
@@ -829,9 +835,9 @@ func (c *geminiClient) Complete(ctx context.Context, system string, messages []a
 
 	var apiURL string
 	if onToken != nil {
-		apiURL = fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s", c.baseURL, c.model, c.apiKey)
+		apiURL = fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", c.baseURL, c.model)
 	} else {
-		apiURL = fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", c.baseURL, c.model, c.apiKey)
+		apiURL = fmt.Sprintf("%s/v1beta/models/%s:generateContent", c.baseURL, c.model)
 	}
 
 	resp, err := doWithRetry(ctx, func() (*http.Request, error) {
@@ -840,6 +846,7 @@ func (c *geminiClient) Complete(ctx context.Context, system string, messages []a
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(geminiKeyHeader, c.apiKey)
 		return req, nil
 	})
 	if err != nil {

@@ -257,8 +257,11 @@ func TestOpenAIClient_GenerationConfig(t *testing.T) {
 
 func TestGeminiClient_RequestShape(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("key") != "gem-key" {
-			t.Errorf("key = %q", r.URL.Query().Get("key"))
+		if r.Header.Get("x-goog-api-key") != "gem-key" {
+			t.Errorf("x-goog-api-key = %q", r.Header.Get("x-goog-api-key"))
+		}
+		if r.URL.Query().Has("key") {
+			t.Errorf("API key must not be in the URL: %s", r.URL)
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -792,8 +795,11 @@ func TestGeminiClient_ListModels(t *testing.T) {
 		if r.URL.Path != "/v1beta/models" {
 			t.Errorf("path = %q, want /v1beta/models", r.URL.Path)
 		}
-		if r.URL.Query().Get("key") != "gem-key" {
-			t.Errorf("key = %q", r.URL.Query().Get("key"))
+		if r.Header.Get("x-goog-api-key") != "gem-key" {
+			t.Errorf("x-goog-api-key = %q", r.Header.Get("x-goog-api-key"))
+		}
+		if r.URL.Query().Has("key") {
+			t.Errorf("API key must not be in the URL: %s", r.URL)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"models": []map[string]string{

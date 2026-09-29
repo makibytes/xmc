@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -113,6 +115,11 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.filtering {
 			return m.handleKeyFilter(msg)
 		}
+		// Ctrl+C quits from anywhere there is nothing to cancel — a sidebar
+		// window has no input line to clear.
+		if msg.Type == tea.KeyCtrlC {
+			return m.quit()
+		}
 		// Route process pane keys to the dedicated handler.
 		if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
 			return m.handleKeyProcessPane(msg)
@@ -122,9 +129,24 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		(&m).killAllProcs()
-		m.quitting = true
-		return m, tea.Quit
+		// Like an interactive shell: Ctrl+C discards the line being typed;
+		// on an empty line it quits.
+		if m.input.Value() != "" {
+			m.clearInput()
+			return m, nil
+		}
+		return m.quit()
+
+	case tea.KeyCtrlD:
+		// EOF on an empty line quits (as in the shell); otherwise the
+		// textarea deletes the character under the cursor.
+		if m.input.Value() == "" {
+			return m.quit()
+		}
+
+	case tea.KeyCtrlL:
+		m.clearTranscript()
+		return m, nil
 
 	case tea.KeyEsc:
 		// Esc in chat toggles between AI and command mode.
@@ -163,10 +185,7 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.input.Reset()
-		m.histIdx = -1
-		m.input.SetHeight(1)
-		m.recalcLayout()
+		m.clearInput()
 
 		// Slash commands (work in both modes).
 		if strings.HasPrefix(prompt, "/") {
@@ -176,16 +195,16 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.mode == modeCmd {
 			// Direct command execution (shell-like).
 			if prompt == "exit" || prompt == "quit" {
-				(&m).killAllProcs()
-				m.exitAll = true
-				m.quitting = true
-				return m, tea.Quit
+				return m.quit()
 			}
 			m.cmdHistory = append(m.cmdHistory, prompt)
-			m.appendTranscript(cmdStyle.Render(m.binaryName+"> ") + prompt + "\n")
+			// The echo is the command's single transcript line (with its ⧉
+			// copy marker); the output follows directly underneath.
+			m.copyItems = append(m.copyItems, prompt)
+			m.appendTranscript(cmdStyle.Render(m.binaryName+"> ") + prompt + copyHintStyle.Render(" ⧉") + "\n")
 			m.proposedCmd = prompt
 			// Commands with --for become managed background processes.
-			if commandHasFor(prompt) {
+			if commandHasFor(prompt, m.aliases()) {
 				return m.startBackgroundProcess(prompt)
 			}
 			return m.startExecution(prompt)
@@ -200,30 +219,90 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		trimHistory(&m.ai.history, maxHistory)
 
 		m.fixAttempts = 0
-		m.state = tuiThinking
-		m.streamBuf.Reset()
-
-		return m, m.startAIRequest()
-
-	case tea.KeyRunes:
-		// Fall through to textarea update.
-		fallthrough
-
-	default:
-		// Pre-size BEFORE forwarding the key: resize the textarea so that
-		// repositionView() inside Update() sees the correct height and doesn't
-		// scroll content out of view when the text wraps to a new visual row.
-		// predictValue avoids calling Update() twice (which caused double-insertion
-		// due to shared backing arrays in the textarea's [][]rune value).
-		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
-			m.input.SetHeight(n)
-			m.recalcLayout()
-		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		(&m).updateInputHeight()
-		return m, cmd
+		return m, m.beginAIRequest()
 	}
+
+	// Everything else edits the input. Pre-size BEFORE forwarding the key:
+	// resize the textarea so that repositionView() inside Update() sees the
+	// correct height and doesn't scroll content out of view when the text
+	// wraps to a new visual row. predictValue avoids calling Update() twice
+	// (which caused double-insertion due to shared backing arrays in the
+	// textarea's [][]rune value).
+	if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
+		m.input.SetHeight(n)
+		m.recalcLayout()
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	(&m).updateInputHeight()
+	return m, cmd
+}
+
+// quit ends the session, cancelling any background processes first.
+func (m aiTUIModel) quit() (tea.Model, tea.Cmd) {
+	(&m).killAllProcs()
+	m.quitting = true
+	return m, tea.Quit
+}
+
+// clearInput empties the text input and leaves history navigation.
+func (m *aiTUIModel) clearInput() {
+	m.input.Reset()
+	m.histIdx = -1
+	m.input.SetHeight(1)
+	m.recalcLayout()
+}
+
+// clearTranscript empties the conversation display (/clear, Ctrl+L). The
+// clipboard items go with it: ⧉ markers are resolved by counting them from
+// the top of the transcript, so stale items would make a click copy the
+// wrong thing.
+func (m *aiTUIModel) clearTranscript() {
+	m.transcript.Reset()
+	m.copyItems = nil
+	m.setViewportContent()
+}
+
+// focusChat returns keyboard focus from a sidebar window to the input.
+func (m *aiTUIModel) focusChat() {
+	if prev := int(m.focus) - 1; prev >= 0 && prev < len(m.objTypes) && m.objTypes[prev].kind == objWindowProcs {
+		m.exitProcessView()
+	}
+	m.focus = focusChat
+	m.filtering = false
+	m.input.Focus()
+}
+
+// insertAtCursor inserts text (a sidebar object name) at the input's cursor,
+// adding a separating space on either side where it would otherwise run into
+// a neighbouring word — like shell completion, so "send " + orders + " hi"
+// composes naturally instead of replacing what was already typed.
+func (m *aiTUIModel) insertAtCursor(text string) {
+	lines := strings.Split(m.input.Value(), "\n")
+	row := min(max(m.input.Line(), 0), len(lines)-1)
+	runes := []rune(lines[row])
+	li := m.input.LineInfo()
+	col := min(max(li.StartColumn+li.ColumnOffset, 0), len(runes))
+	if col > 0 && !unicode.IsSpace(runes[col-1]) {
+		text = " " + text
+	}
+	if col == len(runes) || !unicode.IsSpace(runes[col]) {
+		text += " "
+	}
+	m.input.InsertString(text)
+}
+
+// shellQuote returns name unchanged when it is a plain shell word, or wrapped
+// in single quotes otherwise, so an inserted object name survives the
+// command-line splitter (shellSplit) as one argument.
+func shellQuote(name string) string {
+	isPlain := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._-:/@%+=,#", r)
+	}
+	if name != "" && strings.IndexFunc(name, func(r rune) bool { return !isPlain(r) }) < 0 {
+		return name
+	}
+	return "'" + strings.ReplaceAll(name, "'", `'"'"'`) + "'"
 }
 
 func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
@@ -236,47 +315,25 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 
 	switch cmd {
 	case "/help":
-		m.appendTranscript(dimStyle.Render(
-			"/model               pick a model from the provider\n"+
-				"/model <name>        switch to a model directly\n"+
-				"/effort              pick reasoning effort\n"+
-				"/effort low|med|high set effort directly\n"+
-				"/refresh             reload broker objects now\n"+
-				"/refresh off         disable periodic refresh\n"+
-				"/refresh <dur>       set refresh interval (e.g. 3s, 3m; min 1s)\n"+
-				"/connect             reconnect to the broker (enables auto-reconnect)\n"+
-				"/disconnect          stop auto-reconnect\n"+
-				"/reset               reset conversation history\n"+
-				"/clear               clear the display\n"+
-				"/exit                quit xmc\n"+
-				"/help                show this help\n"+
-				"\n"+
-				"Esc          toggle between ask> (AI) and "+m.binaryName+"> (command) mode\n"+
-				"Tab          autocomplete (command mode) · browse sidebar forward (AI mode)\n"+
-				"Shift+Tab    browse sidebar backward\n"+
-				"Up/Down      recall history\n"+
-				"Space        collapse/expand selected sidebar window\n"+
-				"x            toggle hierarchical tree-view for broker objects\n"+
-				"r            refresh the selected sidebar window now\n"+
-				"m            peek metadata (where peek is available)\n"+
-				"J / Y        metadata output format (JSON / YAML)\n"+
-				"PgUp/PgDn    scroll conversation · mouse wheel also works\n"+
-				"Home/End     jump to top/bottom\n"+
-				"             click ⧉ in the transcript to copy any item\n") + "\n")
+		m.appendTranscript(dimStyle.Render(aiHelpText(m.binaryName)) + "\n")
 
-	case "/exit":
-		(&m).killAllProcs()
-		m.exitAll = true
-		m.quitting = true
-		return m, tea.Quit
+	case "/exit", "/quit":
+		return m.quit()
 
 	case "/reset":
-		m.ai.resetHistory()
-		m.transcript.Reset()
-		m.totalIn = 0
-		m.totalOut = 0
-		m.setViewportContent()
+		// The session token totals (status bar, exit summary) are kept:
+		// /reset starts a new conversation, it doesn't undo what was spent.
+		m.ai.history = nil
+		m.fixAttempts = 0
+		m.clearTranscript()
 		m.appendTranscript(dimStyle.Render("(conversation reset)") + "\n\n")
+		// Re-read the topology for the fresh conversation off the UI
+		// goroutine: "manage list" can take seconds on a management API.
+		ai := m.ai
+		return m, func() tea.Msg {
+			ai.refreshTopology()
+			return nil
+		}
 
 	case "/refresh":
 		if arg != "" {
@@ -339,8 +396,7 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m, m.startReconnectProbe()
 
 	case "/clear":
-		m.transcript.Reset()
-		m.setViewportContent()
+		m.clearTranscript()
 
 	case "/model":
 		if arg == "" {
@@ -359,33 +415,20 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "/effort":
 		if arg == "" {
 			// Open interactive effort picker.
-			effortLevels := []string{"low", "medium", "high"}
-			currentIdx := -1
-			if setter, ok := m.ai.client.(modelSettable); ok {
-				switch setter.Effort() {
-				case effortLow:
-					currentIdx = 0
-				case effortMedium:
-					currentIdx = 1
-				case effortHigh:
-					currentIdx = 2
+			effortLevels := []string{string(effortLow), string(effortMedium), string(effortHigh)}
+			currentIdx := 0
+			for i, e := range effortLevels {
+				if aiEffort(e) == m.ai.currentEffort() {
+					currentIdx = i
 				}
-			}
-			startSel := currentIdx
-			if startSel < 0 {
-				startSel = 0
 			}
 			m.picker = &pickerState{
 				title:   "Select effort level:",
 				items:   effortLevels,
-				sel:     startSel,
+				sel:     currentIdx,
 				current: currentIdx,
 				onSelect: func(model *aiTUIModel, idx int) {
-					efforts := []aiEffort{effortLow, effortMedium, effortHigh}
-					if setter, ok := model.ai.client.(modelSettable); ok {
-						setter.SetEffort(efforts[idx])
-					}
-					model.appendTranscript(dimStyle.Render("effort → "+effortLevels[idx]) + "\n\n")
+					model.applyEffort(effortLevels[idx])
 				},
 			}
 			m.state = tuiPicking
@@ -400,6 +443,42 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// aiHelpText is the /help reference card: slash commands, then every key
+// binding grouped by where it applies.
+func aiHelpText(binaryName string) string {
+	return `Slash commands
+  /model [name]          pick a model, or switch directly (saved to config)
+  /effort [low|med|high] pick reasoning effort, or set directly (saved to config)
+  /refresh [dur|off]     reload the sidebar now · set the periodic interval (min 1s) · disable it
+  /connect · /disconnect reconnect to the broker now · stop auto-reconnect
+  /reset                 start a new conversation
+  /clear                 clear the display (also Ctrl+L)
+  /exit                  quit (also Ctrl+C or Ctrl+D on an empty line)
+
+Input
+  Enter          ask the AI (ask>) · run the command (` + binaryName + `>)
+  Esc            toggle between ask> and ` + binaryName + `> mode
+  Tab            complete (` + binaryName + `>) · browse the sidebar (ask>)
+  Shift+Tab      browse the sidebar
+  Up/Down        history of the current mode
+  Ctrl+C         clear the line; quit when it is empty
+  PgUp/PgDn      scroll · Home/End jump to top/bottom (when the input is empty)
+  click ⧉        copy that command or payload to the clipboard
+  --for <dur>    run a streaming command (receive, subscribe, forward, …) in the background
+
+Proposed command
+  Enter run · e edit · c discuss instead of running · Esc discard
+
+Sidebar window
+  ↑↓/j/k move · Enter insert name at cursor · / filter · s sort · x tree · Space collapse · r refresh · Esc back
+  c create · d delete · p peek · m peek metadata (J/Y: JSON/YAML) · P purge (publish on topics)
+  S send · R receive — the status bar lists the keys that apply to the selected row
+
+Processes window
+  ↑↓/j/k move · Enter/p show output · K kill · d remove · P purge finished · D remove all
+`
 }
 
 func (m aiTUIModel) handleKeyThinking(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -431,8 +510,8 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyEnter:
 		// Freeze with a green ✓ marker, then execute (or background if --for).
-		m.appendTranscript(freezeProposal(m.proposedCmd, "✓", false, m.proposedDestructive))
-		if commandHasFor(m.proposedCmd) {
+		m.acceptProposal(m.proposedCmd)
+		if commandHasFor(m.proposedCmd, m.aliases()) {
 			return m.startBackgroundProcess(m.proposedCmd)
 		}
 		return m.startExecution(m.proposedCmd)
@@ -472,20 +551,25 @@ func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.proposedCmd = cmd
-		m.proposedDestructive = anyCommand(cmd, isDestructive)
+		m.proposedDestructive = anyCommand(cmd, m.aliases(), isDestructive)
 		// Freeze with a green ✓ and run (or background if --for).
-		m.appendTranscript(freezeProposal(cmd, "✓", false, m.proposedDestructive))
+		m.acceptProposal(cmd)
 		m.input.SetValue("")
 		m.input.SetHeight(1)
 		m.recalcLayout()
-		if commandHasFor(cmd) {
+		if commandHasFor(cmd, m.aliases()) {
 			return m.startBackgroundProcess(cmd)
 		}
 		return m.startExecution(cmd)
 
 	case tea.KeyEsc, tea.KeyCtrlC:
-		// Freeze with a grey ✗ marker and return to idle.
+		// Freeze with a grey ✗ marker and return to idle — recorded in the
+		// conversation exactly like discarding the unedited proposal, so the
+		// model knows its command was not run.
 		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", true, false))
+		m.ai.history = append(m.ai.history,
+			aiMessage{Role: "assistant", Content: m.proposedCmd},
+			aiMessage{Role: "user", Content: "[user discarded the command]"})
 		m.input.SetValue("")
 		m.input.SetHeight(1)
 		m.state = tuiIdle
@@ -514,8 +598,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.focus = focusChat
-		m.input.Focus()
+		m.focusChat()
 		return m, nil
 	case tea.KeyUp:
 		m.moveSel(-1)
@@ -524,11 +607,9 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveSel(1)
 		return m, nil
 	case tea.KeyEnter:
-		name := m.selectedName()
-		if name != "" {
-			m.input.SetValue(name)
-			m.focus = focusChat
-			m.input.Focus()
+		if name := m.selectedName(); name != "" {
+			m.focusChat()
+			m.insertAtCursor(shellQuote(name))
 			(&m).updateInputHeight()
 		}
 		return m, nil
@@ -613,7 +694,7 @@ func (m aiTUIModel) handleKeyFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.Type {
-	case tea.KeyEsc:
+	case tea.KeyEsc, tea.KeyCtrlC:
 		m.filtering = false
 		m.objTypes[wi].filter = ""
 		m.objTypes[wi].sel = 0
@@ -623,12 +704,20 @@ func (m aiTUIModel) handleKeyFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyBackspace:
 		if len(m.objTypes[wi].filter) > 0 {
-			m.objTypes[wi].filter = m.objTypes[wi].filter[:len(m.objTypes[wi].filter)-1]
+			m.objTypes[wi].filter = dropLastRune(m.objTypes[wi].filter)
 			m.objTypes[wi].sel = 0
 		}
 		return m, nil
-	case tea.KeyRunes:
-		m.objTypes[wi].filter += msg.String()
+	case tea.KeyCtrlU:
+		m.objTypes[wi].filter = ""
+		m.objTypes[wi].sel = 0
+		return m, nil
+	case tea.KeyRunes, tea.KeySpace:
+		text := " "
+		if msg.Type == tea.KeyRunes {
+			text = typedText(msg)
+		}
+		m.objTypes[wi].filter += text
 		m.objTypes[wi].sel = 0
 		return m, nil
 	}
@@ -676,7 +765,7 @@ func confirmCreatePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	action := ow.createAction
 	if action == nil {
 		m.promptActive = false
-		m.input.Focus()
+		m.restoreInputFocus()
 		return m, nil
 	}
 	desc := fmt.Sprintf("▶ create %s \"%s\"", ow.singularLabel(), name)
@@ -686,7 +775,7 @@ func confirmCreatePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	m.state = tuiExecuting
 	return m, func() tea.Msg {
 		err := action.Run(name)
-		return sideActionMsg{err: err}
+		return sideActionMsg{err: err, objects: true}
 	}
 }
 
@@ -694,7 +783,7 @@ func confirmDeletePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	action := ow.deleteAction
 	if action == nil {
 		m.promptActive = false
-		m.input.Focus()
+		m.restoreInputFocus()
 		return m, nil
 	}
 	desc := fmt.Sprintf("▶ delete %s \"%s\"", ow.singularLabel(), m.promptName)
@@ -704,14 +793,14 @@ func confirmDeletePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	m.state = tuiExecuting
 	return m, func() tea.Msg {
 		err := action.Run(m.promptName)
-		return sideActionMsg{err: err}
+		return sideActionMsg{err: err, objects: true}
 	}
 }
 
 func confirmPurgePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
 		m.promptActive = false
-		m.input.Focus()
+		m.restoreInputFocus()
 		return m, nil
 	}
 	name := m.promptName
@@ -735,7 +824,7 @@ func confirmPurgePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 func confirmPurgeSubscriptionPrompt(m aiTUIModel, _ *objWindow) (tea.Model, tea.Cmd) {
 	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
 		m.promptActive = false
-		m.input.Focus()
+		m.restoreInputFocus()
 		return m, nil
 	}
 	sub := m.promptName
@@ -762,18 +851,24 @@ func confirmSendPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	if payload == "" {
 		return m, nil
 	}
-	target := m.promptTarget
+	name := m.promptTarget
 	useTopic := ow.sendsViaTopic(m.promptNodeKind)
 	verb := "send"
 	if useTopic {
 		verb = "publish"
 	}
-	desc := fmt.Sprintf("▶ %s %s \"%s\"", verb, ow.singularLabel(), target)
+	desc := fmt.Sprintf("▶ %s %s \"%s\"", verb, ow.singularLabel(), name)
 	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 	m.promptActive = false
 	m.state = tuiExecuting
+	// Routing through a window's object via the topic adapter targets the
+	// routing entity itself (RabbitMQ: publish -e <exchange>).
+	target, resolveErr := m.sidebarTarget(name, useTopic, useTopic)
 	session := m.session
 	return m, func() tea.Msg {
+		if resolveErr != nil {
+			return sideActionMsg{err: resolveErr}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if useTopic {
@@ -802,13 +897,17 @@ func confirmPublishPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	if payload == "" {
 		return m, nil
 	}
-	target := m.promptTarget
-	desc := fmt.Sprintf("▶ publish %s \"%s\"", ow.singularLabel(), target)
+	name := m.promptTarget
+	desc := fmt.Sprintf("▶ publish %s \"%s\"", ow.singularLabel(), name)
 	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 	m.promptActive = false
 	m.state = tuiExecuting
+	target, resolveErr := m.sidebarTarget(name, true, false)
 	session := m.session
 	return m, func() tea.Msg {
+		if resolveErr != nil {
+			return sideActionMsg{err: resolveErr}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		ta, err := session.getTopicAdapter()
@@ -826,7 +925,7 @@ func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	wi := m.promptObjIdx
 	if wi < 0 || wi >= len(m.objTypes) {
 		m.promptActive = false
-		m.input.Focus()
+		m.restoreInputFocus()
 		return m, nil
 	}
 	ow := &m.objTypes[wi]
@@ -839,27 +938,69 @@ func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
 		m.promptActive = false
-		m.input.Focus()
+		m.restoreInputFocus()
 		return m, nil
 	case tea.KeyEnter:
 		return spec.confirm(m, ow)
 	case tea.KeyBackspace:
-		if spec.textEntry && len(m.promptName) > 0 {
-			m.promptName = m.promptName[:len(m.promptName)-1]
+		if spec.textEntry {
+			m.promptName = dropLastRune(m.promptName)
+		}
+		return m, nil
+	case tea.KeyCtrlU:
+		if spec.textEntry {
+			m.promptName = ""
 		}
 		return m, nil
 	case tea.KeyRunes:
 		if spec.textEntry {
-			m.promptName += msg.String()
+			text := typedText(msg)
+			if !spec.allowSpace {
+				text = strings.Join(strings.Fields(text), "") // a pasted name can't carry spaces
+			}
+			m.promptName += text
 		}
 		return m, nil
 	case tea.KeySpace:
 		if spec.textEntry && spec.allowSpace {
-			m.promptName += msg.String()
+			m.promptName += " "
 		}
 		return m, nil
 	}
 	return m, nil
+}
+
+// typedText returns the text a KeyRunes event inserts. Unlike msg.String(),
+// it never includes bubbletea's "[…]" paste brackets or an "alt+" prefix —
+// a pasted payload must arrive verbatim, and an Alt-chord inserts nothing.
+// Pasted newlines become spaces: sidebar prompts are single-line.
+func typedText(msg tea.KeyMsg) string {
+	if msg.Alt {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, string(msg.Runes))
+}
+
+// dropLastRune removes the last character (not byte) of s, so Backspace never
+// leaves a broken UTF-8 sequence behind in a payload or filter.
+func dropLastRune(s string) string {
+	_, size := utf8.DecodeLastRuneInString(s)
+	return s[:len(s)-size]
+}
+
+// restoreInputFocus re-focuses the text input after a sidebar prompt or
+// action ends — but only when the chat has focus. Focusing it while a
+// sidebar window still owns the keyboard would show a blinking cursor in the
+// input that keystrokes never reach.
+func (m *aiTUIModel) restoreInputFocus() {
+	if m.focus == focusChat {
+		m.input.Focus()
+	}
 }
 
 // initManageAction calls SetupFlags on a throwaway command to initialise
@@ -922,6 +1063,7 @@ func (m aiTUIModel) handleKeyExecuting(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
 		if m.execCancel != nil {
 			m.execCancel()
+			m.execCancelled = true
 		}
 		return m, nil
 	}
@@ -1069,8 +1211,8 @@ func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 func (m *aiTUIModel) cycleFocus(forward bool) {
 	// Targets: focusChat (0), then 1..len(objTypes) for each window.
 	n := len(m.objTypes) + 1
-	if n <= 1 {
-		return
+	if n <= 1 || !m.sidebarVisible() {
+		return // nothing to browse — or a sidebar too narrow to be shown
 	}
 	prevFocus := m.focus
 	cur := int(m.focus)
@@ -1403,25 +1545,6 @@ func (m aiTUIModel) copyIdxForLine(clickedLine int) int {
 	return count - 1 // 0-based
 }
 
-// isMessageReadCommand reports whether cmd is one that consumes / peeks
-// messages and therefore produces payload output on stdout.
-func isMessageReadCommand(cmd string) bool {
-	cmd = stripBinaryPrefix(cmd)
-	verbs := []string{"receive ", "receive\n", "get ", "get\n", "peek ", "peek\n", "subscribe ", "subscribe\n"}
-	cmd = strings.TrimSpace(cmd)
-	for _, v := range verbs {
-		if strings.HasPrefix(cmd, strings.TrimSpace(v)) {
-			return true
-		}
-	}
-	// Also match bare verb (no args).
-	switch cmd {
-	case "receive", "get", "peek", "subscribe":
-		return true
-	}
-	return false
-}
-
 // renderMessagePayload renders a message payload (or multiple NDJSON records)
 // with a left border and italic cyan body, mimicking a blockquote.
 func renderMessagePayload(content string) string {
@@ -1436,8 +1559,10 @@ func renderMessagePayload(content string) string {
 // ---------- Proposal rendering ----------
 
 // freezeProposal builds the static transcript line written when the user
-// resolves a proposed command. The marker (✓, ✗, ?) is appended with the
-// appropriate style. When dim is true the command text is rendered in dimStyle.
+// resolves a proposed command. The marker (✗ discarded, ? discuss) is
+// appended with the appropriate style. When dim is true the command text is
+// rendered in dimStyle. An accepted (✓) command goes through acceptProposal
+// instead: its output follows directly underneath.
 func freezeProposal(cmd, marker string, dim, destructive bool) string {
 	var prefix string
 	if dim {
@@ -1447,8 +1572,6 @@ func freezeProposal(cmd, marker string, dim, destructive bool) string {
 	}
 	var result string
 	switch marker {
-	case "✓":
-		result = prefix + " " + cmdStyle.Render("✓")
 	case "✗":
 		result = prefix + " " + warnStyle.Render("✗")
 	case "?":
@@ -1460,6 +1583,14 @@ func freezeProposal(cmd, marker string, dim, destructive bool) string {
 		result += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
 	}
 	return result + "\n\n"
+}
+
+// acceptProposal freezes an accepted command into the transcript as
+// "▶ <cmd> ✓ ⧉" — the one line that stands for the command, with its copy
+// marker; the command's output follows directly underneath.
+func (m *aiTUIModel) acceptProposal(cmd string) {
+	m.copyItems = append(m.copyItems, cmd)
+	m.appendTranscript(cmdStyle.Render("▶ "+cmd) + " " + cmdStyle.Render("✓") + copyHintStyle.Render(" ⧉") + "\n")
 }
 
 // renderPicker renders the interactive picker list.

@@ -15,11 +15,11 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/chzyer/readline"
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 	runewidth "github.com/mattn/go-runewidth"
-	"github.com/muesli/reflow/wordwrap"
 	"github.com/rivo/uniseg"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -58,20 +58,30 @@ const (
 
 // ---------- Bubble Tea messages ----------
 
-type tokenMsg struct{ text string } // streamed token from AI
+// AI request messages carry the request's generation (aiTUIModel.aiGen), so
+// a late token or response from a request the user already cancelled can't
+// be mistaken for the one now in flight.
+type tokenMsg struct {
+	text string
+	gen  int
+} // streamed token from AI
 type aiDoneMsg struct {
 	text  string
 	usage TokenUsage
 	err   error
+	gen   int
 } // AI request completed
 type execDoneMsg struct {
 	err            error
-	stdout, stderr string
+	stdout, stderr string     // each stream's tail, for the AI feedback
+	chunks         []outChunk // interleaved display output; nil → built from stdout/stderr
+	truncated      bool       // older display output was dropped (maxDisplayCapture)
 } // command finished
 type sideActionMsg struct {
-	action string
-	copy   string
-	err    error
+	action  string
+	copy    string
+	err     error
+	objects bool // the action created/deleted an object (vs. changed messages) — picks the auto-update setting
 }                                                     // sidebar action finished
 type setCancelMsg struct{ cancel context.CancelFunc } // pass cancel from bg goroutine to model
 type modelsMsg struct {
@@ -143,6 +153,16 @@ func (m aiTUIModel) theme() tuiTheme {
 		return themeCmd
 	}
 	return themeAI
+}
+
+// aliases returns the user's command aliases (the session's, which the
+// executor expands) so every command classification — destructive warning,
+// background eligibility, refresh triggers — sees what will actually run.
+func (m aiTUIModel) aliases() map[string]string {
+	if m.session == nil {
+		return nil
+	}
+	return m.session.aliases
 }
 
 // titleMain renders the leading title-bar segment (" XMC AI "/" XMC Shell ").
@@ -232,6 +252,12 @@ var (
 			Foreground(lipgloss.Color("3")) // yellow
 
 	dimStyle = lipgloss.NewStyle().
+			Faint(true)
+
+	// stderrStyle renders a command's stderr in the transcript (message
+	// properties, --stats summaries, warnings) — set apart from stdout.
+	stderrStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")). // yellow
 			Faint(true)
 
 	statusStyle = lipgloss.NewStyle().
@@ -378,10 +404,13 @@ type aiTUIModel struct {
 	proposedDestructive bool // true when the proposed command is flagged as destructive
 	shimmerPhase        int  // animation frame counter for the proposal shimmer
 	execCancel          context.CancelFunc
+	execCancelled       bool         // the user pressed Esc/Ctrl+C while the command ran
+	liveCapture         *execCapture // output of the running foreground command (live preview)
+	liveGen             int          // liveCapture generation last rendered
 	quitting            bool
-	exitAll             bool // /exit: quit xmc entirely
 	fetchingModels      bool // spinner while /model fetches the list
 	fixAttempts         int  // auto-fix retry counter (reset on success or new user prompt)
+	aiGen               int  // generation of the current AI request (see tokenMsg/aiDoneMsg)
 	follow              bool // auto-scroll to bottom on new content (false when user scrolls up)
 	width               int
 	height              int
@@ -478,7 +507,10 @@ type aiTUIModel struct {
 func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command, binaryName, server string) aiTUIModel {
 	w, h, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
-		w, h = 80, 24
+		// Not a terminal. Bubble Tea delivers the real size in its first
+		// WindowSizeMsg anyway; until then assume a layout wide enough for
+		// the sidebar (see paneWidths).
+		w, h = 120, 40
 	}
 
 	ta := textarea.New()
@@ -597,11 +629,18 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// A terminal too narrow for the sidebar hides it (paneWidths); a
+		// sidebar window must not keep the keyboard while invisible.
+		if !m.sidebarVisible() && m.focus != focusChat {
+			m.focusChat()
+		}
 		(&m).updateInputHeight()
 		return m, nil
 
 	case tea.KeyMsg:
-		// Scroll keys work in all states (don't conflict with any input).
+		// Scroll keys work in all states. Home/End only while the input has
+		// nothing to move the cursor through; with text in it they move the
+		// cursor to the start/end of the line, as in any line editor.
 		switch msg.Type {
 		case tea.KeyPgUp:
 			m.viewport.HalfPageUp()
@@ -612,13 +651,17 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.follow = m.viewport.AtBottom()
 			return m, nil
 		case tea.KeyHome:
-			m.viewport.GotoTop()
-			m.follow = false
-			return m, nil
+			if !m.inputHasCursorText() {
+				m.viewport.GotoTop()
+				m.follow = false
+				return m, nil
+			}
 		case tea.KeyEnd:
-			m.viewport.GotoBottom()
-			m.follow = true
-			return m, nil
+			if !m.inputHasCursorText() {
+				m.viewport.GotoBottom()
+				m.follow = true
+				return m, nil
+			}
 		}
 		return m.handleKey(msg)
 
@@ -653,6 +696,13 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shimmerPhase++
 			m.setViewportContent()
 		}
+		// Repaint the running command's live output when it has grown.
+		if m.state == tuiExecuting && m.liveCapture != nil {
+			if g := m.liveCapture.generation(); g != m.liveGen {
+				m.liveGen = g
+				m.setViewportContent()
+			}
+		}
 		// Advance the status bar hint scroll every few ticks (see field doc).
 		const statusScrollEveryNTicks = 4
 		m.statusScrollTick++
@@ -662,6 +712,9 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tokenMsg:
+		if msg.gen != m.aiGen || m.state != tuiThinking {
+			return m, nil // from a cancelled request
+		}
 		m.streamBuf.WriteString(msg.text)
 		// Throttle viewport rebuilds to ~50 ms to avoid O(n²) reflow per token.
 		if time.Since(m.lastStreamRender) >= 50*time.Millisecond {
@@ -693,12 +746,14 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.appendTranscript(histOkStyle.Render("✓ ok") + "\n\n")
 		}
-		if m.ai != nil && m.ai.autoUpdateObjects {
+		// Refresh per the matching auto-update setting: create/delete change
+		// the object list, send/receive/purge/peek the message counts.
+		if m.ai != nil && ((msg.objects && m.ai.autoUpdateObjects) || (!msg.objects && m.ai.autoUpdateMessages)) {
 			m.loadingObjects = true
 			cmds = append(cmds, m.startLoadObjects())
 		}
 		m.state = tuiIdle
-		m.input.Focus()
+		m.restoreInputFocus()
 		return m, tea.Batch(cmds...)
 
 	case setCancelMsg:
@@ -835,6 +890,21 @@ func (m aiTUIModel) serverInfo() string {
 	}
 }
 
+// inputHasCursorText reports whether the text input is the active editor and
+// holds text, i.e. whether Home/End should move its cursor rather than
+// scroll the transcript.
+func (m aiTUIModel) inputHasCursorText() bool {
+	return !m.promptActive && m.focus == focusChat &&
+		(m.state == tuiIdle || m.state == tuiEditing) && m.input.Value() != ""
+}
+
+// sidebarVisible reports whether the terminal is wide enough to show the
+// sidebar at all (see paneWidths).
+func (m aiTUIModel) sidebarVisible() bool {
+	_, side := m.paneWidths()
+	return side > 0
+}
+
 // paneWidths computes the conversation and sidebar widths based on the
 // terminal size and whether sidebar windows are configured.
 func (m aiTUIModel) paneWidths() (convWidth, sideWidth int) {
@@ -885,8 +955,7 @@ func (m aiTUIModel) renderPromptLine() string {
 }
 
 func (m aiTUIModel) renderMainContent() string {
-	convWidth, sideWidth := m.paneWidths()
-	_ = convWidth // viewport.Width already set by recalcLayout
+	_, sideWidth := m.paneWidths() // the conversation width is applied in recalcLayout
 
 	convPane := m.viewport.View()
 
@@ -978,8 +1047,8 @@ func (m aiTUIModel) renderStatusBar() string {
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
 			kvs := []hintKV{
-				{"↑↓", "browse"}, {"Enter", "view output"}, {"d", "remove"}, {"k", "kill"},
-				{"p", "purge done"}, {"D", "kill all"}, {"Space", "collapse"}, {"Esc", "chat"},
+				{"↑↓", "move"}, {"Enter", "output"}, {"K", "kill"}, {"d", "remove"},
+				{"P", "purge finished"}, {"D", "remove all"}, {"Space", "collapse"}, {"Esc", "chat"},
 			}
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else if m.focus != focusChat {
@@ -1001,7 +1070,7 @@ func (m aiTUIModel) renderStatusBar() string {
 			}
 			kvs = append(kvs,
 				hintKV{"Space", "collapse"},
-				hintKV{"Enter", "use"},
+				hintKV{"Enter", "insert"},
 				hintKV{"Esc", "chat"},
 			)
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
@@ -1010,7 +1079,7 @@ func (m aiTUIModel) renderStatusBar() string {
 			if m.mode == modeCmd {
 				kvs = append(kvs, hintKV{"Tab", "complete"})
 			}
-			if len(m.objTypes) > 0 {
+			if len(m.objTypes) > 0 && m.sidebarVisible() {
 				if m.mode == modeCmd {
 					kvs = append(kvs, hintKV{"Shift+Tab", "browse"})
 				} else {
@@ -1124,9 +1193,8 @@ func scrollingText(full string, width, offset int) string {
 	return string(out)
 }
 
-// fmtTokens formats a token count. It is fmtCount minus the "M" case for
-// millions — a per-turn/session token count realistically never reaches
-// that scale, so delegating is safe.
+// fmtTokens formats a token count compactly (12, 3.4k, 1.2M) for the status
+// bar and the exit summary.
 func fmtTokens(n int) string {
 	return fmtCount(int64(n))
 }
@@ -1286,6 +1354,10 @@ func (m *aiTUIModel) resetInputScroll() {
 	m.input.SetCursor(col)
 }
 
+// livePreviewLines is how many trailing output lines a running foreground
+// command shows while it runs.
+const livePreviewLines = 20
+
 // maxTranscriptBytes is the soft cap on transcript memory. When exceeded, the
 // oldest content is dropped and a trim marker is prepended.
 const maxTranscriptBytes = 200 * 1024 // 200 KB
@@ -1299,6 +1371,12 @@ func (m *aiTUIModel) appendTranscript(text string) {
 		keep := raw[m.transcript.Len()-maxTranscriptBytes:]
 		if nl := strings.Index(keep, "\n"); nl >= 0 {
 			keep = keep[nl+1:]
+		}
+		// ⧉ markers are resolved by counting them from the top (see
+		// copyIdxForLine), so drop the clipboard items whose markers were
+		// just cut off, or every later click would copy the wrong item.
+		if n := strings.Count(raw[:len(raw)-len(keep)], copyMarker); n > 0 {
+			m.copyItems = m.copyItems[min(n, len(m.copyItems)):]
 		}
 		m.transcript.Reset()
 		m.transcript.WriteString(dimStyle.Render("… earlier output trimmed …") + "\n\n")
@@ -1318,6 +1396,13 @@ func (m *aiTUIModel) setViewportContent() {
 	if m.state == tuiPicking && m.picker != nil {
 		content += m.renderPicker()
 	}
+	if m.state == tuiExecuting && m.liveCapture != nil {
+		// The last lines written so far; replaced by the full, styled output
+		// once the command finishes (handleExecDone).
+		for _, line := range m.liveCapture.tail(livePreviewLines) {
+			content += dimStyle.Render("  "+line) + "\n"
+		}
+	}
 	if m.state == tuiProposing || m.state == tuiEditing {
 		text := m.proposedCmd
 		if m.state == tuiEditing {
@@ -1331,7 +1416,7 @@ func (m *aiTUIModel) setViewportContent() {
 			w = 80
 		}
 		plainLine := "▶ " + text
-		wrapped := wordwrap.String(plainLine, w)
+		wrapped := wrapText(plainLine, w)
 		lines := strings.Split(wrapped, "\n")
 		// Count total runes across all wrapped lines to compute shimmer period.
 		totalRunes := 0
@@ -1367,7 +1452,7 @@ func (m *aiTUIModel) setViewportContent() {
 		content += "\n\n"
 	}
 	if w := m.viewport.Width; w > 0 {
-		content = wordwrap.String(content, w)
+		content = wrapText(content, w)
 	}
 	// Cache the wrapped lines for click-to-copy ⧉ detection.
 	m.wrappedContentLines = strings.Split(content, "\n")
@@ -1375,6 +1460,16 @@ func (m *aiTUIModel) setViewportContent() {
 	if m.follow {
 		m.viewport.GotoBottom()
 	}
+}
+
+// wrapText soft-wraps s (which may carry ANSI styling) to width columns at
+// word boundaries, hard-breaking any word longer than a line. It runs on the
+// whole transcript at every repaint, so it must stay linear: reflow's
+// wordwrap is quadratic in the length of an unbroken word, and message
+// payloads routinely are one — minified JSON, --ndjson records, base64 — which
+// froze the UI for seconds per frame (20 KB ≈ 1 s, 200 KB ≈ minutes).
+func wrapText(s string, width int) string {
+	return xansi.Wrap(s, width, "")
 }
 
 // ---------- Entry point ----------
@@ -1386,7 +1481,7 @@ func derefProgram(pptr **tea.Program) *tea.Program {
 	return *pptr
 }
 
-func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, binaryName, server string) (exitAll bool, totalIn, totalOut int, err error) {
+func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, binaryName, server string) (totalIn, totalOut int, err error) {
 	var prog *tea.Program
 	model := newAITUIModel(ai, session, rootCmd, binaryName, server)
 	model.program = &prog
@@ -1408,9 +1503,6 @@ func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, bina
 				}
 			}
 		}
-		if m.exitAll {
-			return true, totalIn, totalOut, runErr
-		}
 	}
-	return false, totalIn, totalOut, runErr
+	return totalIn, totalOut, runErr
 }

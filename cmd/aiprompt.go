@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -136,7 +138,12 @@ func collectFlags(cmd *cobra.Command) []flagInfo {
 	return flags
 }
 
-func systemPrompt(caps, brokerContext, server, topology string, aliases map[string]string) string {
+// systemPrompt assembles the AI system prompt. It must be deterministic for a
+// given input (aliases are emitted sorted): providers cache prompt prefixes,
+// and a prompt that reshuffles on every rebuild defeats that cache.
+// destructive lists the manage subcommands that get a confirmation warning
+// (see destructiveCommands); nil when the broker has none.
+func systemPrompt(caps, brokerContext, server, topology string, aliases map[string]string, destructive []string) string {
 	var brokerSection string
 	if brokerContext != "" {
 		brokerSection = fmt.Sprintf(`
@@ -164,8 +171,8 @@ subscriptions, etc.) and to produce correct commands.
 	if len(aliases) > 0 {
 		var ab strings.Builder
 		ab.WriteString("\n## Saved aliases\n\nThe user has defined these command shortcuts. You may output an alias name\n(with arguments) instead of the full command:\n\n")
-		for name, tmpl := range aliases {
-			fmt.Fprintf(&ab, "  %s → %s\n", name, tmpl)
+		for _, name := range slices.Sorted(maps.Keys(aliases)) {
+			fmt.Fprintf(&ab, "  %s → %s\n", name, aliases[name])
 		}
 		aliasesSection = ab.String()
 	}
@@ -202,7 +209,7 @@ Never use "body", "payload", or "message" — the exact field names are:
 ## Destructive operations
 
 ONLY these commands are destructive (require explicit user confirmation):
-  manage delete-queue, manage delete-topic, manage delete-exchange, manage delete-address, manage delete-consumer-group, manage unbind-queue, manage purge
+  %s
 
 All other commands — including receive, peek, move, forward, subscribe (even with -n 0 to drain a queue) — are NON-DESTRUCTIVE read or relay operations. Do NOT warn about or ask confirmation for these.
 
@@ -218,7 +225,16 @@ Available commands and flags:
 - If impossible: # cannot: <brief reason>
 - If ambiguous: # ask: <clarifying question>
 - No other "#" comment, confirmation question, or explanation is allowed — "# cannot:" and "# ask:" are the only two.
-`, binBaseName(), caps, brokerSection, connectionSection, topologySection, aliasesSection)
+`, binBaseName(), strings.Join(destructiveOrNone(destructive), ", "), caps, brokerSection, connectionSection, topologySection, aliasesSection)
+}
+
+// destructiveOrNone keeps the destructive-operations section grammatical for
+// a broker without management commands.
+func destructiveOrNone(destructive []string) []string {
+	if len(destructive) == 0 {
+		return []string{"(none on this broker)"}
+	}
+	return destructive
 }
 
 func extractCommand(response string) string {

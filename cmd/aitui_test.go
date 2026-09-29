@@ -284,8 +284,10 @@ func TestAITUI_HandleExecDone_InlineDisplay(t *testing.T) {
 		t.Errorf("after exec success, state = %v, want tuiIdle", model.state)
 	}
 	transcript := model.transcript.String()
-	if !strings.Contains(transcript, "ran: receive q") {
-		t.Errorf("transcript should show inline executed command card, got:\n%s", transcript)
+	// The command line itself was written when it was accepted/typed; the
+	// result only adds the output (a payload block for a read) and status.
+	if !strings.Contains(transcript, "│ hello") {
+		t.Errorf("transcript should show the received payload inline, got:\n%s", transcript)
 	}
 	if !strings.Contains(transcript, "ok") {
 		t.Errorf("transcript should show ok status, got:\n%s", transcript)
@@ -633,11 +635,60 @@ func TestAITUI_EnterInsertsName(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model := updated.(aiTUIModel)
-	if model.input.Value() != wantName {
-		t.Errorf("Enter should insert %q into input, got %q", wantName, model.input.Value())
+	// Like shell completion, a trailing space lets the user keep typing.
+	if model.input.Value() != wantName+" " {
+		t.Errorf("Enter should insert %q into input, got %q", wantName+" ", model.input.Value())
 	}
 	if model.focus != focusChat {
 		t.Errorf("Enter should return focus to chat, got %v", model.focus)
+	}
+}
+
+// Enter on a sidebar row inserts at the cursor instead of replacing the draft:
+// type "send", Shift+Tab to the queue, Enter → "send orders ".
+func TestAITUI_EnterInsertsNameIntoDraft(t *testing.T) {
+	m := newTestModelWithObjects()
+	m.input.SetValue("send")
+	m.focus = 1
+	m.objTypes[0].sel = 1 // orders
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(aiTUIModel)
+	if got := m.input.Value(); got != "send orders " {
+		t.Errorf("input = %q, want %q", got, "send orders ")
+	}
+
+	// Cursor between two words: spaces are added only where needed.
+	m.input.SetValue("move  dlq")
+	m.input.SetCursor(5) // between the two spaces
+	m.focus = 1
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(aiTUIModel)
+	if got := m.input.Value(); got != "move orders dlq" {
+		t.Errorf("input = %q, want %q", got, "move orders dlq")
+	}
+	m.input.SetValue("movedlq")
+	m.input.SetCursor(4) // inside a word
+	m.focus = 1
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(aiTUIModel)
+	if got := m.input.Value(); got != "move orders dlq" {
+		t.Errorf("input = %q, want %q", got, "move orders dlq")
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"orders":             "orders",
+		"persistent://a/b/c": "persistent://a/b/c",
+		"addr::queue":        "addr::queue",
+		"my queue":           "'my queue'",
+		"it's":               `'it'"'"'s'`,
+		"":                   "''",
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -896,8 +947,8 @@ func TestAITUI_SlashExit(t *testing.T) {
 	m.input.SetValue("/exit")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model := updated.(aiTUIModel)
-	if !model.exitAll {
-		t.Error("/exit should set exitAll")
+	if !model.quitting {
+		t.Error("/exit should quit")
 	}
 	if cmd == nil {
 		t.Error("/exit should return a quit command")
@@ -1133,9 +1184,9 @@ func TestCopyIdxForLine(t *testing.T) {
 	}
 }
 
-// ---------- isMessageReadCommand ----------
+// ---------- isMessageRead ----------
 
-func TestIsMessageReadCommand(t *testing.T) {
+func TestIsMessageRead(t *testing.T) {
 	tests := []struct {
 		cmd  string
 		want bool
@@ -1144,23 +1195,27 @@ func TestIsMessageReadCommand(t *testing.T) {
 		{"xmc receive orders", true},
 		{"receive orders -n 5", true},
 		{"receive", true},
+		{"get orders", true}, // receive's alias
 		{"peek dlq", true},
 		{"./" + binBaseName() + " peek dlq", true},
 		{"peek", true},
 		{"subscribe events", true},
 		{"subscribe events --durable", true},
 		{"subscribe", true},
+		{"request svc ping", true}, // prints the reply message
+		{"receive q -n 0 --ndjson | jq .data", true},
 		// Non-read commands.
 		{"send q hello", false},
 		{"publish t hello", false},
 		{"manage list", false},
 		{"forward src dst", false},
 		{"move dlq orders", false},
+		{"receivers", false}, // not a verb, just a shared prefix
 	}
 	for _, tt := range tests {
-		got := isMessageReadCommand(tt.cmd)
+		got := anyCommand(tt.cmd, nil, isMessageRead)
 		if got != tt.want {
-			t.Errorf("isMessageReadCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
+			t.Errorf("isMessageRead(%q) = %v, want %v", tt.cmd, got, tt.want)
 		}
 	}
 }

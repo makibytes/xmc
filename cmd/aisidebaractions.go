@@ -45,6 +45,25 @@ var sidebarActions = []sidebarAction{
 	{"R", resolveReadAction("receive", "receive", true, backends.VerbosityQuiet, payloadOnlyRender)},
 }
 
+// sidebarTarget maps a sidebar object name to the address the adapters take,
+// through BrokerSpec.ResolveTarget — exactly as the CLI resolves the same
+// name typed as a verb argument (Redis key prefix, RabbitMQ AMQP 1.0 v2
+// address, Pulsar topic URL). Calling an adapter with the bare listed name
+// instead silently targets something else: on Redis a different stream key
+// than the listed queue; on RabbitMQ amq.topic with the exchange's name as
+// routing key rather than the exchange. viaExchange addresses the routing
+// entity itself, like "publish -e <name>" on an exchange-routed broker.
+func (m *aiTUIModel) sidebarTarget(name string, isTopic, viaExchange bool) (string, error) {
+	if m.session == nil || m.session.spec.ResolveTarget == nil {
+		return name, nil
+	}
+	ts := TargetSpec{IsTopic: isTopic, To: name}
+	if viaExchange && m.session.spec.ExchangeRouting {
+		ts = TargetSpec{IsTopic: true, Exchange: name}
+	}
+	return m.session.spec.ResolveTarget(ts)
+}
+
 // lookupSidebarAction finds the action bound to key, if any.
 func lookupSidebarAction(key string) (sidebarAction, bool) {
 	for _, a := range sidebarActions {
@@ -197,8 +216,12 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 				desc := fmt.Sprintf("▶ %s Subscription \"%s\"", descVerb, childName)
 				m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 				m.state = tuiExecuting
-				topic, sub := parentName, childName
+				topic, resolveErr := m.sidebarTarget(parentName, true, false)
+				sub := childName
 				return *m, func() tea.Msg {
+					if resolveErr != nil {
+						return sideActionMsg{err: resolveErr}
+					}
 					ta, err := session.getTopicAdapter()
 					if err != nil {
 						return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
@@ -236,8 +259,11 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 			desc := fmt.Sprintf("▶ %s %s \"%s\"", descVerb, ow.singularLabel(), name)
 			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 			m.state = tuiExecuting
-			queue := name
+			queue, resolveErr := m.sidebarTarget(name, false, false)
 			return *m, func() tea.Msg {
+				if resolveErr != nil {
+					return sideActionMsg{err: resolveErr}
+				}
 				qa, err := session.getQueueAdapter()
 				if err != nil {
 					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}

@@ -10,6 +10,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // ---------- Window kind discriminator ----------
@@ -49,6 +51,8 @@ type bgProcess struct {
 	out        cappedBuffer // goroutine writes; UI reads via snapshotText()
 	lines      int          // count of '\n' in out
 	stderrSeen bool         // process wrote to stderr since the user last viewed its output
+
+	killed bool // stopped by the user (K); UI goroutine only
 
 	// Set in handleProcDoneMsg (UI goroutine only):
 	done       bool
@@ -134,30 +138,66 @@ var backgroundVerbs = map[string]bool{
 	"reply":     true,
 }
 
-// processName returns a short display name: verb + first positional (non-flag) arg.
+// processName returns a short display name: verb + first positional arg.
 // "receive q1 --for 1h" → "receive q1"; "forward q1 q2 --for 5m" → "forward q1".
-func processName(command string) string {
+// With rootCmd, the verb's real flag definitions tell which flags consume the
+// next token, so "receive --for 1h q1" is "receive q1", not "receive 1h";
+// without it every non-flag token counts as positional.
+func processName(command string, rootCmd *cobra.Command) string {
 	parts := shellSplit(command)
 	if len(parts) == 0 {
 		return command
 	}
 	verb := parts[0]
-	for i := 1; i < len(parts); i++ {
-		if !strings.HasPrefix(parts[i], "-") {
-			return verb + " " + parts[i]
+	var flags *pflag.FlagSet
+	if rootCmd != nil {
+		if c, _, err := rootCmd.Find([]string{verb}); err == nil && c != rootCmd {
+			flags = c.Flags()
 		}
+	}
+	for i := 1; i < len(parts); i++ {
+		p := parts[i]
+		if p == "--" {
+			if i+1 < len(parts) {
+				return verb + " " + parts[i+1]
+			}
+			break
+		}
+		if strings.HasPrefix(p, "-") && len(p) > 1 {
+			if flagTakesValue(flags, p) {
+				i++ // skip the flag's value
+			}
+			continue
+		}
+		return verb + " " + p
 	}
 	return verb
 }
 
-// segHasFor returns true if a single pipeline segment is a streaming verb with
-// --for or --forever, making it eligible to run as a background process.
+// flagTakesValue reports whether token (a "--name" or "-x" flag without an
+// inline "=value") consumes the following token as its value in flags.
+func flagTakesValue(flags *pflag.FlagSet, token string) bool {
+	if flags == nil || strings.Contains(token, "=") {
+		return false
+	}
+	var f *pflag.Flag
+	if name, ok := strings.CutPrefix(token, "--"); ok {
+		f = flags.Lookup(name)
+	} else if len(token) == 2 {
+		f = flags.ShorthandLookup(token[1:])
+	}
+	return f != nil && f.NoOptDefVal == ""
+}
+
+// segHasFor returns true if a single pipeline stage is a streaming verb (or
+// verb alias) with --for or --forever, making it eligible to run as a
+// background process.
 func segHasFor(segment string) bool {
-	parts := shellSplit(segment)
+	parts := shellSplit(stripBinaryPrefix(strings.TrimSpace(segment)))
 	if len(parts) == 0 {
 		return false
 	}
-	if !backgroundVerbs[strings.ToLower(parts[0])] {
+	if !backgroundVerbs[canonicalVerb(strings.ToLower(parts[0]))] {
 		return false
 	}
 	for i, p := range parts {
@@ -175,9 +215,10 @@ func segHasFor(segment string) bool {
 	return false
 }
 
-// commandHasFor returns true if any segment of line is a backgroundable --for/--forever command.
-func commandHasFor(line string) bool {
-	return anyCommand(line, segHasFor)
+// commandHasFor returns true if any stage of line (aliases expanded) is a
+// backgroundable --for/--forever command.
+func commandHasFor(line string, aliases map[string]string) bool {
+	return anyCommand(line, aliases, segHasFor)
 }
 
 // commandWellFormed returns false when the command ends with a bare top-level '&'
@@ -234,18 +275,15 @@ func (m *aiTUIModel) removeProcWindow() {
 	}
 	// If focused on the proc window, exit and return to chat.
 	if int(m.focus)-1 == m.procWinIdx {
-		m.exitProcessView()
-		m.focus = focusChat
-		m.input.Focus()
+		m.focusChat()
 	}
 	m.objTypes = m.objTypes[:len(m.objTypes)-1]
 	m.procWinIdx = -1
 	m.recalcLayout()
 }
 
-// rebuildProcessNodes clamps procSel to the valid range.
-// Actual sidebar rendering reads m.procs directly in writeProcessSection.
-func (m *aiTUIModel) rebuildProcessNodes() {
+// clampProcSel keeps procSel within the process list after it changed.
+func (m *aiTUIModel) clampProcSel() {
 	n := len(m.procs)
 	if n == 0 {
 		m.procSel = 0
@@ -268,7 +306,7 @@ func (m *aiTUIModel) rebuildProcessNodes() {
 func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) {
 	p := &bgProcess{
 		id:        m.procNextID,
-		name:      processName(command),
+		name:      processName(command, m.rootCmd),
 		command:   command,
 		startedAt: time.Now(),
 		doneCh:    make(chan struct{}),
@@ -277,7 +315,7 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 	m.procNextID++
 	m.procs = append(m.procs, p)
 	(&m).ensureProcWindow()
-	(&m).rebuildProcessNodes()
+	(&m).clampProcSel()
 
 	// Stay idle and interactive immediately.
 	m.state = tuiIdle
@@ -336,6 +374,9 @@ func (m aiTUIModel) handleProcCancelMsg(msg procCancelMsg) (tea.Model, tea.Cmd) 
 	for _, p := range m.procs {
 		if p.id == msg.id {
 			p.cancel = msg.cancel // UI goroutine; no lock needed
+			if p.killed {
+				msg.cancel() // K was pressed before the cancel func arrived
+			}
 			return m, nil
 		}
 	}
@@ -350,9 +391,24 @@ func (m aiTUIModel) handleProcDoneMsg(msg procDoneMsg) (tea.Model, tea.Cmd) {
 			p.done = true // UI goroutine only; no lock
 			p.err = msg.err
 			p.finishedAt = time.Now()
-			(&m).rebuildProcessNodes()
+			(&m).clampProcSel()
+			// Say so in the transcript — the sidebar glyph alone is easy to
+			// miss, and invisible on a terminal too narrow for the sidebar,
+			// where the output is shown right away since the Processes
+			// window can't be browsed to view it.
+			status := histOkStyle.Render("✓")
+			switch {
+			case p.killed:
+				status = dimStyle.Render("(stopped)")
+			case msg.err != nil:
+				status = warnStyle.Render("✗ " + msg.err.Error())
+			}
+			m.appendTranscript(dimStyle.Render("↳ background process finished: "+p.name+" ") + status + "\n\n")
+			if !m.sidebarVisible() {
+				(&m).dumpProcessOutput(p)
+			}
 			// Trigger sidebar refresh when the process may have changed message counts.
-			if anyCommand(p.command, mutatesMessages) && !m.refreshing && len(m.objTypes) > 0 {
+			if anyCommand(p.command, m.aliases(), mutatesMessages) && !m.refreshing && len(m.objTypes) > 0 {
 				return m, (&m).beginRefresh()
 			}
 			return m, nil
@@ -363,27 +419,23 @@ func (m aiTUIModel) handleProcDoneMsg(msg procDoneMsg) (tea.Model, tea.Cmd) {
 
 // ---------- Key handling ----------
 
-// handleKeyProcessPane handles keyboard events when the Processes window has focus.
+// handleKeyProcessPane handles keyboard events when the Processes window has
+// focus. Its keys follow the object windows' conventions: ↑↓/j/k move, Enter
+// or p (peek) shows the output, d removes, uppercase keys act more broadly —
+// K kills (keeps the entry), P purges all finished entries, D kills and
+// removes everything.
 func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyUp:
-		if len(m.procs) > 0 && m.procSel > 0 {
-			m.procSel--
-			(&m).updateProcPrompt()
-		}
+		m.moveProcSel(-1)
 		return m, nil
 
 	case tea.KeyDown:
-		if m.procSel < len(m.procs)-1 {
-			m.procSel++
-			(&m).updateProcPrompt()
-		}
+		m.moveProcSel(1)
 		return m, nil
 
 	case tea.KeyEnter:
-		if len(m.procs) > 0 && m.procSel < len(m.procs) {
-			(&m).dumpProcessOutput(m.procs[m.procSel])
-		}
+		m.viewSelectedProc()
 		return m, nil
 
 	case tea.KeySpace:
@@ -394,9 +446,7 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEsc:
-		(&m).exitProcessView()
-		m.focus = focusChat
-		m.input.Focus()
+		m.focusChat()
 		return m, nil
 
 	case tea.KeyTab:
@@ -411,6 +461,15 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyRunes:
 		switch msg.String() {
+		case "j":
+			m.moveProcSel(1)
+
+		case "k":
+			m.moveProcSel(-1)
+
+		case "p": // peek at the output, like p on an object window
+			m.viewSelectedProc()
+
 		case "d": // remove selected (kill first if running)
 			if len(m.procs) == 0 {
 				return m, nil
@@ -420,22 +479,26 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				p.cancel()
 			}
 			m.procs = append(m.procs[:m.procSel], m.procs[m.procSel+1:]...)
-			(&m).rebuildProcessNodes()
+			(&m).clampProcSel()
 			if len(m.procs) == 0 {
 				(&m).removeProcWindow()
 			} else {
 				(&m).updateProcPrompt()
 			}
 
-		case "k": // kill but keep in list
+		case "K": // kill but keep in list (its output stays viewable)
 			if len(m.procs) > 0 && m.procSel < len(m.procs) {
-				p := m.procs[m.procSel]
-				if p.cancel != nil {
-					p.cancel()
+				// The cancel func may not have arrived yet (procCancelMsg);
+				// handleProcCancelMsg then fires it on arrival.
+				if p := m.procs[m.procSel]; !p.done {
+					p.killed = true
+					if p.cancel != nil {
+						p.cancel()
+					}
 				}
 			}
 
-		case "p": // purge all finished processes
+		case "P": // purge all finished processes
 			var keep []*bgProcess
 			for _, p := range m.procs {
 				if !p.done { // done is UI-goroutine-only; no lock needed
@@ -443,7 +506,7 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.procs = keep
-			(&m).rebuildProcessNodes()
+			(&m).clampProcSel()
 			if len(m.procs) == 0 {
 				(&m).removeProcWindow()
 			} else {
@@ -462,6 +525,22 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// moveProcSel moves the Processes window selection by delta.
+func (m *aiTUIModel) moveProcSel(delta int) {
+	if len(m.procs) == 0 {
+		return
+	}
+	m.procSel = min(max(m.procSel+delta, 0), len(m.procs)-1)
+	m.updateProcPrompt()
+}
+
+// viewSelectedProc appends the selected process's output to the transcript.
+func (m *aiTUIModel) viewSelectedProc() {
+	if m.procSel >= 0 && m.procSel < len(m.procs) {
+		m.dumpProcessOutput(m.procs[m.procSel])
+	}
 }
 
 // ---------- Prompt save/restore ----------
@@ -550,8 +629,6 @@ func (m *aiTUIModel) dumpProcessOutput(p *bgProcess) {
 	b.WriteString("\n")
 	m.appendTranscript(b.String())
 }
-
-// ---------- Sidebar rendering ----------
 
 // killAllProcs cancels every running background process. Safe to call multiple times.
 func (m *aiTUIModel) killAllProcs() {

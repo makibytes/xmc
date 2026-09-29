@@ -19,12 +19,18 @@ func NewAICommand(spec BrokerSpec) *cobra.Command {
 		Short: "Start the AI assistant (natural-language → xmc commands)",
 		Long: `Opens a full-screen AI assistant that translates natural language into
 xmc commands. Describe what you want and the AI will propose the command
-for you to review, edit, or run.
+for you to review (Enter run, e edit, c discuss, Esc discard).
+
+Esc toggles between the ask> prompt and direct command entry, which works
+like "shell" (pipelines, aliases, Tab completion) without a confirmation step.
 
 The sidebar shows live broker objects (queues, topics, exchanges, …).
-Press Tab to browse them, Enter to insert a name into your prompt.
+Press Shift+Tab to browse them: Enter inserts a name at the cursor, and
+single-key actions peek, send, receive, purge, create, or delete objects.
+Commands with --for run as background processes in their own window.
 
-Commands executed in AI mode are written to the shared shell history.`,
+Type /help inside for all keys and slash commands. Executed commands are
+written to the shared shell history.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAI(cmd, spec)
 		},
@@ -81,7 +87,7 @@ func runAI(cmd *cobra.Command, spec BrokerSpec) error {
 	restoreOut := log.SetOutput(&logBuf)
 	restoreErr := log.SetErrorOutput(&logBuf)
 
-	_, totalIn, totalOut, err := runAITUI(ai, session, rootCmd, baseName, server)
+	totalIn, totalOut, err := runAITUI(ai, session, rootCmd, baseName, server)
 
 	log.SetOutput(restoreOut)
 	log.SetErrorOutput(restoreErr)

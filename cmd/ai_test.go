@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/makibytes/xmc/broker/backends"
 )
 
 func TestTrimHistory_UnderLimit(t *testing.T) {
@@ -181,25 +184,25 @@ func TestIsManageList(t *testing.T) {
 }
 
 func TestAnyCommand_Destructive(t *testing.T) {
-	if !anyCommand("manage create-queue a ; manage delete-queue b", isDestructive) {
+	if !anyCommand("manage create-queue a ; manage delete-queue b", nil, isDestructive) {
 		t.Error("should detect destructive segment in multi-command")
 	}
-	if anyCommand("manage create-queue a ; send a hi", isDestructive) {
+	if anyCommand("manage create-queue a ; send a hi", nil, isDestructive) {
 		t.Error("create + send should not be destructive")
 	}
 }
 
 func TestAnyCommand_MutatesObjectsOrMessages(t *testing.T) {
-	if !anyCommand("manage create-queue a ; manage list", mutatesObjects) {
+	if !anyCommand("manage create-queue a ; manage list", nil, mutatesObjects) {
 		t.Error("should detect create-queue as object-mutating")
 	}
-	if !anyCommand("receive q ; send q2 hi", mutatesMessages) {
+	if !anyCommand("receive q ; send q2 hi", nil, mutatesMessages) {
 		t.Error("should detect send as message-mutating")
 	}
-	if anyCommand("manage list ; peek q", mutatesObjects) {
+	if anyCommand("manage list ; peek q", nil, mutatesObjects) {
 		t.Error("list + peek should not mutate objects")
 	}
-	if !anyCommand("manage list ; peek q", mutatesMessages) {
+	if !anyCommand("manage list ; peek q", nil, mutatesMessages) {
 		t.Error("peek should mutate messages (it reads)")
 	}
 }
@@ -282,7 +285,7 @@ func TestCappedBuffer_OverLimit(t *testing.T) {
 // TestManageDestructiveCoverage guards against exactly the drift that once let
 // "manage delete-address" and "manage delete-consumer-group" run without a
 // destructive-confirmation prompt (both were registered ManageActions absent
-// from destructivePrefixes/objectPrefixes). It builds a ManageSpec with every
+// from the then hand-kept destructive/object command lists). It builds a ManageSpec with every
 // ManageAction/BindAction field wired to a no-op, builds the real command tree
 // via NewManageCommand, and checks that every delete-/unbind-/purge-shaped
 // subcommand is covered by isDestructive and every create-/delete-/bind-/
@@ -318,13 +321,16 @@ func TestManageDestructiveCoverage(t *testing.T) {
 
 		wantDestructive := strings.HasPrefix(name, "delete-") || strings.HasPrefix(name, "unbind-") || strings.HasPrefix(name, "purge")
 		if got := isDestructive(full); got != wantDestructive {
-			t.Errorf("isDestructive(%q) = %v, want %v — add \"manage %s\" to destructivePrefixes", full, got, wantDestructive, name)
+			t.Errorf("isDestructive(%q) = %v, want %v", full, got, wantDestructive)
 		}
 
+		// update-/enable-/disable- change what the sidebar shows too (Kafka
+		// partition counts, Artemis paused state), so they refresh it.
 		wantObjectMutating := strings.HasPrefix(name, "create-") || strings.HasPrefix(name, "delete-") ||
+			strings.HasPrefix(name, "update-") || strings.HasPrefix(name, "enable-") || strings.HasPrefix(name, "disable-") ||
 			name == "bind-queue" || name == "unbind-queue"
 		if got := mutatesObjects(full); got != wantObjectMutating {
-			t.Errorf("mutatesObjects(%q) = %v, want %v — add \"manage %s\" to objectPrefixes", full, got, wantObjectMutating, name)
+			t.Errorf("mutatesObjects(%q) = %v, want %v", full, got, wantObjectMutating)
 		}
 	}
 }
@@ -342,5 +348,70 @@ func TestCappedBuffer_MultipleWrites(t *testing.T) {
 	// Should end with cccc.
 	if !strings.HasSuffix(got, "cccc") {
 		t.Errorf("got %q, should end with cccc", got)
+	}
+}
+
+func TestAnyCommand_ExpandsAliases(t *testing.T) {
+	aliases := map[string]string{"nuke": "manage purge $1", "watch": "receive $1 --for 1h"}
+	if !anyCommand("nuke orders", aliases, isDestructive) {
+		t.Error("an alias expanding to manage purge must be flagged destructive")
+	}
+	if anyCommand("nuke orders", nil, isDestructive) {
+		t.Error("without the alias definition the line is not an xmc command")
+	}
+	if !commandHasFor("watch orders", aliases) {
+		t.Error("an alias expanding to a --for stream must run in the background")
+	}
+}
+
+func TestAnyCommand_ChecksEveryPipelineStage(t *testing.T) {
+	if !anyCommand("cat msgs.ndjson | send orders --ndjson", nil, mutatesMessages) {
+		t.Error("a producer after an external stage must still refresh message counts")
+	}
+	if !anyCommand("put orders hi", nil, mutatesMessages) {
+		t.Error("verb aliases (put) must be recognised")
+	}
+	if anyCommand("echo manage purge q", nil, isDestructive) {
+		t.Error("text inside an external command is not an xmc command")
+	}
+}
+
+func TestDestructiveCommands_DerivedFromTree(t *testing.T) {
+	noop := func(string) error { return nil }
+	spec := BrokerSpec{
+		Use:   "xmc",
+		Queue: func() (backends.QueueBackend, error) { return &mockQueueBackend{}, nil },
+		ManageSpec: &ManageSpec{
+			CreateQueue: &ManageAction{Run: noop},
+			DeleteQueue: &ManageAction{Run: noop},
+			Purge:       func(string) (int64, error) { return 0, nil },
+		},
+	}
+	got := destructiveCommands(NewRootCommand(spec))
+	want := []string{"manage delete-queue", "manage purge"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("destructiveCommands = %v, want %v (only what this broker registers)", got, want)
+	}
+	if destructiveCommands(nil) != nil {
+		t.Error("nil root → nil")
+	}
+}
+
+func TestSystemPrompt_DestructiveListAndDeterministicAliases(t *testing.T) {
+	aliases := map[string]string{"zz": "send z", "aa": "send a", "mm": "send m"}
+	p1 := systemPrompt("## send\n", "", "", "", aliases, []string{"manage purge"})
+	for range 20 {
+		if p := systemPrompt("## send\n", "", "", "", aliases, []string{"manage purge"}); p != p1 {
+			t.Fatal("system prompt must be deterministic (alias order)")
+		}
+	}
+	if !strings.Contains(p1, "  manage purge\n") {
+		t.Error("destructive list missing from prompt")
+	}
+	if strings.Index(p1, "aa →") > strings.Index(p1, "zz →") {
+		t.Error("aliases must be sorted")
+	}
+	if !strings.Contains(systemPrompt("", "", "", "", nil, nil), "(none on this broker)") {
+		t.Error("empty destructive list should read as none")
 	}
 }

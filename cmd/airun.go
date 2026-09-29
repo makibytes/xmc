@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,16 @@ import (
 
 // ---------- AI request ----------
 
-func (m aiTUIModel) startAIRequest() tea.Cmd {
+// beginAIRequest enters the thinking state and starts a new AI request with
+// a fresh generation; every AI request goes through here.
+func (m *aiTUIModel) beginAIRequest() tea.Cmd {
+	m.aiGen++
+	m.state = tuiThinking
+	m.streamBuf.Reset()
+	return m.startAIRequest(m.aiGen)
+}
+
+func (m aiTUIModel) startAIRequest(gen int) tea.Cmd {
 	ai := m.ai
 	pptr := m.program
 
@@ -34,7 +44,7 @@ func (m aiTUIModel) startAIRequest() tea.Cmd {
 
 	return func() tea.Msg {
 		if err := ai.init(); err != nil {
-			return aiDoneMsg{err: err}
+			return aiDoneMsg{err: err, gen: gen}
 		}
 
 		if needsTopology {
@@ -53,7 +63,7 @@ func (m aiTUIModel) startAIRequest() tea.Cmd {
 		var onToken func(string)
 		if prog != nil {
 			onToken = func(token string) {
-				prog.Send(tokenMsg{text: token})
+				prog.Send(tokenMsg{text: token, gen: gen})
 			}
 		}
 
@@ -62,7 +72,7 @@ func (m aiTUIModel) startAIRequest() tea.Cmd {
 		ai.mu.Unlock()
 
 		text, usage, err := ai.client.Complete(ctx, sysPrompt, history, onToken)
-		return aiDoneMsg{text: text, usage: usage, err: err}
+		return aiDoneMsg{text: text, usage: usage, err: err, gen: gen}
 	}
 }
 
@@ -127,8 +137,15 @@ func (m aiTUIModel) handleModelsDone(msg modelsMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
+	// A response for a request the user already cancelled (Esc while
+	// thinking) — possibly one that completed in the same instant, or that
+	// arrives while a newer request is in flight — must not resurface.
+	if m.state != tuiThinking || msg.gen != m.aiGen {
+		return m, nil
+	}
+	m.execCancel = nil
 	if msg.err != nil {
-		if strings.Contains(msg.err.Error(), "context canceled") {
+		if errors.Is(msg.err, context.Canceled) {
 			return m, nil
 		}
 		m.appendTranscript(warnStyle.Render("error: "+msg.err.Error()) + "\n\n")
@@ -197,7 +214,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 	command = strings.TrimSpace(command)
 
 	m.proposedCmd = command
-	m.proposedDestructive = anyCommand(command, isDestructive)
+	m.proposedDestructive = anyCommand(command, m.aliases(), isDestructive)
 	m.shimmerPhase = 0
 	// Switch to tuiProposing BEFORE calling setViewportContent so that the
 	// state guard in setViewportContent renders the live proposal overlay.
@@ -209,25 +226,20 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// applyEffort parses and applies a provider-aware effort level.
-// Returns false if the argument is invalid.
+// applyEffort parses and applies a provider-aware effort level, persisting it
+// to the config like /model does. Returns false if the argument is invalid.
 func (m *aiTUIModel) applyEffort(arg string) bool {
-	var effort aiEffort
-	switch strings.ToLower(arg) {
-	case "low", "l":
-		effort = effortLow
-	case "medium", "med", "m":
-		effort = effortMedium
-	case "high", "h":
-		effort = effortHigh
-	default:
+	effort, ok := parseEffort(arg)
+	if !ok {
 		m.appendTranscript(warnStyle.Render("effort must be low, medium, or high") + "\n\n")
 		return false
 	}
-	if setter, ok := m.ai.client.(modelSettable); ok {
-		setter.SetEffort(effort)
+	m.ai.setEffort(effort)
+	msg := "effort → " + string(effort)
+	if err := saveAIEffort(effort); err != nil {
+		msg += fmt.Sprintf(" (save failed: %s)", err)
 	}
-	m.appendTranscript(dimStyle.Render("effort → "+string(effort)) + "\n\n")
+	m.appendTranscript(dimStyle.Render(msg) + "\n\n")
 	return true
 }
 
@@ -247,6 +259,9 @@ func (m *aiTUIModel) applyModel(name string) {
 func (m aiTUIModel) startExecution(command string) (tea.Model, tea.Cmd) {
 	m.state = tuiExecuting
 	m.input.Blur()
+	capture := newExecCapture()
+	m.liveCapture = capture
+	m.liveGen = 0
 
 	m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: command})
 
@@ -265,50 +280,40 @@ func (m aiTUIModel) startExecution(command string) (tea.Model, tea.Cmd) {
 			prog.Send(setCancelMsg{cancel: cancel})
 		}
 
-		var capBuf cappedBuffer
-		capBuf.max = maxCapture
-		var errBuf cappedBuffer
-		errBuf.max = maxCapture
+		execErr := sess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), capture.writer(false), capture.writer(true))
 
-		execErr := sess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), &capBuf, &errBuf)
-
-		refresh := anyCommand(command, isManageList) ||
-			(ai.autoUpdateObjects && anyCommand(command, mutatesObjects)) ||
-			(ai.autoUpdateMessages && anyCommand(command, mutatesMessages))
+		refresh := anyCommand(command, sess.aliases, isManageList) ||
+			(ai.autoUpdateObjects && anyCommand(command, sess.aliases, mutatesObjects)) ||
+			(ai.autoUpdateMessages && anyCommand(command, sess.aliases, mutatesMessages))
 		if refresh {
 			ai.refreshTopology()
 		}
 
-		stdout, stderr := capBuf.String(), errBuf.String()
+		chunks, truncated, stdout, stderr := capture.snapshot()
 		// The feedback message is appended to ai.history in handleExecDone,
 		// on the UI goroutine — not here (see aiSession doc comment on history).
-		return execDoneMsg{err: execErr, stdout: stdout, stderr: stderr}
+		return execDoneMsg{err: execErr, stdout: stdout, stderr: stderr, chunks: chunks, truncated: truncated}
 	}
 }
 
 func (m aiTUIModel) handleExecDone(msg execDoneMsg) (tea.Model, tea.Cmd) {
+	cancelled := m.execCancelled
+	m.execCancelled = false
+	m.execCancel = nil
+	m.liveCapture = nil
+
+	// The command itself is already in the transcript directly above (the
+	// cmd-mode echo or the accepted proposal, each with its ⧉ marker), so
+	// only its output and outcome follow.
 	var result strings.Builder
+	result.WriteString(m.renderExecOutput(msg))
 
-	// Register the executed command as a copyable item.
-	m.copyItems = append(m.copyItems, m.proposedCmd)
-	result.WriteString(histCmdStyle.Render("▶ ran: "+m.proposedCmd) +
-		copyHintStyle.Render(" ⧉") + "\n")
-
-	if msg.stdout != "" {
-		trimmed := strings.TrimRight(msg.stdout, "\n")
-		if isMessageReadCommand(m.proposedCmd) {
-			// Style message payloads with a left border and italic text.
-			result.WriteString(renderMessagePayload(trimmed))
-			// Register the payload as a copyable item.
-			m.copyItems = append(m.copyItems, trimmed)
-			result.WriteString(copyHintStyle.Render("  ⧉") + "\n")
-		} else {
-			result.WriteString(dimStyle.Render(trimmed) + "\n")
-		}
-	}
-	if msg.err != nil {
+	switch {
+	case cancelled:
+		result.WriteString(dimStyle.Render("(cancelled)") + "\n")
+	case msg.err != nil:
 		result.WriteString(warnStyle.Render("✗ "+msg.err.Error()) + "\n")
-	} else {
+	default:
 		result.WriteString(histOkStyle.Render("✓ ok") + "\n")
 		m.fixAttempts = 0
 	}
@@ -321,20 +326,64 @@ func (m aiTUIModel) handleExecDone(msg execDoneMsg) (tea.Model, tea.Cmd) {
 	// what happened (and self-correct on the next turn / auto-fix retry).
 	// This must happen on the UI goroutine — see the aiSession doc comment on
 	// history — hence it lives here rather than in startExecution's closure.
-	feedback := buildFeedback(msg.err, msg.stdout, msg.stderr)
+	feedbackErr := msg.err
+	if cancelled {
+		feedbackErr = errors.New("cancelled by the user")
+	}
+	feedback := buildFeedback(feedbackErr, msg.stdout, msg.stderr)
 	m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: feedback})
 	trimHistory(&m.ai.history, maxHistory)
 
-	// Auto-fix: on error, ask the AI to correct the command (up to maxFixAttempts).
-	if msg.err != nil && m.fixAttempts < maxFixAttempts && m.mode == modeAI {
+	// Auto-fix: on error, ask the AI to correct the command (up to
+	// maxFixAttempts). Never after a user cancel — the interrupted command
+	// (e.g. "signal: killed" from an external one) isn't a mistake to fix.
+	if msg.err != nil && !cancelled && m.fixAttempts < maxFixAttempts && m.mode == modeAI {
 		m.fixAttempts++
 		m.appendTranscript(dimStyle.Render("↻ auto-fixing…") + "\n\n")
-		m.state = tuiThinking
-		m.streamBuf.Reset()
-		return m, m.startAIRequest()
+		return m, m.beginAIRequest()
 	}
 
 	m.state = tuiIdle
 	m.input.Focus()
 	return m, nil
+}
+
+// renderExecOutput renders a finished command's output for the transcript:
+// stdout and stderr interleaved in the order they were written, stdout as a
+// message-payload block for commands that print messages (receive, peek,
+// subscribe, request) and dim text otherwise, stderr (message properties,
+// --stats, warnings) in its own colour — so the AI shell shows what the same
+// command prints in a terminal. A payload gets one ⧉ copy marker.
+func (m *aiTUIModel) renderExecOutput(msg execDoneMsg) string {
+	chunks := msg.chunks
+	if chunks == nil {
+		chunks = []outChunk{{text: []byte(msg.stdout)}, {stderr: true, text: []byte(msg.stderr)}}
+	}
+	read := anyCommand(m.proposedCmd, m.aliases(), isMessageRead)
+
+	var b strings.Builder
+	if msg.truncated {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("… earlier output dropped (showing the last %d KB) …", maxDisplayCapture/1024)) + "\n")
+	}
+	var payload []string
+	for _, ch := range chunks {
+		text := strings.TrimRight(string(ch.text), "\n")
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		switch {
+		case ch.stderr:
+			b.WriteString(stderrStyle.Render(text) + "\n")
+		case read:
+			b.WriteString(renderMessagePayload(text))
+			payload = append(payload, text)
+		default:
+			b.WriteString(dimStyle.Render(text) + "\n")
+		}
+	}
+	if len(payload) > 0 {
+		m.copyItems = append(m.copyItems, strings.Join(payload, "\n"))
+		b.WriteString(copyHintStyle.Render("  ⧉") + "\n")
+	}
+	return b.String()
 }

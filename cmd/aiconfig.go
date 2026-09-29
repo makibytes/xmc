@@ -25,6 +25,7 @@ type connectionConfig struct {
 type aiConfig struct {
 	Provider           string `yaml:"provider"`
 	Model              string `yaml:"model"`
+	Effort             string `yaml:"effort"`               // reasoning effort ("low"|"medium"|"high"; default: "low")
 	MaxTokens          int    `yaml:"max-tokens"`           // max output tokens per AI call (default: 4096)
 	AutoUpdateObjects  *bool  `yaml:"auto-update-objects"`  // refresh sidebar on create/delete/bind (default: true)
 	AutoUpdateMessages *bool  `yaml:"auto-update-messages"` // refresh sidebar on send/publish/receive/purge (default: true)
@@ -238,6 +239,23 @@ func findKey(envKeys []string, getenv envLookup) string {
 
 // saveAIModel writes the model name to the config file under ai.model.
 func saveAIModel(model string) error { return saveAIConfigKey("model", model) }
+
+// saveAIEffort writes the reasoning effort to the config file under ai.effort.
+func saveAIEffort(effort aiEffort) error { return saveAIConfigKey("effort", string(effort)) }
+
+// parseEffort parses a user-supplied effort level ("low"/"l",
+// "medium"/"med"/"m", "high"/"h"; case-insensitive).
+func parseEffort(s string) (aiEffort, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "low", "l":
+		return effortLow, true
+	case "medium", "med", "m":
+		return effortMedium, true
+	case "high", "h":
+		return effortHigh, true
+	}
+	return "", false
+}
 
 // saveAIConfigKey persists key=value under the "ai" section of the config file,
 // preserving all other keys and comments via yaml.Node round-trip.
