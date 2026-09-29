@@ -86,14 +86,18 @@ func TestClassifyStage_External(t *testing.T) {
 }
 
 func TestClassifyStage_Aliases(t *testing.T) {
-	s := classifyStage("get queue")
-	if !s.isVerb || s.verb != "get" {
-		t.Errorf("classifyStage(\"get queue\") = verb=%v, verb=%q; want true, \"get\"", s.isVerb, s.verb)
-	}
-
-	s = classifyStage("respond q msg")
-	if !s.isVerb || s.verb != "respond" {
-		t.Errorf("classifyStage(\"respond q msg\") = verb=%v, verb=%q; want true, \"respond\"", s.isVerb, s.verb)
+	// Aliases classify as their canonical verb, so everything keyed by verb
+	// (NDJSON injection, background eligibility, sidebar refresh) treats
+	// "put q x" exactly like "send q x".
+	for alias, canonical := range map[string]string{
+		"get queue":     "receive",
+		"respond q msg": "reply",
+		"put q msg":     "send",
+	} {
+		s := classifyStage(alias)
+		if !s.isVerb || s.verb != canonical {
+			t.Errorf("classifyStage(%q) = verb=%v, verb=%q; want true, %q", alias, s.isVerb, s.verb, canonical)
+		}
 	}
 }
 

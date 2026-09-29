@@ -38,19 +38,3 @@ func TestExpandAlias_NilMap(t *testing.T) {
 		t.Errorf("expandAlias with nil map should pass through, got %q", got)
 	}
 }
-
-func TestIsAlias(t *testing.T) {
-	aliases := map[string]string{
-		"drain": "receive $1 -n 0",
-	}
-
-	if !isAlias("drain orders", aliases) {
-		t.Error("isAlias should return true for known alias")
-	}
-	if isAlias("send q1 hi", aliases) {
-		t.Error("isAlias should return false for non-alias")
-	}
-	if isAlias("drain orders", nil) {
-		t.Error("isAlias should return false for nil map")
-	}
-}

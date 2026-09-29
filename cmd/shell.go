@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/chzyer/readline"
@@ -55,7 +54,13 @@ func runShell(cmd *cobra.Command, spec BrokerSpec) error {
 
 	rootCmd := cmd.Root()
 
-	cfg, _ := loadConfig()
+	cfg, cfgErr := loadConfig()
+	if cfgErr != nil {
+		// A malformed config must not take the shell down (cfg is nil on a
+		// parse error); warn and continue with defaults, like the AI shell.
+		log.Error("warning: %s\n", cfgErr)
+		cfg = &xmcConfig{}
+	}
 
 	completer := newShellCompleter(rootCmd, cfg.Aliases)
 
@@ -78,7 +83,7 @@ func runShell(cmd *cobra.Command, spec BrokerSpec) error {
 	}
 	defer session.close()
 
-	fmt.Fprintf(os.Stderr, "xmc shell — type \"help\" for commands, \"exit\" to quit\n")
+	fmt.Fprintf(os.Stderr, "%s shell — type \"help\" for commands, \"exit\" to quit\n", binBaseName())
 
 	for {
 		line, err := rl.Readline()
@@ -104,83 +109,26 @@ func runShell(cmd *cobra.Command, spec BrokerSpec) error {
 			return nil
 		}
 
-		// Handle "help" and "help <verb>" explicitly so that cobra prints
-		// real usage instead of the pipeline executor treating args as flags.
-		if line == "help" || strings.HasPrefix(line, "help ") {
-			shellHelp(rootCmd, line)
-			continue
-		}
-
-		if strings.HasPrefix(line, "!") {
-			if err := runSystemShell(line[1:]); err != nil {
-				log.Error("shell: %s\n", err)
-			}
-			continue
-		}
-
-		if !containsVerb(line) && !isAlias(line, session.aliases) {
-			if err := runSystemShell(line); err != nil {
-				log.Error("%s\n", err)
-			}
-			continue
-		}
-
+		// Everything else — xmc verbs, pipelines, aliases, "help [verb]",
+		// "!cmd" and plain system commands — goes through the same executor
+		// the AI shell's command mode uses, so the two behave identically.
 		if err := session.executePipeline(line, rootCmd); err != nil {
 			log.Error("%s\n", err)
 		}
 	}
 }
 
-// shellHelp prints cobra usage for the given help command. "help" alone prints
-// the root command's available-commands table; "help <verb>" and "help manage
-// <subcmd>" print the specific command's help.
-func shellHelp(rootCmd *cobra.Command, line string) {
-	args := shellSplit(strings.TrimSpace(line))
-	// Drop the leading "help" token.
-	args = args[1:]
-
-	target := rootCmd
-	for _, arg := range args {
-		sub, _, err := target.Find([]string{arg})
-		if err != nil || sub == target {
-			fmt.Fprintf(os.Stderr, "unknown command: %s\n", strings.Join(args, " "))
-			return
-		}
-		target = sub
-	}
-
-	_ = target.Help()
-}
-
-// containsVerb checks whether any top-level stage in the line starts with an
-// xmc verb.
+// containsVerb checks whether any top-level stage of any ';'-separated
+// command in the line starts with an xmc verb (or verb alias).
 func containsVerb(line string) bool {
-	for _, stage := range splitPipeline(line) {
-		s := classifyStage(stage)
-		if s.isVerb {
-			return true
+	for _, command := range splitCommands(line) {
+		for _, stage := range splitPipeline(command) {
+			if classifyStage(stage).isVerb {
+				return true
+			}
 		}
 	}
 	return false
-}
-
-// runSystemShell executes a command line in the user's login shell.
-func runSystemShell(cmdLine string) error {
-	cmdLine = strings.TrimSpace(cmdLine)
-	if cmdLine == "" {
-		return nil
-	}
-
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-
-	c := exec.Command(shell, "-c", cmdLine)
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
 }
 
 // newShellCompleter builds a readline completer by walking the cobra command

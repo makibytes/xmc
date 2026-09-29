@@ -55,9 +55,14 @@ func doPing(c *cobra.Command, connect Connector) error {
 	if label == "" {
 		label = "broker"
 	}
-	fmt.Printf("PING %s\n", label)
+	// Write through the command's streams: in the shell and the AI shell
+	// they are the pipeline's/transcript's writers, and the AI shell's
+	// alternate screen must never be written to directly.
+	w := c.OutOrStdout()
+	_, _ = fmt.Fprintf(w, "PING %s\n", label)
 
-	ctx, stop := interruptContext()
+	// The parent context lets the AI shell's Esc stop "ping -n 0".
+	ctx, stop := interruptContext(c.Context())
 	defer stop()
 
 	var ok, failed int
@@ -70,7 +75,7 @@ func doPing(c *cobra.Command, connect Connector) error {
 
 		if err != nil {
 			failed++
-			fmt.Printf("connect failed: seq=%d error=%v\n", seq, err)
+			_, _ = fmt.Fprintf(w, "connect failed: seq=%d error=%v\n", seq, err)
 		} else {
 			_ = conn.Close()
 			ok++
@@ -81,7 +86,7 @@ func doPing(c *cobra.Command, connect Connector) error {
 				maxRTT = elapsed
 			}
 			sumRTT += elapsed
-			fmt.Printf("connected: seq=%d time=%s\n", seq, elapsed.Round(time.Microsecond))
+			_, _ = fmt.Fprintf(w, "connected: seq=%d time=%s\n", seq, elapsed.Round(time.Microsecond))
 		}
 
 		if count > 0 && seq >= count {
@@ -98,14 +103,14 @@ func doPing(c *cobra.Command, connect Connector) error {
 	}
 
 	total := ok + failed
-	fmt.Printf("--- %s ping statistics ---\n", label)
+	_, _ = fmt.Fprintf(w, "--- %s ping statistics ---\n", label)
 	if ok > 0 {
 		avg := sumRTT / time.Duration(ok)
-		fmt.Printf("%d attempt(s), %d ok, %d failed, rtt min/avg/max = %s/%s/%s\n",
+		_, _ = fmt.Fprintf(w, "%d attempt(s), %d ok, %d failed, rtt min/avg/max = %s/%s/%s\n",
 			total, ok, failed,
 			minRTT.Round(time.Microsecond), avg.Round(time.Microsecond), maxRTT.Round(time.Microsecond))
 	} else {
-		fmt.Printf("%d attempt(s), %d ok, %d failed\n", total, ok, failed)
+		_, _ = fmt.Fprintf(w, "%d attempt(s), %d ok, %d failed\n", total, ok, failed)
 	}
 
 	if failed > 0 {

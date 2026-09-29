@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,25 +15,51 @@ import (
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 )
 
-// xmcVerbs is the set of first tokens that identify an xmc verb (as opposed to
-// an external command). The map is built once during init.
-var xmcVerbs = map[string]bool{
-	"send": true, "receive": true, "get": true, "peek": true,
-	"request": true, "reply": true, "respond": true,
-	"move": true, "forward": true, "bridge": true,
+// shellVerbs is the set of canonical verbs that the shell and the AI shell's
+// command mode run in-process, over the session's persistent connection (see
+// shellSession.buildVerbCommand). Every other first token is an external
+// command run by the system shell. TestShellVerbs_CoverCobraTree keeps this in
+// sync with the commands NewRootCommand registers.
+var shellVerbs = map[string]bool{
+	"send": true, "receive": true, "peek": true,
+	"request": true, "reply": true, "move": true,
+	"forward": true, "bridge": true,
 	"publish": true, "subscribe": true,
 	"manage": true, "ping": true,
 	"help": true,
+}
+
+// verbAliases maps the cobra Aliases declared on the verb commands (send:
+// put, receive: get, reply: respond) to their canonical verb, so an alias
+// behaves exactly like the verb everywhere a verb is classified — pipeline
+// wiring, NDJSON auto-injection, background eligibility, sidebar refresh.
+var verbAliases = map[string]string{
+	"put":     "send",
+	"get":     "receive",
+	"respond": "reply",
+}
+
+// canonicalVerb returns the canonical in-process verb for a command's first
+// token, resolving aliases, or "" when the token is not an xmc verb.
+func canonicalVerb(token string) string {
+	if v, ok := verbAliases[token]; ok {
+		return v
+	}
+	if shellVerbs[token] {
+		return token
+	}
+	return ""
 }
 
 // pipelineStage is a single stage (one element between | delimiters) in a user
 // pipeline. It is either an xmc verb or an external command.
 type pipelineStage struct {
 	isVerb bool     // true → xmc verb; false → external command
-	verb   string   // the verb name (only when isVerb)
+	verb   string   // the canonical verb name, aliases resolved (only when isVerb)
 	args   []string // parsed arguments (only when isVerb)
 	raw    string   // original text of this stage (always set; external stages use this)
 }
@@ -100,9 +128,9 @@ func classifyStage(text string) pipelineStage {
 		first = trimmed[:idx]
 	}
 
-	if xmcVerbs[first] {
+	if verb := canonicalVerb(first); verb != "" {
 		args := shellSplit(trimmed)
-		return pipelineStage{isVerb: true, verb: first, args: args, raw: text}
+		return pipelineStage{isVerb: true, verb: verb, args: args, raw: text}
 	}
 	return pipelineStage{isVerb: false, raw: text}
 }
@@ -230,8 +258,20 @@ func (s *shellSession) executePipeline(line string, rootCmd *cobra.Command) erro
 // executePipelineIO is like executePipeline but with explicit IO streams.
 // It supports semicolon-separated commands: each segment runs sequentially,
 // stopping on the first error. Within a segment, pipe stages run concurrently.
+//
+// Lines that are not xmc pipelines at all — a "!"-escaped line, or one with no
+// xmc verb in any stage — are handed verbatim to the system shell, so shell
+// syntax the pipeline parser doesn't model ("a || b", "a && b", redirects)
+// behaves exactly as in the user's own shell. The regular shell and the AI
+// shell's command mode both route through here, so the two behave the same.
 func (s *shellSession) executePipelineIO(ctx context.Context, line string, rootCmd *cobra.Command, in io.Reader, out io.Writer, errw io.Writer) error {
-	line = expandAlias(line, s.aliases)
+	line = strings.TrimSpace(expandAlias(line, s.aliases))
+	if rest, ok := strings.CutPrefix(line, "!"); ok {
+		return runExternal(ctx, rest, in, out, errw)
+	}
+	if !containsVerb(line) {
+		return runExternal(ctx, line, in, out, errw)
+	}
 	commands := splitCommands(line)
 	if len(commands) == 0 {
 		return nil
@@ -246,6 +286,10 @@ func (s *shellSession) executePipelineIO(ctx context.Context, line string, rootC
 
 // runOnePipeline executes a single pipeline (no semicolons) with the given IO.
 func (s *shellSession) runOnePipeline(ctx context.Context, line string, rootCmd *cobra.Command, in io.Reader, out io.Writer, errw io.Writer) error {
+	if !containsVerb(line) {
+		// A pure shell segment ("ls || true") — see executePipelineIO.
+		return runExternal(ctx, line, in, out, errw)
+	}
 	rawStages := splitPipeline(line)
 	if len(rawStages) == 0 {
 		return nil
@@ -322,7 +366,7 @@ func (s *shellSession) executeBlock(ctx context.Context, block pipelineBlock, in
 		stage := block.stages[0]
 		return s.executeVerb(ctx, stage, in, out, errw, rootCmd, verbInput, verbOutput)
 	}
-	return s.executeExternal(block, in, out, errw)
+	return s.executeExternal(ctx, block, in, out, errw)
 }
 
 // executeVerb builds a fresh cobra command for the verb and runs it with the
@@ -384,15 +428,12 @@ func (s *shellSession) buildVerbCommand(verb string, rootCmd *cobra.Command) (*c
 		"receive": func(b backends.QueueBackend) *cobra.Command {
 			return applyConsume(NewReceiveCommand(b, resolver, consumeExtra, exchRouting))
 		},
-		"get": func(b backends.QueueBackend) *cobra.Command {
-			return applyConsume(NewReceiveCommand(b, resolver, consumeExtra, exchRouting))
-		},
 		"peek": func(b backends.QueueBackend) *cobra.Command {
 			return applyConsume(NewPeekCommand(b, resolver, consumeExtra, exchRouting))
 		},
 		"request": NewRequestCommand,
-		"reply":   NewReplyCommand, "respond": NewReplyCommand,
-		"move": NewMoveCommand,
+		"reply":   NewReplyCommand,
+		"move":    NewMoveCommand,
 	}
 
 	// Topic verbs — publish and subscribe get the target resolver.
@@ -475,30 +516,155 @@ func (s *shellSession) buildVerbCommand(verb string, rootCmd *cobra.Command) (*c
 		}
 	}
 
-	// Help: print help for the root command.
+	// Connectivity check: a fresh, short-lived connection per attempt (not
+	// the session's persistent one), exactly like the standalone ping
+	// command. The hidden --server flag only labels the output the way the
+	// CLI's inherited persistent flag does.
+	if verb == "ping" {
+		if s.spec.Ping == nil {
+			return nil, fmt.Errorf("this broker has no connectivity check")
+		}
+		cmd := NewPingCommand(s.spec.Ping)
+		var server string
+		if rootCmd != nil {
+			if f := rootCmd.PersistentFlags().Lookup("server"); f != nil {
+				server = f.Value.String()
+			}
+		}
+		cmd.Flags().String("server", server, "")
+		_ = cmd.Flags().MarkHidden("server")
+		return cmd, nil
+	}
+
+	// Help: never execute rootCmd itself — "help send" would then run the
+	// real send command (against a non-session adapter) and permanently
+	// redirect the root command's output streams.
 	if verb == "help" {
-		return rootCmd, nil
+		return &cobra.Command{
+			Use:                "help [command]",
+			DisableFlagParsing: true,
+			RunE: func(c *cobra.Command, args []string) error {
+				return writeShellHelp(c.OutOrStdout(), rootCmd, args, s.aliases)
+			},
+		}, nil
 	}
 
 	return nil, fmt.Errorf("unknown verb: %s", verb)
 }
 
+// writeShellHelp prints help for the shell. With no args it lists the verbs
+// runnable at the prompt (only those this broker actually registers) plus the
+// shell's own syntax; "help <verb> [<subcommand>]" prints that command's cobra
+// help. Output goes to w, so it lands in the AI shell's transcript instead of
+// on the terminal behind it.
+func writeShellHelp(w io.Writer, rootCmd *cobra.Command, args []string, aliases map[string]string) error {
+	if rootCmd == nil {
+		return fmt.Errorf("help is not available")
+	}
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(w, "Commands:")
+		for _, c := range rootCmd.Commands() {
+			if c.Hidden || !shellVerbs[c.Name()] || c.Name() == "help" {
+				continue
+			}
+			name := c.Name()
+			if len(c.Aliases) > 0 {
+				name += " (" + strings.Join(c.Aliases, ", ") + ")"
+			}
+			_, _ = fmt.Fprintf(w, "  %-22s %s\n", name, c.Short)
+		}
+		if len(aliases) > 0 {
+			_, _ = fmt.Fprintln(w, "\nAliases:")
+			for _, name := range slices.Sorted(maps.Keys(aliases)) {
+				_, _ = fmt.Fprintf(w, "  %-22s %s\n", name, aliases[name])
+			}
+		}
+		_, _ = fmt.Fprint(w, `
+Syntax:
+  verb | verb            pipe messages between verbs (NDJSON, lossless)
+  verb | cmd, cmd | verb pipe through external tools (add --ndjson for records)
+  cmd1 ; cmd2            run sequentially, stop on the first error
+  !cmd                   run cmd in the system shell
+  help <command>         show a command's flags and usage
+`)
+		return nil
+	}
+
+	target := rootCmd
+	for _, arg := range args {
+		sub, _, err := target.Find([]string{arg})
+		if err != nil || sub == target {
+			return fmt.Errorf("unknown command: %s", strings.Join(args, " "))
+		}
+		target = sub
+	}
+	desc := target.Long
+	if desc == "" {
+		desc = target.Short
+	}
+	if desc = strings.TrimRightFunc(desc, unicode.IsSpace); desc != "" {
+		_, _ = fmt.Fprintf(w, "%s\n\n", desc)
+	}
+	// Usage as typed at the shell prompt: without the binary name, and
+	// without the root's connection flags (--server, --tls, …), which the
+	// session's persistent connection has already consumed and which a verb
+	// inside the shell does not accept.
+	useLine := strings.TrimPrefix(target.UseLine(), rootCmd.Name()+" ")
+	if !target.Runnable() && target.HasAvailableSubCommands() {
+		useLine += " <subcommand>"
+	}
+	_, _ = fmt.Fprintf(w, "Usage:\n  %s\n", useLine)
+	if len(target.Aliases) > 0 {
+		_, _ = fmt.Fprintf(w, "\nAliases: %s\n", strings.Join(target.Aliases, ", "))
+	}
+	if target.HasAvailableSubCommands() {
+		_, _ = fmt.Fprintln(w, "\nSubcommands:")
+		for _, sub := range target.Commands() {
+			if sub.IsAvailableCommand() {
+				_, _ = fmt.Fprintf(w, "  %-24s %s\n", sub.Name(), sub.Short)
+			}
+		}
+	}
+	flags := pflag.NewFlagSet(target.Name(), pflag.ContinueOnError)
+	flags.AddFlagSet(target.LocalFlags())
+	target.InheritedFlags().VisitAll(func(f *pflag.Flag) {
+		if rootCmd.PersistentFlags().Lookup(f.Name) == nil { // e.g. manage's --admin-port
+			flags.AddFlag(f)
+		}
+	})
+	if usage := flags.FlagUsages(); usage != "" {
+		_, _ = fmt.Fprintf(w, "\nFlags:\n%s", usage)
+	}
+	return nil
+}
+
 // executeExternal runs a coalesced external block by joining the raw stage
-// texts with ' | ' and handing them to sh -c. This preserves the user's shell
-// syntax (quoting, redirects, globs, env) without us re-implementing it.
-func (s *shellSession) executeExternal(block pipelineBlock, in io.Reader, out io.Writer, errw io.Writer) error {
+// texts with ' | ' and handing them to the system shell. This preserves the
+// user's shell syntax (quoting, redirects, globs, env) without us
+// re-implementing it.
+func (s *shellSession) executeExternal(ctx context.Context, block pipelineBlock, in io.Reader, out io.Writer, errw io.Writer) error {
 	parts := make([]string, len(block.stages))
 	for i, st := range block.stages {
 		parts[i] = st.raw
 	}
-	cmdLine := strings.Join(parts, " | ")
+	return runExternal(ctx, strings.Join(parts, " | "), in, out, errw)
+}
+
+// runExternal runs cmdLine with the user's $SHELL (sh when unset). The process
+// is killed when ctx is cancelled, so Esc in the AI shell stops e.g. a
+// "sleep 100" just like it stops a long-running xmc verb.
+func runExternal(ctx context.Context, cmdLine string, in io.Reader, out io.Writer, errw io.Writer) error {
+	cmdLine = strings.TrimSpace(cmdLine)
+	if cmdLine == "" {
+		return nil
+	}
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "sh"
 	}
 
-	c := exec.Command(shell, "-c", cmdLine)
+	c := exec.CommandContext(ctx, shell, "-c", cmdLine)
 	c.Stdin = in
 	c.Stdout = out
 	c.Stderr = errw
@@ -517,7 +683,7 @@ func isProducer(verb string) bool {
 // isConsumer returns true if the verb reads from the broker and writes output.
 func isConsumer(verb string) bool {
 	switch verb {
-	case "receive", "get", "peek", "subscribe", "request":
+	case "receive", "peek", "subscribe", "request":
 		return true
 	}
 	return false
@@ -577,17 +743,4 @@ func expandAlias(line string, aliases map[string]string) string {
 	}
 
 	return result.String()
-}
-
-// isAlias checks whether the first word of a line matches an alias name.
-func isAlias(line string, aliases map[string]string) bool {
-	if len(aliases) == 0 {
-		return false
-	}
-	tokens := shellSplit(line)
-	if len(tokens) == 0 {
-		return false
-	}
-	_, ok := aliases[tokens[0]]
-	return ok
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -102,10 +101,14 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 		if sendErr != nil {
 			// The message was already consumed from the source; surface it so
 			// the operator can recover the one in-flight message.
-			fmt.Fprintf(os.Stderr, "send to %s failed after %d moved; undelivered message follows on stdout:\n", destination, moved)
-			_, _ = fmt.Fprint(os.Stdout, string(message.Data))
-			if log.IsStdout {
-				_, _ = fmt.Fprintln(os.Stdout)
+			// Through the command's own streams, so in the shell/AI shell the
+			// recovered payload lands in the pipeline/transcript instead of
+			// being written behind the AI shell's alternate screen and lost.
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "send to %s failed after %d moved; undelivered message follows on stdout:\n", destination, moved)
+			_, _ = out.Write(message.Data)
+			if shouldAddNewline(out) {
+				_, _ = fmt.Fprintln(out)
 			}
 			return fmt.Errorf("send to %s failed: %w", destination, sendErr)
 		}
