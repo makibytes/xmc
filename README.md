@@ -581,22 +581,26 @@ xmc supports these AI providers:
 | --- | --- | --- |
 | Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-5 |
 | OpenAI | `OPENAI_API_KEY` | gpt-5.6-luna |
-| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-3.6-flash |
+| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-3.8-flash |
 | xAI | `XAI_API_KEY` | grok-4.5 |
 | DeepSeek | `DEEPSEEK_API_KEY` | deepseek-v4-flash |
 | Mistral | `MISTRAL_API_KEY` | mistral-small-latest |
-| OpenCode AI (Zen) | `OPENCODE_API_KEY` or `OPENCODE_ZEN_API_KEY` | deepseek-v4-flash-free |
+| OpenRouter | `OPENROUTER_API_KEY` | openrouter/free |
 
-The recommended provider for getting started is **OpenCode AI** — their free
-models (like deepseek-v4-flash-free, which xmc uses by default) work well for
-command generation and cost nothing. Free Zen models are limited-time offers,
-and requests may be retained and used to improve the model; do not submit
-personal or confidential data. Sign up at [opencode.ai](https://opencode.ai),
-grab an API key, and export it:
+Two good ways to start without paying:
 
-```sh
-export OPENCODE_API_KEY="your-key-here"
-```
+- **Google Gemini** — create a free key in [Google AI Studio](https://aistudio.google.com/apikey)
+  (no payment details needed) and `export GEMINI_API_KEY="your-key"`. The default
+  model, gemini-3.8-flash, works well for command generation. Free-tier limits
+  are shown in the AI Studio console.
+- **OpenRouter** — create a key at [openrouter.ai](https://openrouter.ai) and
+  `export OPENROUTER_API_KEY="your-key"`. The default `openrouter/free` is
+  OpenRouter's free router: it picks one of the currently available free models
+  for every request, so it keeps working as individual free models come and go.
+  Pin a specific model with `/model` (or `ai.model`), e.g. one ending in `:free`.
+  Free usage is rate limited (20 requests/minute, 50/day; 1,000/day once the
+  account has bought $10 of credits), and free models' providers may log
+  prompts — do not submit personal or confidential data.
 
 xmc auto-detects API keys in the order listed above.
 
@@ -604,7 +608,7 @@ xmc auto-detects API keys in the order listed above.
 
 > Disclaimer: AI Shell is experimental and has not been thoroughly tested with
 > all brokers and AI providers, yet. The best results are probably reached when
-> using Artemis or RabbitMQ with OpenCode AI (Zen).
+> using Artemis or RabbitMQ with Gemini.
 
 Start the AI Shell:
 
@@ -738,8 +742,8 @@ select the specific provider and model xmc should use:
 
 ```yaml
 ai:
-  provider: opencode
-  model: deepseek-v4-flash-free
+  provider: gemini
+  model: gemini-3.8-flash
   effort: low               # low | medium | high (set by /effort)
   metadata-format: yaml     # yaml | json (set by J / Y)
   refresh-interval: 5s      # sidebar refresh, or "off" (set by /refresh)
@@ -752,7 +756,7 @@ Provider selection precedence is:
 
 1. If `ai.provider` is set in YAML, that provider is required.
 2. Otherwise, xmc picks the first provider with a present API key in this order:
-   Anthropic, OpenAI, Gemini, xAI, DeepSeek, Mistral, OpenCode.
+   Anthropic, OpenAI, Gemini, xAI, DeepSeek, Mistral, OpenRouter.
 
 AI shell aliases are also supported via YAML and are available in both shell and AI command mode:
 

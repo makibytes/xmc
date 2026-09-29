@@ -504,7 +504,7 @@ func isReasoningModel(model string) bool {
 
 func (c *openaiClient) isDeepSeekV4() bool {
 	model := strings.ToLower(strings.TrimSpace(c.model))
-	return (c.provider == "deepseek" || c.provider == "opencode") && strings.Contains(model, "deepseek-v4-")
+	return c.provider == "deepseek" && strings.Contains(model, "deepseek-v4-")
 }
 
 func (c *openaiClient) isXAIReasoningModel() bool {

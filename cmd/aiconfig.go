@@ -178,11 +178,15 @@ type providerDef struct {
 var providerOrder = []providerDef{
 	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "https://api.anthropic.com", "claude-sonnet-5"},
 	{"openai", []string{"OPENAI_API_KEY"}, "https://api.openai.com", "gpt-5.6-luna"},
-	{"gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}, "https://generativelanguage.googleapis.com", "gemini-3.6-flash"},
+	{"gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}, "https://generativelanguage.googleapis.com", "gemini-3.8-flash"},
 	{"xai", []string{"XAI_API_KEY"}, "https://api.x.ai", "grok-4.5"},
 	{"deepseek", []string{"DEEPSEEK_API_KEY"}, "https://api.deepseek.com", "deepseek-v4-flash"},
 	{"mistral", []string{"MISTRAL_API_KEY"}, "https://api.mistral.ai", "mistral-small-latest"},
-	{"opencode", []string{"OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"}, "https://opencode.ai/zen", "deepseek-v4-flash-free"},
+	// OpenRouter's "openrouter/free" router picks a currently available free
+	// model that supports the request, so the default doesn't depend on any
+	// single :free model surviving. Pin one with ai.model to get a
+	// reproducible model.
+	{"openrouter", []string{"OPENROUTER_API_KEY"}, "https://openrouter.ai/api", "openrouter/free"},
 }
 
 type envLookup func(string) string
@@ -210,7 +214,10 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 			}
 			return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok, requestTimeout: reqTimeout}, nil
 		}
-		return providerSpec{}, fmt.Errorf("unknown AI provider %q (supported: anthropic, openai, gemini, xai, deepseek, mistral, opencode)", cfg.AI.Provider)
+		if strings.EqualFold(cfg.AI.Provider, "opencode") {
+			return providerSpec{}, fmt.Errorf("AI provider %q is no longer supported (OpenCode's free tier only works inside OpenCode); use \"openrouter\" (OPENROUTER_API_KEY) or \"gemini\" (GEMINI_API_KEY) in ai.provider", cfg.AI.Provider)
+		}
+		return providerSpec{}, fmt.Errorf("unknown AI provider %q (supported: anthropic, openai, gemini, xai, deepseek, mistral, openrouter)", cfg.AI.Provider)
 	}
 
 	for _, def := range providerOrder {
@@ -225,7 +232,7 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 		return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok, requestTimeout: reqTimeout}, nil
 	}
 
-	return providerSpec{}, fmt.Errorf("no AI API key found; set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY, OPENCODE_API_KEY")
+	return providerSpec{}, fmt.Errorf("no AI API key found; set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY")
 }
 
 func findKey(envKeys []string, getenv envLookup) string {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,13 +99,13 @@ func TestResolveProvider_ConfigModelOverride(t *testing.T) {
 
 func TestResolveProvider_DefaultModels(t *testing.T) {
 	wantModels := map[string]string{
-		"anthropic": "claude-sonnet-5",
-		"openai":    "gpt-5.6-luna",
-		"gemini":    "gemini-3.6-flash",
-		"xai":       "grok-4.5",
-		"deepseek":  "deepseek-v4-flash",
-		"mistral":   "mistral-small-latest",
-		"opencode":  "deepseek-v4-flash-free",
+		"anthropic":  "claude-sonnet-5",
+		"openai":     "gpt-5.6-luna",
+		"gemini":     "gemini-3.8-flash",
+		"xai":        "grok-4.5",
+		"deepseek":   "deepseek-v4-flash",
+		"mistral":    "mistral-small-latest",
+		"openrouter": "openrouter/free",
 	}
 
 	for _, def := range providerOrder {
@@ -154,37 +155,35 @@ func TestResolveProvider_GeminiAlternateKey(t *testing.T) {
 	}
 }
 
-func TestResolveProvider_OpenCode(t *testing.T) {
+func TestResolveProvider_OpenRouter(t *testing.T) {
 	cfg := &xmcConfig{}
-	env := map[string]string{"OPENCODE_API_KEY": "oc-key"}
+	env := map[string]string{"OPENROUTER_API_KEY": "or-key"}
 	getenv := func(k string) string { return env[k] }
 
 	spec, err := resolveProvider(cfg, getenv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.name != "opencode" {
-		t.Errorf("expected opencode, got %q", spec.name)
+	if spec.name != "openrouter" || spec.apiKey != "or-key" {
+		t.Errorf("spec = %+v", spec)
 	}
-	if spec.baseURL != "https://opencode.ai/zen" {
+	// The client appends /v1/chat/completions, which must land on
+	// OpenRouter's /api/v1/chat/completions.
+	if spec.baseURL != "https://openrouter.ai/api" {
 		t.Errorf("baseURL = %q", spec.baseURL)
+	}
+	if spec.model != "openrouter/free" {
+		t.Errorf("model = %q, want the free router", spec.model)
 	}
 }
 
-func TestResolveProvider_OpenCodeZenKey(t *testing.T) {
+// A config left over from the removed OpenCode provider gets a pointer to the
+// replacements, not a bare "unknown provider".
+func TestResolveProvider_RemovedOpenCodeProvider(t *testing.T) {
 	cfg := &xmcConfig{AI: aiConfig{Provider: "opencode"}}
-	env := map[string]string{"OPENCODE_ZEN_API_KEY": "zen-key"}
-	getenv := func(k string) string { return env[k] }
-
-	spec, err := resolveProvider(cfg, getenv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if spec.name != "opencode" {
-		t.Errorf("expected opencode, got %q", spec.name)
-	}
-	if spec.apiKey != "zen-key" {
-		t.Errorf("apiKey = %q, want zen-key", spec.apiKey)
+	_, err := resolveProvider(cfg, func(string) string { return "key" })
+	if err == nil || !strings.Contains(err.Error(), "openrouter") {
+		t.Errorf("err = %v, want a message pointing to openrouter", err)
 	}
 }
 

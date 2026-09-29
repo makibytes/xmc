@@ -219,7 +219,7 @@ func TestOpenAIClient_GenerationConfig(t *testing.T) {
 		},
 		{
 			name:   "deepseek high",
-			client: openaiClient{provider: "opencode", model: "deepseek-v4-flash-free", maxTokens: 4096, effort: effortHigh},
+			client: openaiClient{provider: "deepseek", model: "deepseek-v4-flash", maxTokens: 4096, effort: effortHigh},
 			wantBody: map[string]any{
 				"max_tokens":       4096,
 				"thinking":         map[string]any{"type": "enabled"},
@@ -313,7 +313,7 @@ func TestGeminiClient_CurrentModelEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &geminiClient{apiKey: "key", model: "gemini-3.6-flash", baseURL: srv.URL, effort: effortMedium}
+	c := &geminiClient{apiKey: "key", model: "gemini-3.8-flash", baseURL: srv.URL, effort: effortMedium}
 	if _, _, err := c.Complete(context.Background(), "sys", []aiMessage{{Role: "user", Content: "hi"}}, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-API_KEY="${OPENCODE_API_KEY}"
-URL="https://opencode.ai/zen/v1/chat/completions"
-MODEL="deepseek-v4-flash-free"
+API_KEY="${OPENROUTER_API_KEY}"
+URL="https://openrouter.ai/api/v1/chat/completions"
+MODEL="openrouter/free"
 
 if [ -z "$API_KEY" ]; then
-    echo "Error: OPENCODE_API_KEY is not set" >&2
+    echo "Error: OPENROUTER_API_KEY is not set" >&2
     exit 1
 fi
 
