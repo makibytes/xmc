@@ -5,7 +5,7 @@ go 1.27
 require (
 	cloud.google.com/go/pubsub v1.51.1
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
-	github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus v1.10.0
+	github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus v1.11.0
 	github.com/Azure/go-amqp v1.7.0
 	github.com/apache/pulsar-client-go v0.21.0
 	github.com/atotto/clipboard v0.1.4
