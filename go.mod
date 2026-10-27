@@ -23,7 +23,7 @@ require (
 	github.com/ibm-messaging/mq-golang/v5 v5.7.3
 	github.com/mattn/go-runewidth v0.0.31
 	github.com/muesli/termenv v0.16.0
-	github.com/nats-io/nats.go v1.54.0
+	github.com/nats-io/nats.go v1.55.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/segmentio/kafka-go v0.4.51
