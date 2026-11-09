@@ -3,7 +3,7 @@ module github.com/makibytes/xmc
 go 1.27
 
 require (
-	cloud.google.com/go/pubsub v1.51.1
+	cloud.google.com/go/pubsub v1.52.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus v1.11.0
 	github.com/Azure/go-amqp v1.7.0
