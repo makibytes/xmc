@@ -28,7 +28,7 @@ require (
 	github.com/rivo/uniseg v0.4.7
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/nats v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.45.0
