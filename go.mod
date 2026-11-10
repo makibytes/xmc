@@ -10,7 +10,7 @@ require (
 	github.com/apache/pulsar-client-go v0.21.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2/config v1.33.13
-	github.com/aws/aws-sdk-go-v2/service/sns v1.47.9
+	github.com/aws/aws-sdk-go-v2/service/sns v1.47.10
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.11
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/charmbracelet/bubbles v1.0.0
