@@ -222,13 +222,20 @@ func StartPulsar(ctx context.Context) (*BrokerContainer, error) {
 			"PULSAR_PREFIX_allowAutoTopicCreationType":    "non-partitioned",
 			"PULSAR_PREFIX_allowAutoSubscriptionCreation": "true",
 		},
-		Cmd: []string{"/bin/bash", "-c", "bin/pulsar standalone --no-functions-worker -nss"},
-		WaitingFor: wait.ForHTTP("/admin/v2/clusters").
+		// The PULSAR_PREFIX_* settings above only take effect once
+		// apply-config-from-env.py has written them into the config file.
+		Cmd: []string{"/bin/bash", "-c", "bin/apply-config-from-env.py conf/standalone.conf && " +
+			"bin/pulsar standalone --no-functions-worker -nss"},
+		// Standalone serves the admin API before its own setup is complete: it
+		// then creates the "standalone" cluster, the "public" tenant and the
+		// "public/default" namespace, in that order. Until the namespace exists,
+		// producers and consumers fail with TopicNotFound, so wait for it.
+		WaitingFor: wait.ForHTTP("/admin/v2/namespaces/public").
 			WithPort("8080/tcp").
 			WithStartupTimeout(120 * time.Second).
 			WithResponseMatcher(func(r io.Reader) bool {
 				respBytes, _ := io.ReadAll(r)
-				return strings.Contains(string(respBytes), "standalone")
+				return strings.Contains(string(respBytes), `"public/default"`)
 			}),
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
