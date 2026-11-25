@@ -400,39 +400,27 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 	// (sidebarRows) — rendering order and selection order can never drift
 	// apart, and sel is a direct row index, no item↔row translation needed.
 	sRows := m.sidebarRows(idx)
-	type displayRow struct {
-		name   string
-		metric string
-		indent bool
-	}
-	rows := make([]displayRow, len(sRows))
-	for i, r := range sRows {
-		if r.parentName == "" {
-			rows[i] = displayRow{name: r.node.Name, metric: fmtNodeDetail(r.node)}
-			continue
-		}
-		label := r.node.Name
-		if r.node.Kind != "" {
-			label = r.node.Kind + " " + r.node.Name
-		}
-		rows[i] = displayRow{name: label, metric: fmtNodeMetric(r.node), indent: true}
-	}
 
+	// Rows are formatted lazily: only the visible window of them is rendered.
 	renderRow := func(ri int, selected bool) string {
-		r := rows[ri]
+		r := sRows[ri]
+		indent := r.parentName != ""
 		prefix := "  "
-		if r.indent {
+		name, metricStr := r.node.Name, fmtNodeDetail(r.node)
+		if indent {
 			prefix = "  └ "
+			if r.node.Kind != "" {
+				name = r.node.Kind + " " + r.node.Name
+			}
+			metricStr = fmtNodeMetric(r.node)
 		}
 
-		name := r.name
-		metricStr := r.metric
 		maxName := max(width-len(metricStr)-len(prefix)-2, 5)
 		if nameRunes := []rune(name); len(nameRunes) > maxName {
 			name = string(nameRunes[:maxName-1]) + "…"
 		}
 
-		if selected && r.indent {
+		if selected && indent {
 			marker := "▸ └ "
 			pad := max(width-len(marker)-2-len(name)-len(metricStr), 1)
 			return sidebarSelStyle.Render(fmt.Sprintf("%s%s%s%s", marker, name, strings.Repeat(" ", pad), metricStr))
@@ -455,7 +443,7 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		return "", false
 	}
 
-	return m.writeWindow(b, width, bodyLines, collapsed, headerText, focused, extra, len(rows), w.sel, renderRow, trailer)
+	return m.writeWindow(b, width, bodyLines, collapsed, headerText, focused, extra, len(sRows), w.sel, renderRow, trailer)
 }
 
 // fmtNodeMetric formats the first metric of a node for compact sidebar display.

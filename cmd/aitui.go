@@ -444,6 +444,8 @@ type aiTUIModel struct {
 	// so that mouse-click copy can resolve which line was clicked.
 	copyItems           []string
 	wrappedContentLines []string
+	wrapCache           *wrapCache // memoized soft-wrap of the transcript; see wrappedTranscript
+	vpContent           string     // last content handed to the viewport (skips no-op repaints)
 
 	// Token coalescing: tracks the last time setViewportContent was called
 	// during streaming so we throttle re-renders to ~50ms intervals.
@@ -1338,8 +1340,10 @@ func (m *aiTUIModel) appendTranscript(text string) {
 	// Transcript cap: drop the oldest content when we exceed the budget.
 	if m.transcript.Len() > maxTranscriptBytes {
 		raw := m.transcript.String()
-		// Keep the last maxTranscriptBytes bytes, aligning to a newline boundary.
-		keep := raw[m.transcript.Len()-maxTranscriptBytes:]
+		// Keep the newest 3/4 of the budget, aligning to a newline boundary.
+		// Trimming below the cap leaves room to grow, so consecutive appends
+		// don't each re-copy a full-size transcript.
+		keep := raw[m.transcript.Len()-maxTranscriptBytes*3/4:]
 		if nl := strings.Index(keep, "\n"); nl >= 0 {
 			keep = keep[nl+1:]
 		}
@@ -1360,18 +1364,20 @@ func (m *aiTUIModel) appendTranscript(text string) {
 // any in-flight streaming tokens), soft-wraps it to the pane width, and
 // conditionally scrolls to the bottom when follow mode is active.
 func (m *aiTUIModel) setViewportContent() {
-	content := m.transcript.String()
+	// overlay is the transient content below the transcript (streaming tokens,
+	// picker, live output preview, proposal); it is rebuilt on every repaint.
+	var overlay strings.Builder
 	if m.state == tuiThinking && m.streamBuf.Len() > 0 {
-		content += dimStyle.Render(collapseBlankLines(m.streamBuf.String()))
+		overlay.WriteString(dimStyle.Render(collapseBlankLines(m.streamBuf.String())))
 	}
 	if m.state == tuiPicking && m.picker != nil {
-		content += m.renderPicker()
+		overlay.WriteString(m.renderPicker())
 	}
 	if m.state == tuiExecuting && m.liveCapture != nil {
 		// The last lines written so far; replaced by the full, styled output
 		// once the command finishes (handleExecDone).
 		for _, line := range m.liveCapture.tail(livePreviewLines) {
-			content += dimStyle.Render("  "+line) + "\n"
+			overlay.WriteString(dimStyle.Render("  "+line) + "\n")
 		}
 	}
 	if m.state == tuiProposing || m.state == tuiEditing {
@@ -1413,21 +1419,65 @@ func (m *aiTUIModel) setViewportContent() {
 				shimmed.WriteString("\n")
 			}
 		}
-		content += shimmed.String()
+		overlay.WriteString(shimmed.String())
 		if m.proposedDestructive {
-			content += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
+			overlay.WriteString("\n" + warnStyle.Render("  ⚠ destructive — review carefully"))
 		}
-		content += "\n\n"
+		overlay.WriteString("\n\n")
 	}
+
+	var content string
 	if w := m.viewport.Width; w > 0 {
-		content = wrapText(content, w)
+		content = m.wrappedTranscript(m.transcript.String(), overlay.String(), w)
+	} else {
+		content = m.transcript.String() + overlay.String()
 	}
-	// Cache the wrapped lines for click-to-copy ⧉ detection.
-	m.wrappedContentLines = strings.Split(content, "\n")
-	m.viewport.SetContent(content)
+	// Typing and cursor blinks repaint without changing the content; only
+	// re-split and re-measure it when it did.
+	if content != m.vpContent {
+		m.vpContent = content
+		// Cache the wrapped lines for click-to-copy ⧉ detection.
+		m.wrappedContentLines = strings.Split(content, "\n")
+		m.viewport.SetContent(content)
+	}
 	if m.follow {
 		m.viewport.GotoBottom()
 	}
+}
+
+// wrapCache memoizes the soft-wrapped head of the transcript across repaints.
+type wrapCache struct {
+	src     string // the transcript prefix wrapped so far; empty or ending in "\n"
+	width   int    // the wrap width it was computed for
+	wrapped string // wrapText(src, width)
+}
+
+// wrappedTranscript returns transcript+overlay soft-wrapped to width. Wrapping
+// is per line (a newline resets all of the wrapper's state), so the whole
+// lines of the transcript are wrapped once and reused: a repaint only wraps
+// what was appended since the previous one, plus the unfinished last line and
+// the overlay, instead of the entire (up to 200 KB) transcript. The cache
+// validates itself against the transcript, so any other way the transcript
+// changes (reset, trim, direct writes) just costs a re-wrap.
+func (m *aiTUIModel) wrappedTranscript(transcript, overlay string, width int) string {
+	c := m.wrapCache
+	if c == nil {
+		c = &wrapCache{}
+		m.wrapCache = c
+	}
+	if c.width != width || !strings.HasPrefix(transcript, c.src) {
+		*c = wrapCache{width: width}
+	}
+	if i := strings.LastIndexByte(transcript[len(c.src):], '\n'); i >= 0 {
+		end := len(c.src) + i + 1
+		c.wrapped += wrapText(transcript[len(c.src):end], width)
+		c.src = transcript[:end]
+	}
+	rest := transcript[len(c.src):] + overlay
+	if rest == "" {
+		return c.wrapped
+	}
+	return c.wrapped + wrapText(rest, width)
 }
 
 // wrapText soft-wraps s (which may carry ANSI styling) to width columns at
