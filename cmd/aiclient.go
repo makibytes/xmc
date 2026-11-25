@@ -91,7 +91,6 @@ func doWithRetry(ctx context.Context, buildReq func() (*http.Request, error)) (*
 			body, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
-			lastResp = nil
 			return lastErr
 		}
 		if resp.StatusCode >= 400 {

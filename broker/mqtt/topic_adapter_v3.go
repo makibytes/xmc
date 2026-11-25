@@ -13,9 +13,8 @@ import (
 
 // TopicAdapterV3 adapts MQTT to TopicBackend.
 type TopicAdapterV3 struct {
-	connArgs ConnArguments
-	client   pahomqtt.Client
-	subs     subscriptionCacheV3
+	client pahomqtt.Client
+	subs   subscriptionCacheV3
 }
 
 // NewTopicAdapterV3 creates a connected TopicAdapterV3.
@@ -24,7 +23,7 @@ func NewTopicAdapterV3(args ConnArguments) (*TopicAdapterV3, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapterV3{connArgs: args, client: client}, nil
+	return &TopicAdapterV3{client: client}, nil
 }
 
 // Publish implements backends.TopicBackend.

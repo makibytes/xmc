@@ -59,12 +59,12 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
 	if opts.GroupID != "" {
-		return a.subscribeGroup(ctx, key, opts.GroupID, opts.Durable, timeout)
+		return a.subscribeGroup(ctx, key, opts.GroupID, timeout)
 	}
 	return a.subscribeIndependent(ctx, key, timeout)
 }
 
-func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, _ bool, timeout time.Duration) (*backends.Message, error) {
+func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, timeout time.Duration) (*backends.Message, error) {
 	if err := a.ensureTopicGroup(ctx, key, group); err != nil {
 		return nil, err
 	}

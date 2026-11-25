@@ -61,15 +61,6 @@ func stderr() io.Writer {
 	return os.Stderr
 }
 
-// Info writes an informational message to stdout.
-func Info(s string, args ...any) {
-	if len(args) > 0 {
-		_, _ = fmt.Fprintf(stdout(), s, args...)
-	} else {
-		_, _ = fmt.Fprintln(stdout(), s)
-	}
-}
-
 // Error writes an error message to stderr.
 func Error(s string, args ...any) {
 	if len(args) > 0 {

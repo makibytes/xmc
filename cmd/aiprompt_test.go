@@ -284,12 +284,6 @@ func TestBuildVerbSet(t *testing.T) {
 			t.Errorf("verb %q should be in set", v)
 		}
 	}
-	// Two-word manage subcommands.
-	for _, v := range []string{"manage list", "manage purge"} {
-		if !verbs[v] {
-			t.Errorf("two-word verb %q should be in set", v)
-		}
-	}
 	// Excluded verbs.
 	for _, v := range []string{"shell", "ai", "help"} {
 		if verbs[v] {

@@ -16,8 +16,8 @@ import (
 // a connection and there is no cross-call race.
 type QueueFactory func() (backends.QueueBackend, error)
 
-// TopicFactory opens a fresh topic connection (reserved for publish/subscribe
-// tools; not registered in the default set).
+// TopicFactory opens a fresh topic connection, used per call by the publish
+// and consume tools.
 type TopicFactory func() (backends.TopicBackend, error)
 
 // Deps is everything a broker wires in to build its MCP server. Connection

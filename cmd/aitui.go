@@ -767,7 +767,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProcDoneMsg(msg)
 
 	case procStderrMsg:
-		// State already updated by the writer goroutine (bgProcess.stderrSeen);
+		// State already updated by the writer goroutine (bgProcess.unseenStderr);
 		// the message only forces a repaint so the red highlight shows now.
 		return m, nil
 
@@ -1466,11 +1466,9 @@ func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, bina
 		(&m).killAllProcs()
 		deadline := time.After(2 * time.Second)
 		for _, proc := range m.procs {
-			if proc.doneCh != nil {
-				select {
-				case <-proc.doneCh:
-				case <-deadline:
-				}
+			select {
+			case <-proc.doneCh:
+			case <-deadline:
 			}
 		}
 	}

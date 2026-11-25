@@ -227,11 +227,6 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 	return stats, nil
 }
 
-// CreateQueue creates an ANYCAST address and queue of the same name.
-func CreateQueue(args ManagementArgs, queue string) error {
-	return CreateQueueWithConfig(args, QueueConfig{"name": queue})
-}
-
 // QueueConfig collects Artemis QueueConfiguration attributes (kebab-case JSON
 // keys as defined by the Artemis QueueConfiguration contract: "address",
 // "routing-type", "filter-string", "durable", "max-consumers",

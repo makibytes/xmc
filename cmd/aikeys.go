@@ -501,7 +501,7 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
 		// Freeze with a grey ✗ marker.
-		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", true, false))
+		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", false))
 		m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
 		m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "[user discarded the command]"})
 		m.state = tuiIdle
@@ -527,7 +527,7 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "c":
 			// Freeze with a yellow ? marker to mark it as a follow-up topic.
-			m.appendTranscript(freezeProposal(m.proposedCmd, "?", false, m.proposedDestructive))
+			m.appendTranscript(freezeProposal(m.proposedCmd, "?", m.proposedDestructive))
 			m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
 			m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "[command NOT executed — user wants to discuss or refine it before running]"})
 			m.input.SetValue("")
@@ -566,7 +566,7 @@ func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Freeze with a grey ✗ marker and return to idle — recorded in the
 		// conversation exactly like discarding the unedited proposal, so the
 		// model knows its command was not run.
-		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", true, false))
+		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", false))
 		m.ai.history = append(m.ai.history,
 			aiMessage{Role: "assistant", Content: m.proposedCmd},
 			aiMessage{Role: "user", Content: "[user discarded the command]"})
@@ -619,9 +619,6 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyTab:
 		m.cycleFocus(true)
-		return m, nil
-	case tea.KeyShiftTab:
-		m.cycleFocus(false)
 		return m, nil
 	case tea.KeyRunes:
 		switch msg.String() {
@@ -738,8 +735,7 @@ func (m *aiTUIModel) startPrompt(kind string, objIdx int, name string) {
 // accepts free-text input beyond Enter/Esc (and whether that includes a
 // literal space), and what happens on Enter. confirm returns (m, nil)
 // unmodified-except-for-blur to no-op when the required action/hook isn't
-// wired; the four kinds with no promptSpec entry (i.e. none — every kind
-// startPrompt is ever called with has one) fall through to a plain no-op.
+// wired. Every kind startPrompt is ever called with has an entry here.
 type promptSpec struct {
 	textEntry  bool // Backspace/Runes accepted (create/send/publish); not delete/purge/purge-subscription, which just confirm a fixed name
 	allowSpace bool // also accept KeySpace as input (send/publish only — a payload may contain spaces; create's name may not)
@@ -930,10 +926,7 @@ func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	ow := &m.objTypes[wi]
 
-	spec, ok := promptSpecs()[m.promptKind]
-	if !ok {
-		return m, nil
-	}
+	spec := promptSpecs()[m.promptKind]
 
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
@@ -1553,28 +1546,19 @@ func renderMessagePayload(content string) string {
 // ---------- Proposal rendering ----------
 
 // freezeProposal builds the static transcript line written when the user
-// resolves a proposed command. The marker (✗ discarded, ? discuss) is
-// appended with the appropriate style. When dim is true the command text is
-// rendered in dimStyle. An accepted (✓) command goes through acceptProposal
-// instead: its output follows directly underneath.
-func freezeProposal(cmd, marker string, dim, destructive bool) string {
-	var prefix string
-	if dim {
-		prefix = dimStyle.Render("▶ " + cmd)
-	} else {
-		prefix = cmdStyle.Render("▶ " + cmd)
-	}
+// resolves a proposed command: "✗" (discarded, command text dimmed) or "?"
+// (discuss, with the destructive warning when destructive). An accepted (✓)
+// command goes through acceptProposal instead: its output follows directly
+// underneath.
+func freezeProposal(cmd, marker string, destructive bool) string {
 	var result string
-	switch marker {
-	case "✗":
-		result = prefix + " " + warnStyle.Render("✗")
-	case "?":
-		result = prefix + " " + infoStyle.Render("?")
-	default:
-		result = prefix
-	}
-	if destructive && marker != "✗" {
-		result += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
+	if marker == "✗" {
+		result = dimStyle.Render("▶ "+cmd) + " " + warnStyle.Render("✗")
+	} else {
+		result = cmdStyle.Render("▶ "+cmd) + " " + infoStyle.Render(marker)
+		if destructive {
+			result += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
+		}
 	}
 	return result + "\n\n"
 }

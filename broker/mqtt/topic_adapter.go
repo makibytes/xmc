@@ -14,9 +14,8 @@ import (
 
 // TopicAdapter adapts MQTT 5 to TopicBackend.
 type TopicAdapter struct {
-	connArgs ConnArguments
-	cm       *autopaho.ConnectionManager
-	subs     subCache5
+	cm   *autopaho.ConnectionManager
+	subs subCache5
 }
 
 // NewTopicAdapter creates a connected MQTT 5 TopicAdapter.
@@ -25,7 +24,7 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{connArgs: args, cm: cm}, nil
+	return &TopicAdapter{cm: cm}, nil
 }
 
 // Publish implements backends.TopicBackend.

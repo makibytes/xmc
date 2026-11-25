@@ -167,7 +167,7 @@ func newReceiver(ctx context.Context, session *amqp.Session, opts ReceiveOptions
 	return session.NewReceiver(ctx, opts.Queue, receiverOptions)
 }
 
-// receiveCtx derives the per-call context a Receive waits on: unbounded
+// receiveWaitCtx derives the per-call context a Receive waits on: unbounded
 // (cancellable) when opts.Wait, otherwise bounded by opts.Timeout.
 func receiveWaitCtx(ctx context.Context, opts ReceiveOptions) (context.Context, context.CancelFunc) {
 	if opts.Wait {
@@ -188,9 +188,10 @@ func receiveWaitCtx(ctx context.Context, opts ReceiveOptions) (context.Context, 
 // subsequent peek may not see the released message promptly (or at all)
 // — confirmed against a live broker. Every release therefore still gets its
 // own attach/receive/release/detach cycle, exactly as before caching existed.
-// This path is inherently low-frequency for both AMQP brokers: Artemis and
-// RabbitMQ each implement true cursor browsing (see QueueBrowser) for
-// repeated peeks, so a plain release only happens for a single one-shot peek.
+// This path is inherently low-frequency for both AMQP brokers: Artemis uses
+// true cursor browsing (see QueueBrowser) and RabbitMQ browses through its
+// Management API for repeated peeks, so a plain release only happens for a
+// single one-shot peek.
 func (c *ReceiverCache) Receive(ctx context.Context, session *amqp.Session, opts ReceiveOptions) (*amqp.Message, error) {
 	if !opts.Acknowledge {
 		return receiveOnce(ctx, session, opts)

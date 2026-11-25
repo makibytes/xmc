@@ -1,12 +1,10 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -37,27 +35,24 @@ var (
 // ---------- bgProcess ----------
 
 // bgProcess holds state for one managed background process.
-// cancel, done, err, finishedAt are only accessed on the UI goroutine.
-// out and lines are shared with the background goroutine via mu.
+// cancel, done and err are only accessed on the UI goroutine.
+// out and unseenStderr are shared with the background goroutine via mu.
 type bgProcess struct {
-	id        int
-	name      string
-	command   string
-	startedAt time.Time
-	cancel    context.CancelFunc // set via procCancelMsg; UI goroutine only thereafter
-	doneCh    chan struct{}      // closed by the background goroutine when it exits
+	id      int
+	name    string
+	command string
+	cancel  context.CancelFunc // set via procCancelMsg; UI goroutine only thereafter
+	doneCh  chan struct{}      // closed by the background goroutine when it exits
 
-	mu         sync.Mutex
-	out        cappedBuffer // goroutine writes; UI reads via snapshotText()
-	lines      int          // count of '\n' in out
-	stderrSeen bool         // process wrote to stderr since the user last viewed its output
+	mu           sync.Mutex
+	out          cappedBuffer // goroutine writes; UI reads via snapshotText()
+	unseenStderr bool         // process wrote to stderr since the user last viewed its output
 
 	killed bool // stopped by the user (K); UI goroutine only
 
 	// Set in handleProcDoneMsg (UI goroutine only):
-	done       bool
-	err        error
-	finishedAt time.Time
+	done bool
+	err  error
 }
 
 // snapshotText returns a safe copy of the captured output under mu.
@@ -72,7 +67,7 @@ func (p *bgProcess) snapshotText() string {
 func (p *bgProcess) hasUnseenStderr() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.stderrSeen
+	return p.unseenStderr
 }
 
 // ---------- procWriter ----------
@@ -89,11 +84,10 @@ type procWriter struct {
 
 func (w procWriter) Write(b []byte) (int, error) {
 	w.p.mu.Lock()
-	w.p.lines += bytes.Count(b, []byte{'\n'})
 	n, err := w.p.out.Write(b)
 	notify := false
-	if w.stderr && len(b) > 0 && !w.p.stderrSeen {
-		w.p.stderrSeen = true
+	if w.stderr && len(b) > 0 && !w.p.unseenStderr {
+		w.p.unseenStderr = true
 		notify = true
 	}
 	w.p.mu.Unlock()
@@ -305,11 +299,10 @@ func (m *aiTUIModel) clampProcSel() {
 // the command to cmdHistory.
 func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) {
 	p := &bgProcess{
-		id:        m.procNextID,
-		name:      processName(command, m.rootCmd),
-		command:   command,
-		startedAt: time.Now(),
-		doneCh:    make(chan struct{}),
+		id:      m.procNextID,
+		name:    processName(command, m.rootCmd),
+		command: command,
+		doneCh:  make(chan struct{}),
 	}
 	p.out.max = maxProcCapture
 	m.procNextID++
@@ -390,7 +383,6 @@ func (m aiTUIModel) handleProcDoneMsg(msg procDoneMsg) (tea.Model, tea.Cmd) {
 		if p.id == msg.id {
 			p.done = true // UI goroutine only; no lock
 			p.err = msg.err
-			p.finishedAt = time.Now()
 			(&m).clampProcSel()
 			// Say so in the transcript — the sidebar glyph alone is easy to
 			// miss, and invisible on a terminal too narrow for the sidebar,
@@ -452,11 +444,6 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyTab:
 		// Tab moves focus forward (to the next window).
 		m.cycleFocus(true)
-		return m, nil
-
-	case tea.KeyShiftTab:
-		// Shift+Tab moves focus backward.
-		m.cycleFocus(false)
 		return m, nil
 
 	case tea.KeyRunes:
@@ -608,7 +595,7 @@ func (m *aiTUIModel) dumpProcessOutput(p *bgProcess) {
 	text := p.snapshotText()
 	// The user is looking at the output now — clear the red stderr highlight.
 	p.mu.Lock()
-	p.stderrSeen = false
+	p.unseenStderr = false
 	p.mu.Unlock()
 	var b strings.Builder
 

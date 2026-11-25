@@ -7,42 +7,6 @@ import (
 	"testing"
 )
 
-func TestInfo_WithArgs(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	Info("hello %s %d", "world", 42)
-
-	_ = w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := buf.String(); got != "hello world 42" {
-		t.Errorf("Info() = %q, want %q", got, "hello world 42")
-	}
-}
-
-func TestInfo_WithoutArgs(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	Info("simple message")
-
-	_ = w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := strings.TrimSpace(buf.String()); got != "simple message" {
-		t.Errorf("Info() = %q, want %q", got, "simple message")
-	}
-}
-
 func TestError_WithArgs(t *testing.T) {
 	old := os.Stderr
 	r, w, _ := os.Pipe()

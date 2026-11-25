@@ -307,12 +307,6 @@ func buildVerbSet(rootCmd *cobra.Command) map[string]bool {
 	for _, cmd := range rootCmd.Commands() {
 		if !skip[cmd.Name()] && !cmd.Hidden {
 			verbs[cmd.Name()] = true
-			for _, sub := range cmd.Commands() {
-				if !sub.Hidden && sub.Name() != "help" {
-					// "manage list", "manage purge", etc.
-					verbs[cmd.Name()+" "+sub.Name()] = true
-				}
-			}
 		}
 	}
 	return verbs
@@ -349,10 +343,6 @@ func extractCommandWithVerbs(response string, verbs map[string]bool) string {
 			continue
 		}
 		if verbs[fields[0]] {
-			return line
-		}
-		// Also check two-word verbs like "manage list".
-		if len(fields) >= 2 && verbs[fields[0]+" "+fields[1]] {
 			return line
 		}
 	}

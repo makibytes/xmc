@@ -72,9 +72,6 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 	// On success the handle still carries the message properties; delete it
 	// only after they have been extracted.
 	defer msgHandle.DltMH(ibmmq.NewMQDMHO()) //nolint:errcheck
-	if data == nil {
-		return nil, backends.ErrNoMessageAvailable
-	}
 
 	return convertMQMDToBackendMessage(md, data, msgHandle, opts.Verbosity >= backends.VerbosityVerbose), nil
 }

@@ -55,7 +55,7 @@ Test files are in `test/*.bats`. Default credentials for Artemis: `artemis/artem
 `golangci-lint run` (config in `.golangci.yml`). Run once per build tag — `broker/*.go` entry files are mutually exclusive per tag, so linting multiple tags at once causes redeclaration errors:
 
 ```bash
-golangci-lint run                        # tag-less shared code (cmd/, log/, rc/, broker/backends/, broker/amqpcommon/)
+golangci-lint run                        # tag-less shared code (cmd/, log/, broker/backends/, broker/amqpcommon/)
 golangci-lint run --build-tags=artemis   # repeat per broker tag
 ```
 
@@ -81,7 +81,7 @@ Each broker provides adapters implementing the backend interfaces:
 - `ManageableBackend` interface (`broker/backends/queue.go`) - optional, for management operations (list, purge, stats)
 - `ManageableTopicBackend` interface (`broker/backends/topic.go`) - optional, for topic management (list topics)
 - `RequestReplyBackend` interface (`broker/backends/request.go`) - optional, native request/reply (Artemis: server-side selector match on shared reply queue; NATS: private per-request reply stream, auto-deleted; IBM MQ: temporary dynamic reply queue + CorrelId match). Others use the broker-neutral default in `backends.Request`. The `reconnectingQueue` wrapper implements it by dispatching through `backends.Request` on the inner adapter so shell/AI mode keeps the native path.
-- `BrowseBackend` interface (`broker/backends/queue.go`) - optional, true non-destructive peek cursor (Artemis/RabbitMQ: AMQP copy-mode receiver; NATS: GetMsg by stream sequence; Redis: XRANGE cursor; Azure: native PeekMessages cursor; IBM MQ: MQOO_BROWSE + BROWSE_FIRST/NEXT). Brokers without it fall back to stateless Receive(ack=false), where `peek -n 0` repeats the head message; the native-or-fallback dispatch is centralized in `backends.Browse(ctx, qb, opts)` (mirrors `backends.Request` above), used by both `cmd/receive.go` and `mcp/tools.go`.
+- `BrowseBackend` interface (`broker/backends/queue.go`) - optional, true non-destructive peek cursor (Artemis: AMQP copy-mode receiver; RabbitMQ: Management API `get` with `ackmode=ack_requeue_true`, falling back to stateless Receive when a selector is set or the API is unavailable; NATS: GetMsg by stream sequence; Redis: XRANGE cursor; Azure: native PeekMessages cursor; IBM MQ: MQOO_BROWSE + BROWSE_FIRST/NEXT). Brokers without it fall back to stateless Receive(ack=false), where `peek -n 0` repeats the head message; the native-or-fallback dispatch is centralized in `backends.Browse(ctx, qb, opts)` (mirrors `backends.Request` above), used by both `cmd/receive.go` and `mcp/tools.go`.
 
 Entry point files (`broker/artemis.go`, etc.) fill in a `cmd.BrokerSpec` struct and call `cmd.NewRootCommand(spec)` which wires up all commands, flags, and the verbose toggle. Management subcommands are specified via `ManageSpec` on `BrokerSpec`; `NewRootCommand` builds the `manage` command tree from it, and the shell builds a fresh one per pipeline invocation for clean IO routing.
 
@@ -272,7 +272,6 @@ The AI shell sidebar's `S`/`p`/`m`/`R`/publish actions call the adapters directl
   - `command.go` - `mcp.NewCommand` cobra subcommand, wired via `BrokerSpec.Extra` in every broker entry file
   - `message.go` - message JSON shape (mirrors the NDJSON record; binary payloads base64) + JSON-Schema builders
 - `log/` - Logging utilities with verbose mode support
-- `rc/` - Return code constants
 - `test/` - bats integration test files
 
 See `docs/BROKERS.md` for protocol-specific differences and topology patterns.
