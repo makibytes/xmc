@@ -104,7 +104,7 @@ func TestGeminiClient_BadKeyIsOneReadableLine(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error")
 	}
-	want := "gemini: HTTP 400 API_KEY_INVALID: API key not valid. Please pass a valid API key. — check GEMINI_API_KEY"
+	want := "gemini: HTTP 400 API_KEY_INVALID: API key not valid. Please pass a valid API key. — check GEMINI_API_KEY (or set ai.provider in the config to use another provider)"
 	if !strings.HasPrefix(err.Error(), want) || strings.Contains(err.Error(), "\n") {
 		t.Errorf("error = %q\nwant one line starting %q", err, want)
 	}

@@ -168,6 +168,10 @@ func parseRetryAfter(v string) time.Duration {
 	return 0
 }
 
+// otherProvider closes the hints about a key that was auto-detected: xmc never
+// switches providers by itself — prompts go where the user chose.
+const otherProvider = " (or set ai.provider in the config to use another provider)"
+
 // explain adds the provider name and, where the cause is recognisable, a hint
 // to act on: a rejected key names the environment variable it came from, an
 // unknown model points at /model, and so on.
@@ -184,14 +188,14 @@ func (e *apiError) explain(provider, keyEnv, model string) {
 		case provider == "kilo" && keyEnv == "":
 			e.hint = "this model needs an API key — use kilo-auto/free or set KILO_API_KEY"
 		case keyEnv != "":
-			e.hint = "check " + keyEnv + " (set ai.provider in the config to use a different provider)"
+			e.hint = "check " + keyEnv + otherProvider
 		default:
 			e.hint = "check the provider's API key"
 		}
 	case e.status == http.StatusNotFound || strings.Contains(low, "model_not_found") || strings.Contains(low, "not_found"):
 		e.hint = fmt.Sprintf("model %q is not available from %s — pick another with /model, or remove ai.model from the config", model, provider)
 	case e.permanent || e.status == http.StatusPaymentRequired:
-		e.hint = "out of credit or quota — check the provider's billing page"
+		e.hint = "out of credit or quota — check the provider's billing page" + otherProvider
 	case e.status == http.StatusTooManyRequests:
 		e.hint = "rate limited"
 		if e.retryAfter > 0 {

@@ -69,7 +69,7 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 	}
 
 	parentCtx := cmd.Context()
-	return runConsume(func(ctx context.Context) (*backends.Message, error) {
+	return runConsume(parentCtx, func(ctx context.Context) (*backends.Message, error) {
 		return backend.Subscribe(ctx, opts)
 	}, consumeConfig{
 		count:      v.count,
@@ -80,5 +80,5 @@ func doSubscribe(cmd *cobra.Command, args []string, backend backends.TopicBacken
 		follow:     v.streaming.Follow,
 		dataOut:    cmd.OutOrStdout(),
 		metaOut:    cmd.ErrOrStderr(),
-	}, v.streaming.Duration, v.streaming.Stats, parentCtx)
+	}, v.streaming.Duration, v.streaming.Stats)
 }

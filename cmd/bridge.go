@@ -131,7 +131,7 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := streamContext(sf.Duration, cmd.Context())
+	ctx, cancel := streamContext(cmd.Context(), sf.Duration)
 	defer cancel()
 
 	st, stopStats := startStats(sf.Stats, errw)

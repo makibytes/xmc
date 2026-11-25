@@ -126,7 +126,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	}
 
 	parentCtx := cmd.Context()
-	ctx, stop := streamContext(sf.Duration, parentCtx)
+	ctx, stop := streamContext(parentCtx, sf.Duration)
 	defer stop()
 
 	// With no timeout we block until each request arrives; ctx cancellation

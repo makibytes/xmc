@@ -245,8 +245,8 @@ func TestConnGate_PaceWaitsForUpAndHonoursTheContext(t *testing.T) {
 	}
 	g.mu.Unlock()
 	select {
-	case <-errc:
-		t.Fatal("pace returned while the broker is down")
+	case err := <-errc:
+		t.Fatalf("pace returned (%v) while the broker is down", err)
 	case <-time.After(30 * time.Millisecond):
 	}
 	g.Up()

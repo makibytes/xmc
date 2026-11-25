@@ -337,7 +337,7 @@ func (s *shellSession) runOnePipeline(ctx context.Context, line string, rootCmd 
 		}
 	}()
 
-	var src io.Reader = in
+	src := in
 	for i, block := range blocks {
 		reader := src
 		if i == len(blocks)-1 {

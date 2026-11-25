@@ -162,10 +162,10 @@ func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeCo
 //
 // parent is typically cmd.Context(), so that external cancellation (e.g. the AI
 // TUI's Esc handler) propagates into the receive loop alongside SIGINT.
-func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool, parent context.Context) error {
+func runConsume(parent context.Context, receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool) error {
 	// streamContext merges SIGINT with the parent so that both Ctrl-C (shell)
 	// and Esc (AI TUI) cleanly stop the consume loop.
-	ctx, cancel := streamContext(duration, parent)
+	ctx, cancel := streamContext(parent, duration)
 	defer cancel()
 
 	var stopStats func()

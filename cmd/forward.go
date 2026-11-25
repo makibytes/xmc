@@ -173,7 +173,7 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := streamContext(sf.Duration, cmd.Context())
+	ctx, cancel := streamContext(cmd.Context(), sf.Duration)
 	defer cancel()
 	st, stopStats := startStats(sf.Stats, errw)
 	defer stopStats()

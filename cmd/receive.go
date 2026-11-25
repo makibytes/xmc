@@ -90,12 +90,12 @@ func doReceive(cmd *cobra.Command, args []string, backend backends.QueueBackend,
 			return err
 		}
 		defer browser.Close() //nolint:errcheck
-		return runConsume(browser.Next, cfg, v.streaming.Duration, v.streaming.Stats, parentCtx)
+		return runConsume(parentCtx, browser.Next, cfg, v.streaming.Duration, v.streaming.Stats)
 	}
 
-	return runConsume(func(ctx context.Context) (*backends.Message, error) {
+	return runConsume(parentCtx, func(ctx context.Context) (*backends.Message, error) {
 		return backend.Receive(ctx, opts)
-	}, cfg, v.streaming.Duration, v.streaming.Stats, parentCtx)
+	}, cfg, v.streaming.Duration, v.streaming.Stats)
 }
 
 // resolveConsumeTarget parses --exchange/--queue/<to> for receive/subscribe

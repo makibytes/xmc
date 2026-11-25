@@ -21,7 +21,7 @@ import (
 // context.Background().
 //
 // The returned CancelFunc must be called (typically via defer).
-func streamContext(duration time.Duration, parent context.Context) (context.Context, context.CancelFunc) {
+func streamContext(parent context.Context, duration time.Duration) (context.Context, context.CancelFunc) {
 	ctx, stop := interruptContext(parent)
 	if duration <= 0 {
 		return ctx, stop
