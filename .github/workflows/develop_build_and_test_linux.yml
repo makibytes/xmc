@@ -16,14 +16,14 @@ jobs:
         ports:
           - 5672:5672
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: 1.27
       - name: Check out code
         uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.27
       - name: Get dependencies
         run: go mod download
       - name: Build all broker binaries
@@ -63,14 +63,14 @@ jobs:
       matrix:
         broker: [artemis, rabbitmq, kafka, nats, mqtt, pulsar, redis]
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: 1.27
       - name: Check out code
         uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.27
       - name: Get dependencies
         run: go mod download
       - name: Run ${{ matrix.broker }} integration tests (testcontainers)
@@ -100,14 +100,14 @@ jobs:
     name: Build macos/amd64
     runs-on: macos-26
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: 1.27
       - name: Check out code
         uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.27
       - name: Get dependencies
         run: go mod download
       - name: Build all broker binaries
@@ -129,14 +129,14 @@ jobs:
     name: Build windows/amd64
     runs-on: windows-latest
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: 1.27
       - name: Check out code
         uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.27
       - name: Get dependencies
         run: go mod download
       - name: Build all broker binaries

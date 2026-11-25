@@ -31,14 +31,14 @@ jobs:
         - goarch: arm64
           goos: windows
     steps:
-    - name: Set up Go
-      uses: actions/setup-go@v7
-      with:
-        go-version: 1.27
     - name: Check out code
       uses: actions/checkout@v5
       with:
         submodules: recursive
+    - name: Set up Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: 1.27
     - name: Release
       uses: wangyoucao577/go-release-action@v1
       with:
@@ -86,14 +86,14 @@ jobs:
     name: Build and release IBM MQ (windows/amd64)
     runs-on: windows-latest
     steps:
-    - name: Set up Go
-      uses: actions/setup-go@v7
-      with:
-        go-version: 1.27
     - name: Check out code
       uses: actions/checkout@v5
       with:
         submodules: recursive
+    - name: Set up Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: 1.27
     - name: Download and install IBM MQ client
       shell: powershell
       run: |
