@@ -23,6 +23,11 @@ const (
 	reconnectMaxBackoff     = 3 * time.Minute
 )
 
+// reconnectTick schedules the next countdown/probe check of the reconnect loop.
+func reconnectTick() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
+}
+
 // ---------- Connection probe ----------
 
 // probe pings the broker and hands the result to mk, which wraps it as the
@@ -58,7 +63,7 @@ func (m aiTUIModel) handleConnDone(msg connMsg) (tea.Model, tea.Cmd) {
 	m.conn.reconnecting = true
 	m.conn.reconnectBackoff = reconnectInitialBackoff
 	m.conn.reconnectAt = time.Now().Add(m.conn.reconnectBackoff)
-	return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
+	return m, reconnectTick()
 }
 
 // startReconnectProbe fires the connection probe for the auto-reconnect loop.
@@ -76,7 +81,7 @@ func (m aiTUIModel) handleReconnectTick() (tea.Model, tea.Cmd) {
 	if remaining > 0 {
 		secs := int(remaining.Seconds()) + 1
 		m.conn.reconnectStatus = fmt.Sprintf("↻ reconnecting in %ds…", secs)
-		return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
+		return m, reconnectTick()
 	}
 
 	// Time to probe.
@@ -95,10 +100,7 @@ func (m aiTUIModel) handleReconnectProbe(msg reconnectProbeMsg) (tea.Model, tea.
 		return m, nil
 	}
 	// Still failing — double backoff and keep ticking.
-	m.conn.reconnectBackoff *= 2
-	if m.conn.reconnectBackoff > reconnectMaxBackoff {
-		m.conn.reconnectBackoff = reconnectMaxBackoff
-	}
+	m.conn.reconnectBackoff = min(m.conn.reconnectBackoff*2, reconnectMaxBackoff)
 	m.conn.reconnectAt = time.Now().Add(m.conn.reconnectBackoff)
-	return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return reconnectTickMsg{} })
+	return m, reconnectTick()
 }
