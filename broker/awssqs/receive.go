@@ -19,15 +19,17 @@ import (
 //
 // When acknowledge is true, the message is deleted (acked) before returning.
 // When false, the message's visibility is immediately restored so it remains
-// available to other consumers (peek semantics).
-func pollSQS(ctx context.Context, sqsc *sqs.Client, queueURL string, timeout time.Duration, acknowledge bool, errLabel string, visOverride ...int32) (*backends.Message, error) {
+// available to other consumers (peek semantics). A positive visOverride
+// replaces the default 30s visibility timeout of an acknowledged read.
+func pollSQS(ctx context.Context, sqsc *sqs.Client, queueURL string, timeout time.Duration, acknowledge bool, errLabel string, visOverride int32) (*backends.Message, error) {
 	deadline := time.Now().Add(timeout)
 
 	var visibilityTimeout int32 = 30
-	if !acknowledge {
+	switch {
+	case !acknowledge:
 		visibilityTimeout = 0
-	} else if len(visOverride) > 0 && visOverride[0] > 0 {
-		visibilityTimeout = visOverride[0]
+	case visOverride > 0:
+		visibilityTimeout = visOverride
 	}
 
 	allAttrs := "All"

@@ -6,10 +6,12 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/spf13/pflag"
 )
 
-func parsePropertiesFlag(cmd flagValueGetter) (map[string]any, error) {
-	values, err := cmd.GetStringSlice("property")
+func parsePropertiesFlag(flags *pflag.FlagSet) (map[string]any, error) {
+	values, err := flags.GetStringSlice("property")
 	if err != nil {
 		return nil, err
 	}

@@ -5,7 +5,6 @@ package gcppubsub
 import (
 	"context"
 	"slices"
-	"sync"
 
 	"cloud.google.com/go/pubsub"
 
@@ -60,7 +59,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 
 	var subName string
 	var ephemeral bool
-	if opts.Extra != nil && opts.Extra["subscription"] != "" {
+	if opts.Extra["subscription"] != "" {
 		subName = opts.Extra["subscription"]
 	} else {
 		// Scope the group form by topic: Pub/Sub subscription names are
@@ -81,44 +80,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	if ephemeral && !slices.Contains(a.ephemeral, subName) {
 		a.ephemeral = append(a.ephemeral, subName)
 	}
-	sub.ReceiveSettings.MaxOutstandingMessages = 1
-	sub.ReceiveSettings.NumGoroutines = 1
-	sub.ReceiveSettings.Synchronous = true
-
-	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-	receiveCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	var (
-		msg *backends.Message
-		mu  sync.Mutex
-	)
-
-	err = sub.Receive(receiveCtx, func(_ context.Context, m *pubsub.Message) {
-		mu.Lock()
-		defer mu.Unlock()
-		if msg != nil {
-			m.Nack()
-			return
-		}
-		if opts.Acknowledge {
-			m.Ack()
-		} else {
-			m.Nack() // non-destructive: leave it for redelivery (peek)
-		}
-		msg = pubsubToBackendMessage(m)
-		cancel()
-	})
-	mu.Lock()
-	if msg != nil {
-		mu.Unlock()
-		return msg, nil
-	}
-	mu.Unlock()
-	if err != nil && err != context.Canceled {
-		return nil, err
-	}
-	return nil, backends.ErrNoMessageAvailable
+	return receiveOne(ctx, sub, opts.Timeout, opts.Wait, opts.Acknowledge)
 }
 
 // Close closes the connection to the broker.

@@ -69,8 +69,7 @@ func (m aiTUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m aiTUIModel) handleKeyPicking(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	p := m.picker
 	if p == nil {
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		return m, nil
 	}
 	switch msg.Type {
@@ -89,15 +88,13 @@ func (m aiTUIModel) handleKeyPicking(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		p.onSelect(&m, p.sel)
 		m.picker = nil
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		m.setViewportContent()
 		return m, nil
 	case tea.KeyEsc, tea.KeyCtrlC:
 		m.appendTranscript(dimStyle.Render("(cancelled)") + "\n\n")
 		m.picker = nil
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		return m, nil
 	}
 	return m, nil
@@ -121,7 +118,7 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.quit()
 		}
 		// Route process pane keys to the dedicated handler.
-		if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
+		if m.procsFocused() {
 			return m.handleKeyProcessPane(msg)
 		}
 		return m.handleKeyPane(msg)
@@ -164,12 +161,12 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyUp:
 		m.historyPrev()
-		(&m).updateInputHeight()
+		m.updateInputHeight()
 		return m, nil
 
 	case tea.KeyDown:
 		m.historyNext()
-		(&m).updateInputHeight()
+		m.updateInputHeight()
 		return m, nil
 
 	case tea.KeyEnter:
@@ -203,11 +200,7 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.copyItems = append(m.copyItems, prompt)
 			m.appendTranscript(cmdStyle.Render(m.binaryName+"> ") + prompt + copyHintStyle.Render(" ⧉") + "\n")
 			m.proposedCmd = prompt
-			// Commands with --for become managed background processes.
-			if commandHasFor(prompt, m.aliases()) {
-				return m.startBackgroundProcess(prompt)
-			}
-			return m.startExecution(prompt)
+			return m.runCommand(prompt)
 		}
 
 		// AI mode: send to the model.
@@ -228,19 +221,19 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// wraps to a new visual row. predictValue avoids calling Update() twice
 	// (which caused double-insertion due to shared backing arrays in the
 	// textarea's [][]rune value).
-	if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
+	if n := m.computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
 		m.input.SetHeight(n)
 		m.recalcLayout()
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	(&m).updateInputHeight()
+	m.updateInputHeight()
 	return m, cmd
 }
 
 // quit ends the session, cancelling any background processes first.
 func (m aiTUIModel) quit() (tea.Model, tea.Cmd) {
-	(&m).killAllProcs()
+	m.killAllProcs()
 	m.quitting = true
 	return m, tea.Quit
 }
@@ -251,6 +244,50 @@ func (m *aiTUIModel) clearInput() {
 	m.histIdx = -1
 	m.input.SetHeight(1)
 	m.recalcLayout()
+}
+
+// toIdle returns to the idle state with the input focused.
+func (m *aiTUIModel) toIdle() {
+	m.state = tuiIdle
+	m.input.Focus()
+}
+
+// noteSaved prints the confirmation of a setting change in the transcript,
+// flagging a failed write of it to the config file.
+func (m *aiTUIModel) noteSaved(msg string, saveErr error) {
+	if saveErr != nil {
+		msg += fmt.Sprintf(" (save failed: %s)", saveErr)
+	}
+	m.appendTranscript(dimStyle.Render(msg) + "\n\n")
+}
+
+// setMetadataFormat switches the sidebar's metadata display format (J/Y) and
+// persists the choice; choosing the format already in effect does nothing.
+func (m *aiTUIModel) setMetadataFormat(format metadataFormat) {
+	if m.metadataFormat == format {
+		return
+	}
+	m.metadataFormat = format
+	m.noteSaved("metadata format → "+string(format), saveMetadataFormat(format))
+}
+
+// runCommand runs a command line the user accepted: one with --for becomes a
+// managed background process, anything else runs in the foreground.
+func (m aiTUIModel) runCommand(command string) (tea.Model, tea.Cmd) {
+	if commandHasFor(command, m.aliases()) {
+		return m.startBackgroundProcess(command)
+	}
+	return m.startExecution(command)
+}
+
+// discardProposal records that the user discarded the proposed command, in
+// the transcript (grey ✗) and in the conversation, so the model knows it was
+// not run.
+func (m *aiTUIModel) discardProposal() {
+	m.appendTranscript(freezeProposal(m.proposedCmd, "✗", false))
+	m.ai.history = append(m.ai.history,
+		aiMessage{Role: "assistant", Content: m.proposedCmd},
+		aiMessage{Role: "user", Content: "[user discarded the command]"})
 }
 
 // clearTranscript empties the conversation display (/clear, Ctrl+L). The
@@ -265,7 +302,7 @@ func (m *aiTUIModel) clearTranscript() {
 
 // focusChat returns keyboard focus from a sidebar window to the input.
 func (m *aiTUIModel) focusChat() {
-	if prev := int(m.focus) - 1; prev >= 0 && prev < len(m.objTypes) && m.objTypes[prev].kind == objWindowProcs {
+	if m.procsFocused() {
 		m.exitProcessView()
 	}
 	m.focus = focusChat
@@ -350,14 +387,10 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			}
 			// Persist to config.
 			persistVal := formatRefreshInterval(d, enabled)
-			msg := "periodic refresh → " + persistVal
-			if err := saveRefreshInterval(persistVal); err != nil {
-				msg += fmt.Sprintf(" (save failed: %s)", err)
-			}
-			m.appendTranscript(dimStyle.Render(msg) + "\n\n")
+			m.noteSaved("periodic refresh → "+persistVal, saveRefreshInterval(persistVal))
 			// If turned on and not already refreshing, kick off the loop.
 			if enabled && !wasEnabled && !m.refreshing && len(m.objTypes) > 0 {
-				return m, (&m).beginRefresh()
+				return m, m.beginRefresh()
 			}
 			return m, nil
 		}
@@ -405,12 +438,7 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			m.fetchingModels = true
 			return m, m.startListModels()
 		}
-		m.applyModel(arg)
-		msg := "model → " + arg
-		if err := saveAIModel(arg); err != nil {
-			msg += fmt.Sprintf(" (save failed: %s)", err)
-		}
-		m.appendTranscript(dimStyle.Render(msg) + "\n\n")
+		m.selectModel(arg)
 
 	case "/effort":
 		if arg == "" {
@@ -500,21 +528,14 @@ func (m aiTUIModel) handleKeyThinking(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
-		// Freeze with a grey ✗ marker.
-		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", false))
-		m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
-		m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "[user discarded the command]"})
-		m.state = tuiIdle
-		m.input.Focus()
+		m.discardProposal()
+		m.toIdle()
 		return m, nil
 
 	case tea.KeyEnter:
 		// Freeze with a green ✓ marker, then execute (or background if --for).
 		m.acceptProposal(m.proposedCmd)
-		if commandHasFor(m.proposedCmd, m.aliases()) {
-			return m.startBackgroundProcess(m.proposedCmd)
-		}
-		return m.startExecution(m.proposedCmd)
+		return m.runCommand(m.proposedCmd)
 
 	case tea.KeyRunes:
 		switch msg.String() {
@@ -523,7 +544,7 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.SetValue(m.proposedCmd)
 			m.state = tuiEditing
 			m.input.Focus()
-			(&m).updateInputHeight()
+			m.updateInputHeight()
 			return m, nil
 		case "c":
 			// Freeze with a yellow ? marker to mark it as a follow-up topic.
@@ -531,9 +552,8 @@ func (m aiTUIModel) handleKeyProposing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: m.proposedCmd})
 			m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: "[command NOT executed — user wants to discuss or refine it before running]"})
 			m.input.SetValue("")
-			m.state = tuiIdle
-			m.input.Focus()
-			(&m).updateInputHeight()
+			m.toIdle()
+			m.updateInputHeight()
 			return m, nil
 		}
 	}
@@ -557,42 +577,34 @@ func (m aiTUIModel) handleKeyEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.SetValue("")
 		m.input.SetHeight(1)
 		m.recalcLayout()
-		if commandHasFor(cmd, m.aliases()) {
-			return m.startBackgroundProcess(cmd)
-		}
-		return m.startExecution(cmd)
+		return m.runCommand(cmd)
 
 	case tea.KeyEsc, tea.KeyCtrlC:
-		// Freeze with a grey ✗ marker and return to idle — recorded in the
-		// conversation exactly like discarding the unedited proposal, so the
-		// model knows its command was not run.
-		m.appendTranscript(freezeProposal(m.proposedCmd, "✗", false))
-		m.ai.history = append(m.ai.history,
-			aiMessage{Role: "assistant", Content: m.proposedCmd},
-			aiMessage{Role: "user", Content: "[user discarded the command]"})
+		// Recorded in the conversation exactly like discarding the unedited
+		// proposal, so the model knows its command was not run.
+		m.discardProposal()
 		m.input.SetValue("")
 		m.input.SetHeight(1)
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		m.recalcLayout()
 		return m, nil
 
 	default:
-		if n := (&m).computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
+		if n := m.computeInputLines(predictValue(m.input.Value(), msg)); n != m.input.Height() {
 			m.input.SetHeight(n)
 			m.recalcLayout()
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		(&m).updateInputHeight()
+		m.updateInputHeight()
 		return m, cmd
 	}
 }
 
 // handleKeyPane processes keys when a sidebar pane has focus.
 func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	wi := int(m.focus) - 1
-	if wi < 0 || wi >= len(m.objTypes) {
+	wi, ok := m.focusedWindow()
+	if !ok {
 		return m, nil
 	}
 
@@ -610,7 +622,7 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if name := m.selectedName(); name != "" {
 			m.focusChat()
 			m.insertAtCursor(shellQuote(name))
-			(&m).updateInputHeight()
+			m.updateInputHeight()
 		}
 		return m, nil
 	case tea.KeySpace:
@@ -632,24 +644,10 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filtering = true
 			return m, nil
 		case "J":
-			if m.metadataFormat != metadataFormatJSON {
-				m.metadataFormat = metadataFormatJSON
-				msg := "metadata format → json"
-				if err := saveMetadataFormat(metadataFormatJSON); err != nil {
-					msg += fmt.Sprintf(" (save failed: %s)", err)
-				}
-				m.appendTranscript(dimStyle.Render(msg) + "\n\n")
-			}
+			m.setMetadataFormat(metadataFormatJSON)
 			return m, nil
 		case "Y":
-			if m.metadataFormat != metadataFormatYAML {
-				m.metadataFormat = metadataFormatYAML
-				msg := "metadata format → yaml"
-				if err := saveMetadataFormat(metadataFormatYAML); err != nil {
-					msg += fmt.Sprintf(" (save failed: %s)", err)
-				}
-				m.appendTranscript(dimStyle.Render(msg) + "\n\n")
-			}
+			m.setMetadataFormat(metadataFormatYAML)
 			return m, nil
 		case "s":
 			m.cycleSort()
@@ -685,8 +683,8 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleKeyFilter processes keys while the inline filter is active.
 func (m aiTUIModel) handleKeyFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	wi := int(m.focus) - 1
-	if wi < 0 || wi >= len(m.objTypes) {
+	wi, ok := m.focusedWindow()
+	if !ok {
 		return m, nil
 	}
 
@@ -753,6 +751,46 @@ func promptSpecs() map[string]promptSpec {
 	}
 }
 
+// sideActionTimeout bounds the broker round trip of one single-key sidebar
+// action (peek, receive, send, publish).
+const sideActionTimeout = 5 * time.Second
+
+// beginSideAction echoes desc into the transcript, ends the active prompt (if
+// any) and switches to the executing state; the caller returns the tea.Cmd
+// that does the work.
+func (m *aiTUIModel) beginSideAction(desc string) {
+	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
+	m.promptActive = false
+	m.state = tuiExecuting
+}
+
+// closePrompt ends the active sidebar prompt without running anything.
+func (m *aiTUIModel) closePrompt() {
+	m.promptActive = false
+	m.restoreInputFocus()
+}
+
+// manageSpec returns the broker's management spec, or nil when there is no
+// session or the broker declares none.
+func (m *aiTUIModel) manageSpec() *ManageSpec {
+	if m.session == nil {
+		return nil
+	}
+	return m.session.spec.ManageSpec
+}
+
+// purgedMsg reports the outcome of a queue or subscription purge.
+func purgedMsg(count int64, err error) sideActionMsg {
+	switch {
+	case err != nil:
+		return sideActionMsg{err: err}
+	case count > 0:
+		return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
+	default:
+		return sideActionMsg{action: "   └ purged"}
+	}
+}
+
 func confirmCreatePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	name := strings.TrimSpace(m.promptName)
 	if name == "" {
@@ -760,112 +798,87 @@ func confirmCreatePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	}
 	action := ow.createAction
 	if action == nil {
-		m.promptActive = false
-		m.restoreInputFocus()
+		m.closePrompt()
 		return m, nil
 	}
-	desc := fmt.Sprintf("▶ create %s \"%s\"", ow.singularLabel(), name)
-	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-	m.promptActive = false
+	m.beginSideAction(fmt.Sprintf("▶ create %s \"%s\"", ow.singularLabel(), name))
 	initManageAction(action)
-	m.state = tuiExecuting
 	return m, func() tea.Msg {
-		err := action.Run(name)
-		return sideActionMsg{err: err, objects: true}
+		return sideActionMsg{err: action.Run(name), objects: true}
 	}
 }
 
 func confirmDeletePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	action := ow.deleteAction
 	if action == nil {
-		m.promptActive = false
-		m.restoreInputFocus()
+		m.closePrompt()
 		return m, nil
 	}
-	desc := fmt.Sprintf("▶ delete %s \"%s\"", ow.singularLabel(), m.promptName)
-	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-	m.promptActive = false
+	name := m.promptName
+	m.beginSideAction(fmt.Sprintf("▶ delete %s \"%s\"", ow.singularLabel(), name))
 	initManageAction(action)
-	m.state = tuiExecuting
 	return m, func() tea.Msg {
-		err := action.Run(m.promptName)
-		return sideActionMsg{err: err, objects: true}
+		return sideActionMsg{err: action.Run(name), objects: true}
 	}
 }
 
 func confirmPurgePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
-	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
-		m.promptActive = false
-		m.restoreInputFocus()
+	ms := m.manageSpec()
+	if ms == nil || ms.Purge == nil {
+		m.closePrompt()
 		return m, nil
 	}
-	name := m.promptName
-	desc := fmt.Sprintf("▶ purge %s \"%s\"", ow.singularLabel(), name)
-	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-	m.promptActive = false
-	m.state = tuiExecuting
-	purge := m.session.spec.ManageSpec.Purge
-	return m, func() tea.Msg {
-		count, err := purge(name)
-		if err != nil {
-			return sideActionMsg{err: err}
-		}
-		if count > 0 {
-			return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
-		}
-		return sideActionMsg{action: "   └ purged"}
-	}
+	name, purge := m.promptName, ms.Purge
+	m.beginSideAction(fmt.Sprintf("▶ purge %s \"%s\"", ow.singularLabel(), name))
+	return m, func() tea.Msg { return purgedMsg(purge(name)) }
 }
 
 func confirmPurgeSubscriptionPrompt(m aiTUIModel, _ *objWindow) (tea.Model, tea.Cmd) {
-	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
-		m.promptActive = false
-		m.restoreInputFocus()
+	ms := m.manageSpec()
+	if ms == nil || ms.PurgeSubscription == nil {
+		m.closePrompt()
 		return m, nil
 	}
-	sub := m.promptName
-	topic := m.promptTarget
-	desc := fmt.Sprintf("▶ purge Subscription \"%s\"", sub)
-	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-	m.promptActive = false
-	m.state = tuiExecuting
-	purge := m.session.spec.ManageSpec.PurgeSubscription
-	return m, func() tea.Msg {
-		count, err := purge(topic, sub)
-		if err != nil {
-			return sideActionMsg{err: err}
-		}
-		if count > 0 {
-			return sideActionMsg{action: fmt.Sprintf("   └ purged %d messages", count)}
-		}
-		return sideActionMsg{action: "   └ purged"}
-	}
+	sub, topic, purge := m.promptName, m.promptTarget, ms.PurgeSubscription
+	m.beginSideAction(fmt.Sprintf("▶ purge Subscription \"%s\"", sub))
+	return m, func() tea.Msg { return purgedMsg(purge(topic, sub)) }
 }
 
+// confirmSendPrompt sends the typed payload to the selected object: through
+// the topic adapter when the window sends via topic (RabbitMQ exchange:
+// publish -e <exchange>, which targets the routing entity itself), else
+// through the queue adapter.
 func confirmSendPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
+	useTopic := ow.sendsViaTopic(m.promptNodeKind)
+	return m.confirmProduce(ow, useTopic, useTopic)
+}
+
+// confirmPublishPrompt publishes the typed payload to the selected topic.
+func confirmPublishPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
+	return m.confirmProduce(ow, true, false)
+}
+
+// confirmProduce sends (queue adapter) or publishes (useTopic) the prompt's
+// payload to the prompt's target; viaExchange addresses the routing entity
+// itself (see sidebarTarget).
+func (m aiTUIModel) confirmProduce(ow *objWindow, useTopic, viaExchange bool) (tea.Model, tea.Cmd) {
 	payload := m.promptName
 	if payload == "" {
 		return m, nil
 	}
 	name := m.promptTarget
-	useTopic := ow.sendsViaTopic(m.promptNodeKind)
 	verb := "send"
 	if useTopic {
 		verb = "publish"
 	}
-	desc := fmt.Sprintf("▶ %s %s \"%s\"", verb, ow.singularLabel(), name)
-	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-	m.promptActive = false
-	m.state = tuiExecuting
-	// Routing through a window's object via the topic adapter targets the
-	// routing entity itself (RabbitMQ: publish -e <exchange>).
-	target, resolveErr := m.sidebarTarget(name, useTopic, useTopic)
+	m.beginSideAction(fmt.Sprintf("▶ %s %s \"%s\"", verb, ow.singularLabel(), name))
+	target, resolveErr := m.sidebarTarget(name, useTopic, viaExchange)
 	session := m.session
 	return m, func() tea.Msg {
 		if resolveErr != nil {
 			return sideActionMsg{err: resolveErr}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), sideActionTimeout)
 		defer cancel()
 		if useTopic {
 			ta, err := session.getTopicAdapter()
@@ -888,40 +901,10 @@ func confirmSendPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 	}
 }
 
-func confirmPublishPrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
-	payload := m.promptName
-	if payload == "" {
-		return m, nil
-	}
-	name := m.promptTarget
-	desc := fmt.Sprintf("▶ publish %s \"%s\"", ow.singularLabel(), name)
-	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-	m.promptActive = false
-	m.state = tuiExecuting
-	target, resolveErr := m.sidebarTarget(name, true, false)
-	session := m.session
-	return m, func() tea.Msg {
-		if resolveErr != nil {
-			return sideActionMsg{err: resolveErr}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		ta, err := session.getTopicAdapter()
-		if err != nil {
-			return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
-		}
-		if err := ta.Publish(ctx, backends.PublishOptions{Topic: target, Message: []byte(payload)}); err != nil {
-			return sideActionMsg{err: err}
-		}
-		return sideActionMsg{action: "   └ published"}
-	}
-}
-
 func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	wi := m.promptObjIdx
 	if wi < 0 || wi >= len(m.objTypes) {
-		m.promptActive = false
-		m.restoreInputFocus()
+		m.closePrompt()
 		return m, nil
 	}
 	ow := &m.objTypes[wi]
@@ -930,8 +913,7 @@ func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
-		m.promptActive = false
-		m.restoreInputFocus()
+		m.closePrompt()
 		return m, nil
 	case tea.KeyEnter:
 		return spec.confirm(m, ow)
@@ -1224,8 +1206,7 @@ func (m *aiTUIModel) cycleFocus(forward bool) {
 	} else {
 		m.input.Blur()
 		// Enter process view when arriving at the process pane.
-		if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) &&
-			m.objTypes[wi].kind == objWindowProcs {
+		if m.procsFocused() {
 			m.enterProcessView()
 		}
 	}
@@ -1279,8 +1260,8 @@ func indexOfRowNamed(rows []sidebarRow, name string) int {
 
 // moveSel moves the selection in the focused pane by delta.
 func (m *aiTUIModel) moveSel(delta int) {
-	wi := int(m.focus) - 1
-	if wi < 0 || wi >= len(m.objTypes) {
+	wi, ok := m.focusedWindow()
+	if !ok {
 		return
 	}
 	rows := m.sidebarRows(wi)
@@ -1290,21 +1271,35 @@ func (m *aiTUIModel) moveSel(delta int) {
 	m.objTypes[wi].sel = min(max(m.objTypes[wi].sel+delta, 0), len(rows)-1)
 }
 
+// focusedWindow returns the index of the focused sidebar window; ok is false
+// when focus is on the chat input.
+func (m *aiTUIModel) focusedWindow() (wi int, ok bool) {
+	wi = int(m.focus) - 1
+	return wi, wi >= 0 && wi < len(m.objTypes)
+}
+
+// selectedRow returns the selected row of the focused window (ok=false when
+// nothing is selected or the window is empty).
+func (m *aiTUIModel) selectedRow() (sidebarRow, bool) {
+	wi, ok := m.focusedWindow()
+	if !ok {
+		return sidebarRow{}, false
+	}
+	rows := m.sidebarRows(wi)
+	if sel := m.objTypes[wi].sel; sel < len(rows) {
+		return rows[sel], true
+	}
+	return sidebarRow{}, false
+}
+
 // selectedNode returns the full ObjectNode for the currently selected row in
 // the focused pane — top-level or child (ok=false when nothing is selected or
 // the pane is empty). Most callers that dispatch an action keyed by window
 // label (not node kind) should use selectedTopLevelNode instead, since a
 // child row's name is not a valid target for those actions.
 func (m *aiTUIModel) selectedNode() (backends.ObjectNode, bool) {
-	wi := int(m.focus) - 1
-	if wi < 0 || wi >= len(m.objTypes) {
-		return backends.ObjectNode{}, false
-	}
-	rows := m.sidebarRows(wi)
-	if m.objTypes[wi].sel < len(rows) {
-		return rows[m.objTypes[wi].sel].node, true
-	}
-	return backends.ObjectNode{}, false
+	row, ok := m.selectedRow()
+	return row.node, ok
 }
 
 // selectedName returns the name of the currently selected row in the focused pane.
@@ -1322,16 +1317,8 @@ func (m *aiTUIModel) selectedName() string {
 // dispatch via ManageSpec or the queue/topic adapters, where a child row's
 // name (a RabbitMQ binding, a NATS consumer, ...) is never a valid target.
 func (m *aiTUIModel) selectedTopLevelNode() (backends.ObjectNode, bool) {
-	wi := int(m.focus) - 1
-	if wi < 0 || wi >= len(m.objTypes) {
-		return backends.ObjectNode{}, false
-	}
-	rows := m.sidebarRows(wi)
-	if m.objTypes[wi].sel >= len(rows) {
-		return backends.ObjectNode{}, false
-	}
-	row := rows[m.objTypes[wi].sel]
-	if row.parentName != "" {
+	row, ok := m.selectedRow()
+	if !ok || row.parentName != "" {
 		return backends.ObjectNode{}, false
 	}
 	return row.node, true
@@ -1340,16 +1327,8 @@ func (m *aiTUIModel) selectedTopLevelNode() (backends.ObjectNode, bool) {
 // selectedChildNode returns the currently selected node and its parent's name
 // only when the selection is a child row (ok=false for a top-level row).
 func (m *aiTUIModel) selectedChildNode() (node backends.ObjectNode, parentName string, ok bool) {
-	wi := int(m.focus) - 1
-	if wi < 0 || wi >= len(m.objTypes) {
-		return backends.ObjectNode{}, "", false
-	}
-	rows := m.sidebarRows(wi)
-	if m.objTypes[wi].sel >= len(rows) {
-		return backends.ObjectNode{}, "", false
-	}
-	row := rows[m.objTypes[wi].sel]
-	if row.parentName == "" {
+	row, ok := m.selectedRow()
+	if !ok || row.parentName == "" {
 		return backends.ObjectNode{}, "", false
 	}
 	return row.node, row.parentName, true
@@ -1373,8 +1352,8 @@ func isNoMessage(err error) bool {
 
 // cycleSort advances the sort mode for the focused pane.
 func (m *aiTUIModel) cycleSort() {
-	wi := int(m.focus) - 1
-	if wi < 0 || wi >= len(m.objTypes) {
+	wi, ok := m.focusedWindow()
+	if !ok {
 		return
 	}
 	w := &m.objTypes[wi]

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func TestStreamStats_Summary(t *testing.T) {
 }
 
 func TestStreamContext_Timeout(t *testing.T) {
-	ctx, cancel := streamContext(30 * time.Millisecond)
+	ctx, cancel := streamContext(30*time.Millisecond, context.Background())
 	defer cancel()
 	select {
 	case <-ctx.Done():
@@ -85,7 +86,7 @@ func TestStreamContext_Timeout(t *testing.T) {
 }
 
 func TestStreamContext_NoLimit(t *testing.T) {
-	ctx, cancel := streamContext(0)
+	ctx, cancel := streamContext(0, context.Background())
 	defer cancel()
 	if ctx.Err() != nil {
 		t.Error("no-limit context should not be done immediately")

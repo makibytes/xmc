@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -200,6 +201,17 @@ type shellSession struct {
 	queueFactory QueueAdapterFactory
 	topicFactory TopicAdapterFactory
 	aliases      map[string]string
+}
+
+// newShellSession builds a session whose adapters connect lazily and
+// reconnect transparently after connection loss.
+func newShellSession(spec BrokerSpec, aliases map[string]string) *shellSession {
+	return &shellSession{
+		spec:         spec,
+		queueFactory: wrapReconnectQueue(spec.Queue, ReconnectOptions{}),
+		topicFactory: wrapReconnectTopic(spec.Topic, ReconnectOptions{}),
+		aliases:      aliases,
+	}
 }
 
 func (s *shellSession) getQueueAdapter() (backends.QueueBackend, error) {
@@ -650,6 +662,11 @@ func (s *shellSession) executeExternal(ctx context.Context, block pipelineBlock,
 	return runExternal(ctx, strings.Join(parts, " | "), in, out, errw)
 }
 
+// systemShell returns the user's $SHELL, or "sh" when unset.
+func systemShell() string {
+	return cmp.Or(os.Getenv("SHELL"), "sh")
+}
+
 // runExternal runs cmdLine with the user's $SHELL (sh when unset). The process
 // is killed when ctx is cancelled, so Esc in the AI shell stops e.g. a
 // "sleep 100" just like it stops a long-running xmc verb.
@@ -659,12 +676,7 @@ func runExternal(ctx context.Context, cmdLine string, in io.Reader, out io.Write
 		return nil
 	}
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-
-	c := exec.CommandContext(ctx, shell, "-c", cmdLine)
+	c := exec.CommandContext(ctx, systemShell(), "-c", cmdLine)
 	c.Stdin = in
 	c.Stdout = out
 	c.Stderr = errw

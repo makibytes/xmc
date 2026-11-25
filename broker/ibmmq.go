@@ -15,18 +15,13 @@ import (
 func GetRootCommand() *cobra.Command {
 	var connArgs ibmmq.ConnArguments
 
-	defaultServer := os.Getenv("IMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "ibmmq://localhost:1414/QM1?channel=SYSTEM.DEF.SVRCONN"
-	}
-
 	return cmd.NewRootCommand(cmd.BrokerSpec{
 		Use:       "imc",
 		Short:     "IBM MQ Messaging Client",
 		Long:      "Command-line interface for IBM MQ messaging",
 		AIContext: AIDoc("ibmmq"),
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "IMC_", defaultServer,
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "IMC_", "ibmmq://localhost:1414/QM1?channel=SYSTEM.DEF.SVRCONN",
 				"Server URL", "Username for authentication", "Password for authentication")
 			c.PersistentFlags().StringVarP(&connArgs.QueueManager, "qmgr", "m", os.Getenv("IMC_QUEUE_MANAGER"), "Queue manager name (overrides URL)")
 			c.PersistentFlags().StringVarP(&connArgs.Channel, "channel", "c", os.Getenv("IMC_CHANNEL"), "Channel name (overrides URL)")

@@ -36,8 +36,8 @@ type sidebarPlan struct {
 func newSidebarPlan(m *aiTUIModel, height int) *sidebarPlan {
 	n := len(m.objTypes)
 	focusedIdx := -1
-	if m.focus > focusChat && int(m.focus)-1 < n {
-		focusedIdx = int(m.focus) - 1
+	if wi, ok := m.focusedWindow(); ok {
+		focusedIdx = wi
 	}
 	nat := make([]int, n)
 	for i := range m.objTypes {

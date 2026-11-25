@@ -449,7 +449,7 @@ func TestReceiveCommand_JSONOutput_PrunesEmptyValues(t *testing.T) {
 
 // TestReceiveCommand_JSONOutput_VerboseIncludesInternalMetadata guards the
 // -v/-J parity fix: verbose text output has always shown InternalMetadata
-// (via writeKeyValueMap in displayMessage), but -J previously hard-coded it
+// (via displayMessage's sorted key: value lines), but -J previously hard-coded it
 // off regardless of verbosity. -J must now match -v the same way it already
 // matches non-verbose text output.
 func TestReceiveCommand_JSONOutput_VerboseIncludesInternalMetadata(t *testing.T) {

@@ -215,24 +215,10 @@ func (r *reconnectingAdapter[T]) retryOp(ctx context.Context, desc string, op fu
 // reconnect backoff if op fails with a connection error. Shared by the
 // wrapper methods that return only an error (Send, Publish).
 func adapterDo[T Closeable](ctx context.Context, r *reconnectingAdapter[T], desc string, op func(T) error) error {
-	r.mu.Lock()
-	if err := r.ensureConnected(); err != nil {
-		r.mu.Unlock()
-		return err
-	}
-	adapter := r.adapter
-	r.mu.Unlock()
-
-	err := op(adapter)
-	if err == nil || !isConnectionError(err) {
-		return err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.retryOp(ctx, desc, func() error {
-		return op(r.adapter)
+	_, err := adapterCall(ctx, r, desc, func(a T) (struct{}, error) {
+		return struct{}{}, op(a)
 	})
+	return err
 }
 
 // adapterCall runs op against the connected adapter of r, retrying with
@@ -299,9 +285,9 @@ func (r *reconnectingQueue) Request(ctx context.Context, opts backends.RequestOp
 }
 
 // Browse implements backends.BrowseBackend by delegating to the underlying
-// adapter if it supports browsing. Returns errBrowseUnsupported if the
-// adapter does not implement BrowseBackend, allowing doReceive to fall back
-// to the normal Receive loop for brokers that don't have a browse cursor.
+// adapter if it supports browsing. It returns backends.ErrBrowseUnsupported if
+// the adapter does not implement BrowseBackend, which makes backends.Browse
+// fall back to the stateless Receive loop for brokers without a browse cursor.
 func (r *reconnectingQueue) Browse(ctx context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -339,63 +325,60 @@ func (r *reconnectingTopic) Subscribe(ctx context.Context, opts backends.Subscri
 
 // --- factory wrappers ---
 
-// wrapReconnectQueue returns a new factory that produces a reconnecting queue
+func newReconnectingQueue(factory func() (backends.QueueBackend, error), opts ReconnectOptions) backends.QueueBackend {
+	return &reconnectingQueue{factory: factory, opts: opts}
+}
+
+func newReconnectingTopic(factory func() (backends.TopicBackend, error), opts ReconnectOptions) backends.TopicBackend {
+	return &reconnectingTopic{factory: factory, opts: opts}
+}
+
+// wrapReconnect returns a factory that always yields one lazily-connecting
+// reconnecting adapter built by wrap. A nil factory (broker without that
+// capability) yields nil, so callers' nil-capability checks keep working on
+// the wrapped factory.
+func wrapReconnect[T Closeable](factory func() (T, error), opts ReconnectOptions, wrap func(func() (T, error), ReconnectOptions) T) func() (T, error) {
+	if factory == nil {
+		return nil
+	}
+	w := wrap(factory, opts)
+	return func() (T, error) { return w, nil }
+}
+
+// conditionalReconnect returns a factory that checks the --reconnect flag on
+// rootCmd at call time and wraps the adapter with auto-reconnect if set.
+func conditionalReconnect[T Closeable](factory func() (T, error), rootCmd *cobra.Command, wrap func(func() (T, error), ReconnectOptions) T) func() (T, error) {
+	if factory == nil {
+		return nil
+	}
+	return func() (T, error) {
+		if reconnect, _ := rootCmd.Flags().GetBool("reconnect"); !reconnect {
+			return factory()
+		}
+		window, _ := rootCmd.Flags().GetDuration("reconnect-window")
+		return wrap(factory, ReconnectOptions{MaxElapsed: window}), nil
+	}
+}
+
+// wrapReconnectQueue returns a factory that produces a reconnecting queue
 // adapter. The wrapper lazily connects on first use and transparently
 // reconnects with exponential backoff on connection-loss errors.
-// A nil factory (broker without queue support) yields nil, so callers'
-// nil-capability checks keep working on the wrapped factory.
 func wrapReconnectQueue(factory QueueAdapterFactory, opts ReconnectOptions) QueueAdapterFactory {
-	if factory == nil {
-		return nil
-	}
-	rq := &reconnectingQueue{factory: factory, opts: opts}
-	return func() (backends.QueueBackend, error) {
-		return rq, nil
-	}
+	return wrapReconnect(factory, opts, newReconnectingQueue)
 }
 
-// wrapReconnectTopic returns a new factory that produces a reconnecting topic
-// adapter. A nil factory (broker without topic support) yields nil.
+// wrapReconnectTopic is wrapReconnectQueue for topic adapters.
 func wrapReconnectTopic(factory TopicAdapterFactory, opts ReconnectOptions) TopicAdapterFactory {
-	if factory == nil {
-		return nil
-	}
-	rt := &reconnectingTopic{factory: factory, opts: opts}
-	return func() (backends.TopicBackend, error) {
-		return rt, nil
-	}
+	return wrapReconnect(factory, opts, newReconnectingTopic)
 }
 
-// conditionalReconnectQueue returns a factory that checks the --reconnect flag
-// at call time and wraps the adapter with auto-reconnect if set.
+// conditionalReconnectQueue wraps the queue adapter with auto-reconnect only
+// when --reconnect is set.
 func conditionalReconnectQueue(factory QueueAdapterFactory, rootCmd *cobra.Command) QueueAdapterFactory {
-	if factory == nil {
-		return nil
-	}
-	return func() (backends.QueueBackend, error) {
-		reconnect, _ := rootCmd.Flags().GetBool("reconnect")
-		if !reconnect {
-			return factory()
-		}
-		window, _ := rootCmd.Flags().GetDuration("reconnect-window")
-		rq := &reconnectingQueue{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}
-		return rq, nil
-	}
+	return conditionalReconnect(factory, rootCmd, newReconnectingQueue)
 }
 
-// conditionalReconnectTopic returns a factory that checks the --reconnect flag
-// at call time and wraps the adapter with auto-reconnect if set.
+// conditionalReconnectTopic is conditionalReconnectQueue for topic adapters.
 func conditionalReconnectTopic(factory TopicAdapterFactory, rootCmd *cobra.Command) TopicAdapterFactory {
-	if factory == nil {
-		return nil
-	}
-	return func() (backends.TopicBackend, error) {
-		reconnect, _ := rootCmd.Flags().GetBool("reconnect")
-		if !reconnect {
-			return factory()
-		}
-		window, _ := rootCmd.Flags().GetDuration("reconnect-window")
-		rt := &reconnectingTopic{factory: factory, opts: ReconnectOptions{MaxElapsed: window}}
-		return rt, nil
-	}
+	return conditionalReconnect(factory, rootCmd, newReconnectingTopic)
 }

@@ -53,20 +53,13 @@ func runAI(cmd *cobra.Command, spec BrokerSpec) error {
 		cfg = &xmcConfig{}
 	}
 
-	session := &shellSession{
-		spec:         spec,
-		queueFactory: wrapReconnectQueue(spec.Queue, ReconnectOptions{}),
-		topicFactory: wrapReconnectTopic(spec.Topic, ReconnectOptions{}),
-		aliases:      cfg.Aliases,
-	}
+	session := newShellSession(spec, cfg.Aliases)
 	defer session.close()
 
 	period, intervalOn := cfg.AI.refreshIntervalDuration()
 	ai := &aiSession{
 		session:            session,
 		rootCmd:            rootCmd,
-		brokerContext:      spec.AIContext,
-		aliases:            cfg.Aliases,
 		autoUpdateObjects:  cfg.AI.autoUpdateObjectsEnabled(),
 		autoUpdateMessages: cfg.AI.autoUpdateMessagesEnabled(),
 		refreshPeriod:      period,

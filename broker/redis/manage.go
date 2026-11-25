@@ -25,27 +25,32 @@ func ListTopics(connArgs ConnArguments, prefix string) ([]backends.TopicInfo, er
 	defer client.Close() //nolint:errcheck
 
 	topicPrefix := prefix + ":topic:"
-	ctx := context.Background()
-	var topics []backends.TopicInfo
-	var cursor uint64
-
-	for {
-		keys, next, err := client.Scan(ctx, cursor, topicPrefix+"*", 100).Result()
-		if err != nil {
-			return nil, fmt.Errorf("scanning topics: %w", err)
-		}
-		for _, k := range keys {
-			topics = append(topics, backends.TopicInfo{
-				Name: strings.TrimPrefix(k, topicPrefix),
-			})
-		}
-		cursor = next
-		if cursor == 0 {
-			break
-		}
+	keys, err := scanKeys(context.Background(), client, topicPrefix+"*")
+	if err != nil {
+		return nil, fmt.Errorf("scanning topics: %w", err)
 	}
 
+	var topics []backends.TopicInfo
+	for _, k := range keys {
+		topics = append(topics, backends.TopicInfo{Name: strings.TrimPrefix(k, topicPrefix)})
+	}
 	return topics, nil
+}
+
+// scanKeys returns every key matching pattern, iterating SCAN to completion.
+func scanKeys(ctx context.Context, client *redis.Client, pattern string) ([]string, error) {
+	var all []string
+	var cursor uint64
+	for {
+		keys, next, err := client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, keys...)
+		if cursor = next; cursor == 0 {
+			return all, nil
+		}
+	}
 }
 
 // CreateQueue creates a Redis stream for a queue and its consumer group.
@@ -169,26 +174,18 @@ func listByPattern(connArgs ConnArguments, prefix string) ([]backends.QueueInfo,
 	defer client.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	var queues []backends.QueueInfo
-	var cursor uint64
-
-	for {
-		keys, next, err := client.Scan(ctx, cursor, prefix+"*", 100).Result()
-		if err != nil {
-			return nil, fmt.Errorf("scanning %s: %w", prefix, err)
-		}
-		for _, k := range keys {
-			length, _ := client.XLen(ctx, k).Result()
-			queues = append(queues, backends.QueueInfo{
-				Name:         strings.TrimPrefix(k, prefix),
-				MessageCount: length,
-			})
-		}
-		cursor = next
-		if cursor == 0 {
-			break
-		}
+	keys, err := scanKeys(ctx, client, prefix+"*")
+	if err != nil {
+		return nil, fmt.Errorf("scanning %s: %w", prefix, err)
 	}
 
+	var queues []backends.QueueInfo
+	for _, k := range keys {
+		length, _ := client.XLen(ctx, k).Result()
+		queues = append(queues, backends.QueueInfo{
+			Name:         strings.TrimPrefix(k, prefix),
+			MessageCount: length,
+		})
+	}
 	return queues, nil
 }

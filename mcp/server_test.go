@@ -55,8 +55,8 @@ func call(t *testing.T, s *Server, method string, params any) rpcResponse {
 		rawParams = b
 	}
 	req, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: method, Params: rawParams})
-	respBytes, notification := s.handle(context.Background(), req)
-	if notification {
+	respBytes := s.handle(context.Background(), req)
+	if respBytes == nil {
 		t.Fatalf("unexpected notification for method %s", method)
 	}
 	var resp rpcResponse
@@ -207,8 +207,7 @@ func TestUnknownToolIsRpcError(t *testing.T) {
 func TestNotificationGetsNoResponse(t *testing.T) {
 	s := testServer(&fakeQueue{})
 	req, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
-	resp, notification := s.handle(context.Background(), req)
-	if !notification {
+	if resp := s.handle(context.Background(), req); resp != nil {
 		t.Errorf("expected notification handling, got response: %s", resp)
 	}
 }

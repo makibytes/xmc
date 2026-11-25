@@ -26,10 +26,10 @@ Uses the correlation ID from the request as the message ID for matching.`,
 		},
 	}
 
-	cmd.Flags().StringP("content-type", "T", "text/plain", "MIME type of message data")
+	cmd.Flags().StringP("content-type", "T", backends.DefaultContentType, "MIME type of message data")
 	cmd.Flags().StringP("correlation-id", "C", "", "Correlation ID for request/response")
 	cmd.Flags().StringP("message-id", "I", "", "Message ID")
-	cmd.Flags().IntP("priority", "Y", 4, "Priority of the message (0-9)")
+	cmd.Flags().IntP("priority", "Y", backends.DefaultPriority, "Priority of the message (0-9)")
 	cmd.Flags().BoolP("persistent", "d", false, "Make message persistent")
 	cmd.Flags().StringP("reply-to", "R", "", "Reply queue (auto-generated if not specified)")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Message properties in key=value format")

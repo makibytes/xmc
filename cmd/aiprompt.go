@@ -10,49 +10,50 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// aiSkipCommands are root commands the AI is never told about: they cannot
+// run as inline commands (shell, ai) or are not broker operations.
+var aiSkipCommands = map[string]bool{"shell": true, "sh": true, "ai": true, "help": true, "version": true, "completion": true}
+
+// cmdInfo is one documented command: its flags and, for a command group such
+// as "manage", its subcommands.
+type cmdInfo struct {
+	name, short string
+	flags       []string // formatted flag lines, without indent (also the dedup key)
+	subs        []cmdInfo
+}
+
+// flagLines returns the flag lines of c followed by those of its subcommands.
+func (c cmdInfo) flagLines() []string {
+	lines := slices.Clone(c.flags)
+	for _, sub := range c.subs {
+		lines = append(lines, sub.flags...)
+	}
+	return lines
+}
+
 func buildCapabilities(rootCmd *cobra.Command) string {
-	var b strings.Builder
-	skip := map[string]bool{"shell": true, "sh": true, "ai": true, "help": true, "version": true, "completion": true}
-
-	type subInfo struct {
-		name, short string
-		flags       []flagInfo
-	}
-	type cmdInfo struct {
-		name  string
-		short string
-		flags []flagInfo
-		subs  []subInfo
-	}
-
 	var cmds []cmdInfo
 	// Use the full formatted line as key so flags with different descriptions
 	// or defaults are not merged (e.g. --count on send vs forward).
 	flagCount := map[string]int{}
 
 	for _, cmd := range rootCmd.Commands() {
-		if skip[cmd.Name()] || cmd.Hidden {
+		if aiSkipCommands[cmd.Name()] || cmd.Hidden {
 			continue
 		}
 		ci := cmdInfo{name: cmd.Name(), short: cmd.Short}
-		subs := cmd.Commands()
-		if len(subs) > 0 {
+		if subs := cmd.Commands(); len(subs) > 0 {
 			for _, sub := range subs {
 				if sub.Hidden || sub.Name() == "help" {
 					continue
 				}
-				si := subInfo{name: sub.Name(), short: sub.Short}
-				si.flags = collectFlags(sub)
-				for _, f := range si.flags {
-					flagCount[f.line]++
-				}
-				ci.subs = append(ci.subs, si)
+				ci.subs = append(ci.subs, cmdInfo{name: sub.Name(), short: sub.Short, flags: collectFlags(sub)})
 			}
 		} else {
 			ci.flags = collectFlags(cmd)
-			for _, f := range ci.flags {
-				flagCount[f.line]++
-			}
+		}
+		for _, line := range ci.flagLines() {
+			flagCount[line]++
 		}
 		cmds = append(cmds, ci)
 	}
@@ -65,23 +66,24 @@ func buildCapabilities(rootCmd *cobra.Command) string {
 		}
 	}
 
+	var b strings.Builder
+	writeUnshared := func(indent string, flags []string) {
+		for _, line := range flags {
+			if !shared[line] {
+				b.WriteString(indent + line + "\n")
+			}
+		}
+	}
+
 	// Write shared flags section.
 	if len(shared) > 0 {
 		b.WriteString("## Shared flags (available on multiple commands)\n")
 		seen := map[string]bool{}
 		for _, ci := range cmds {
-			for _, f := range ci.flags {
-				if shared[f.line] && !seen[f.line] {
-					seen[f.line] = true
-					b.WriteString("  " + f.line + "\n")
-				}
-			}
-			for _, si := range ci.subs {
-				for _, f := range si.flags {
-					if shared[f.line] && !seen[f.line] {
-						seen[f.line] = true
-						b.WriteString("  " + f.line + "\n")
-					}
+			for _, line := range ci.flagLines() {
+				if shared[line] && !seen[line] {
+					seen[line] = true
+					b.WriteString("  " + line + "\n")
 				}
 			}
 		}
@@ -94,33 +96,18 @@ func buildCapabilities(rootCmd *cobra.Command) string {
 		if ci.short != "" {
 			fmt.Fprintf(&b, "%s\n", ci.short)
 		}
-		if len(ci.subs) > 0 {
-			for _, si := range ci.subs {
-				fmt.Fprintf(&b, "  %s %s — %s\n", ci.name, si.name, si.short)
-				for _, f := range si.flags {
-					if !shared[f.line] {
-						b.WriteString("    " + f.line + "\n")
-					}
-				}
-			}
-		} else {
-			for _, f := range ci.flags {
-				if !shared[f.line] {
-					b.WriteString("  " + f.line + "\n")
-				}
-			}
+		for _, si := range ci.subs {
+			fmt.Fprintf(&b, "  %s %s — %s\n", ci.name, si.name, si.short)
+			writeUnshared("    ", si.flags)
 		}
+		writeUnshared("  ", ci.flags)
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-type flagInfo struct {
-	line string // formatted line without indent (also used as dedup key)
-}
-
-func collectFlags(cmd *cobra.Command) []flagInfo {
-	var flags []flagInfo
+func collectFlags(cmd *cobra.Command) []string {
+	var flags []string
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
 		if f.Hidden {
 			return
@@ -133,7 +120,7 @@ func collectFlags(cmd *cobra.Command) []flagInfo {
 		if f.DefValue != "" && f.DefValue != "false" && f.DefValue != "0" && f.DefValue != "0s" && f.DefValue != "[]" {
 			line += fmt.Sprintf(" (default: %s)", f.DefValue)
 		}
-		flags = append(flags, flagInfo{line: line})
+		flags = append(flags, line)
 	})
 	return flags
 }
@@ -302,10 +289,9 @@ func capTopologyLines(topology string, maxLines int) string {
 // buildVerbSet returns the set of known top-level xmc verbs from the cobra tree.
 // Shell/AI/help are excluded since they cannot be run as inline commands.
 func buildVerbSet(rootCmd *cobra.Command) map[string]bool {
-	skip := map[string]bool{"shell": true, "sh": true, "ai": true, "help": true, "version": true, "completion": true}
 	verbs := make(map[string]bool)
 	for _, cmd := range rootCmd.Commands() {
-		if !skip[cmd.Name()] && !cmd.Hidden {
+		if !aiSkipCommands[cmd.Name()] && !cmd.Hidden {
 			verbs[cmd.Name()] = true
 		}
 	}

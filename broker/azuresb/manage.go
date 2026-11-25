@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
+	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
 
 	"github.com/makibytes/xmc/broker/backends"
 )
@@ -129,46 +130,17 @@ func GetQueueStats(args ConnArguments, queue string) (*backends.QueueStats, erro
 
 // PurgeQueue removes all messages from an Azure Service Bus queue by draining it.
 func PurgeQueue(args ConnArguments, queue string) (int64, error) {
-	client, err := Connect(args)
-	if err != nil {
-		return 0, err
-	}
-	defer client.Close(context.Background()) //nolint:errcheck
-
-	adm, err := AdminClient(args)
-	if err != nil {
-		return 0, err
-	}
-
-	ctx := context.Background()
-	props, err := adm.GetQueueRuntimeProperties(ctx, queue, nil)
-	var approxCount int64
-	if err == nil {
-		approxCount = int64(props.ActiveMessageCount)
-	}
-
-	recv, err := client.NewReceiverForQueue(queue, &azservicebus.ReceiverOptions{
-		ReceiveMode: azservicebus.ReceiveModeReceiveAndDelete,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("creating purge receiver: %w", err)
-	}
-	defer recv.Close(ctx) //nolint:errcheck
-
-	var purged int64
-	for {
-		msgs, err := recv.ReceiveMessages(ctx, 100, nil)
-		if err != nil || len(msgs) == 0 {
-			break
-		}
-		purged += int64(len(msgs))
-	}
-
-	if purged == 0 {
-		purged = approxCount
-	}
-
-	return purged, nil
+	return purge(args,
+		func(ctx context.Context, adm *admin.Client) (int64, error) {
+			props, err := adm.GetQueueRuntimeProperties(ctx, queue, nil)
+			if err != nil {
+				return 0, err
+			}
+			return int64(props.ActiveMessageCount), nil
+		},
+		func(client *azservicebus.Client, opts *azservicebus.ReceiverOptions) (*azservicebus.Receiver, error) {
+			return client.NewReceiverForQueue(queue, opts)
+		})
 }
 
 // PurgeSubscription drains all messages from a topic's subscription. Azure
@@ -177,6 +149,28 @@ func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 // than a queue — a subscription name is only unique within its topic, so both
 // are required to address it.
 func PurgeSubscription(args ConnArguments, topic, subscription string) (int64, error) {
+	return purge(args,
+		func(ctx context.Context, adm *admin.Client) (int64, error) {
+			props, err := adm.GetSubscriptionRuntimeProperties(ctx, topic, subscription, nil)
+			if err != nil {
+				return 0, err
+			}
+			return int64(props.ActiveMessageCount), nil
+		},
+		func(client *azservicebus.Client, opts *azservicebus.ReceiverOptions) (*azservicebus.Receiver, error) {
+			return client.NewReceiverForSubscription(topic, subscription, opts)
+		})
+}
+
+// purge drains everything a receive-and-delete receiver can see and returns
+// how many messages were removed. approx reads the broker's reported active
+// message count, used when the drain loop removed nothing; open creates the
+// receiver for the queue or subscription being purged.
+func purge(
+	args ConnArguments,
+	approx func(ctx context.Context, adm *admin.Client) (int64, error),
+	open func(client *azservicebus.Client, opts *azservicebus.ReceiverOptions) (*azservicebus.Receiver, error),
+) (int64, error) {
 	client, err := Connect(args)
 	if err != nil {
 		return 0, err
@@ -189,13 +183,12 @@ func PurgeSubscription(args ConnArguments, topic, subscription string) (int64, e
 	}
 
 	ctx := context.Background()
-	props, err := adm.GetSubscriptionRuntimeProperties(ctx, topic, subscription, nil)
-	var approxCount int64
-	if err == nil {
-		approxCount = int64(props.ActiveMessageCount)
+	approxCount, err := approx(ctx, adm)
+	if err != nil {
+		approxCount = 0
 	}
 
-	recv, err := client.NewReceiverForSubscription(topic, subscription, &azservicebus.ReceiverOptions{
+	recv, err := open(client, &azservicebus.ReceiverOptions{
 		ReceiveMode: azservicebus.ReceiveModeReceiveAndDelete,
 	})
 	if err != nil {
@@ -215,7 +208,6 @@ func PurgeSubscription(args ConnArguments, topic, subscription string) (int64, e
 	if purged == 0 {
 		purged = approxCount
 	}
-
 	return purged, nil
 }
 

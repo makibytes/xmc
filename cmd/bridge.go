@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -60,7 +59,7 @@ Examples:
 		cmd.Flags().Bool("topic", false, "Read the source as a topic (subscribe) instead of a queue")
 	}
 	if topicCapable {
-		cmd.Flags().StringP("group", "g", "xmc-consumer-group", "Consumer group ID for the source subscription (topic source only)")
+		cmd.Flags().StringP("group", "g", backends.DefaultGroupID, "Consumer group ID for the source subscription (topic source only)")
 	}
 	addForwardFlags(cmd)
 	return cmd
@@ -137,7 +136,7 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 	ctx, cancel := timedOrInterruptCtx(cmd.Context(), sf.Duration)
 	defer cancel()
 
-	st, stopStats := startForwardStats(sf.Stats, errw)
+	st, stopStats := startStats(sf.Stats, errw)
 	defer stopStats()
 
 	// Use cmd.Context() (interrupt-only), not the --for-bounded ctx: exec.CommandContext
@@ -237,12 +236,7 @@ func startTargetProcess(ctx context.Context, target string, out, errw io.Writer)
 		target = target + " --ndjson"
 	}
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-
-	proc := exec.CommandContext(ctx, shell, "-c", target)
+	proc := exec.CommandContext(ctx, systemShell(), "-c", target)
 	proc.Stdout = out
 	proc.Stderr = errw
 

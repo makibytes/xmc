@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -54,7 +55,7 @@ of payloads, or use a command that reads stdin directly.`,
 	cmd.Flags().BoolP("echo", "e", false, "Echo the request payload back as the response")
 	cmd.Flags().StringP("command", "x", "", "Run a shell command per request; its stdout becomes the response")
 	cmd.Flags().StringP("reply-to", "R", "", "Fallback reply destination when a request carries no reply-to")
-	cmd.Flags().StringP("content-type", "T", "text/plain", "MIME type of the response data")
+	cmd.Flags().StringP("content-type", "T", backends.DefaultContentType, "MIME type of the response data")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Response properties in key=value format")
 	cmd.Flags().IntP("count", "n", 0, "Number of requests to serve (0 = serve until interrupted)")
 	cmd.Flags().VarP(newDurationValue(0, time.Second), "timeout", "t", "Time to wait per request (e.g. \"5s\"; 0 = wait indefinitely)")
@@ -95,9 +96,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	if err != nil {
 		return err
 	}
-	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
-		count = 0
-	}
+	count = sf.effectiveCount(cmd, count)
 
 	properties, err := parsePropertiesFlag(cmd.Flags())
 	if err != nil {
@@ -180,10 +179,7 @@ func finishReply(served int) error {
 // that cannot be answered (no reply-to and no fallback) is skipped rather than
 // aborting the responder.
 func respondToRequest(ctx context.Context, backend backends.QueueBackend, request *backends.Message, cfg replyConfig) error {
-	replyTo := request.ReplyTo
-	if replyTo == "" {
-		replyTo = cfg.replyTo
-	}
+	replyTo := cmp.Or(request.ReplyTo, cfg.replyTo)
 	if replyTo == "" {
 		log.Verbose("request has no reply-to and no --replyto fallback; skipping")
 		return nil
@@ -198,10 +194,7 @@ func respondToRequest(ctx context.Context, backend backends.QueueBackend, reques
 		return nil
 	}
 
-	correlationID := request.CorrelationID
-	if correlationID == "" {
-		correlationID = request.MessageID
-	}
+	correlationID := cmp.Or(request.CorrelationID, request.MessageID)
 
 	if !cfg.quiet {
 		log.Verbose("replying to %s (correlation %q)", replyTo, correlationID)

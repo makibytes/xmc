@@ -4,9 +4,13 @@ package redis
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/makibytes/xmc/broker/backends"
 )
 
 // maxBlockSlice bounds a single blocking stream read (XREAD/XREADGROUP BLOCK).
@@ -44,4 +48,21 @@ func blockingRead[T any](ctx context.Context, total time.Duration, read func(blo
 		}
 		return res, err
 	}
+}
+
+// readOne runs a blockingRead for a single stream entry. An empty read maps to
+// backends.ErrNoMessageAvailable; any other failure is wrapped with what, which
+// describes the operation (e.g. "reading from queue q").
+func readOne(ctx context.Context, total time.Duration, what string, read func(block time.Duration) ([]redis.XStream, error)) (redis.XMessage, error) {
+	result, err := blockingRead(ctx, total, read)
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return redis.XMessage{}, backends.ErrNoMessageAvailable
+		}
+		return redis.XMessage{}, fmt.Errorf("%s: %w", what, err)
+	}
+	if len(result) == 0 || len(result[0].Messages) == 0 {
+		return redis.XMessage{}, backends.ErrNoMessageAvailable
+	}
+	return result[0].Messages[0], nil
 }

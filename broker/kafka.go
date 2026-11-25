@@ -5,7 +5,6 @@ package broker
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -23,11 +22,6 @@ func GetRootCommand() *cobra.Command {
 	var configEntries []string
 	var updateTopicCmd *cobra.Command
 	var updateConfigEntries []string
-
-	defaultServer := os.Getenv("KMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "kafka://localhost:9092"
-	}
 
 	topicFactory := cmd.TopicAdapterFactory(func() (backends.TopicBackend, error) {
 		return kafka.NewTopicAdapter(connArgs)
@@ -54,7 +48,7 @@ func GetRootCommand() *cobra.Command {
 			return extra
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "KMC_", defaultServer,
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "KMC_", "kafka://localhost:9092",
 				"Server URL (kafka://broker1:9092 or kafka://broker1:9092,broker2:9092)",
 				"Username for SASL authentication", "Password for SASL authentication")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
@@ -95,13 +89,9 @@ func GetRootCommand() *cobra.Command {
 					c.Flags().StringArrayVar(&configEntries, "config", nil, "Topic config entries (key=value, repeatable)")
 				},
 				Run: func(topic string) error {
-					configs := make(map[string]string)
-					for _, entry := range configEntries {
-						k, v, ok := strings.Cut(entry, "=")
-						if !ok {
-							return fmt.Errorf("invalid config entry %q (expected key=value)", entry)
-						}
-						configs[k] = v
+					configs, err := parseConfigEntries(configEntries)
+					if err != nil {
+						return err
 					}
 					return kafka.CreateTopic(connArgs, topic, partitions, replicationFactor, configs)
 				},
@@ -122,13 +112,9 @@ func GetRootCommand() *cobra.Command {
 							return fmt.Errorf("invalid --partitions: must be > 0 (or omit flag to keep unchanged)")
 						}
 					}
-					configs := make(map[string]string)
-					for _, entry := range updateConfigEntries {
-						k, v, ok := strings.Cut(entry, "=")
-						if !ok {
-							return fmt.Errorf("invalid config entry %q (expected key=value)", entry)
-						}
-						configs[k] = v
+					configs, err := parseConfigEntries(updateConfigEntries)
+					if err != nil {
+						return err
 					}
 					if !f.Changed("partitions") && len(configs) == 0 {
 						return fmt.Errorf("no settings given; pass --partitions and/or --config")
@@ -157,4 +143,17 @@ func GetRootCommand() *cobra.Command {
 			}),
 		},
 	})
+}
+
+// parseConfigEntries turns repeated --config key=value flags into a map.
+func parseConfigEntries(entries []string) (map[string]string, error) {
+	configs := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		k, v, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid config entry %q (expected key=value)", entry)
+		}
+		configs[k] = v
+	}
+	return configs, nil
 }

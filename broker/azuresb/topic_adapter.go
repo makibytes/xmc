@@ -92,7 +92,7 @@ func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions
 func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
 	var subName string
 	var ephemeral bool
-	if opts.Extra != nil && opts.Extra["subscription"] != "" {
+	if opts.Extra["subscription"] != "" {
 		subName = opts.Extra["subscription"]
 	} else {
 		subName, ephemeral = backends.SubscriptionName(opts)

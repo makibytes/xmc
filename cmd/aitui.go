@@ -464,7 +464,6 @@ type aiTUIModel struct {
 	// Background process management (cmd/aiproc.go).
 	procs      []*bgProcess // active and finished background processes
 	procNextID int          // monotone counter for bgProcess.id
-	procWinIdx int          // index of the Processes window in objTypes (-1 if absent)
 	procSel    int          // selected row in the Processes window
 
 	// Saved prompt state while Processes pane is focused (enterProcessView / exitProcessView).
@@ -602,7 +601,6 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 		cmdHistory:     shellHistory.Load(),
 		askHistory:     askHistory.Load(),
 		histIdx:        -1,
-		procWinIdx:     -1,
 	}
 }
 
@@ -634,7 +632,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.sidebarVisible() && m.focus != focusChat {
 			m.focusChat()
 		}
-		(&m).updateInputHeight()
+		m.updateInputHeight()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -788,7 +786,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshTickMsg:
 		if !m.refreshing && len(m.objTypes) > 0 && m.autoUpdateEnabled() {
-			return m, (&m).beginRefresh()
+			return m, m.beginRefresh()
 		}
 		return m, nil
 
@@ -796,7 +794,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-issue the fetch only if the wedged generation matches.
 		if m.refreshing && msg.gen == m.refreshGen && len(m.objTypes) > 0 {
 			log.Verbose("sidebar refresh watchdog: fetch gen %d timed out, re-issuing", msg.gen)
-			return m, (&m).beginRefresh()
+			return m, m.beginRefresh()
 		}
 		return m, nil
 	}
@@ -1025,21 +1023,21 @@ func (m aiTUIModel) renderStatusBar() string {
 			left = m.spinner.View() + " " + statusStyle.Render("Fetching models…")
 		} else if m.filtering {
 			filter := ""
-			if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) {
+			if wi, ok := m.focusedWindow(); ok {
 				filter = m.objTypes[wi].filter
 			}
 			kvs := []hintKV{{"/", filter + "▍"}, {"Enter", "apply"}, {"Esc", "clear"}}
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
-		} else if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
+		} else if m.procsFocused() {
 			kvs := []hintKV{
 				{"↑↓", "move"}, {"Enter", "output"}, {"K", "kill"}, {"d", "remove"},
 				{"P", "purge finished"}, {"D", "remove all"}, {"Space", "collapse"}, {"Esc", "chat"},
 			}
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else if m.focus != focusChat {
-			wi := int(m.focus) - 1
+			wi, inRange := m.focusedWindow()
 			kvs := []hintKV{{"↑↓", "move"}, {"/", "filter"}, {"s", "sort"}, {"r", "refresh"}}
-			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
+			if inRange && m.objTypes[wi].hierarchical {
 				kvs = append(kvs, hintKV{"x", "tree"})
 			}
 			// Each selection-dependent object hotkey (c/d/p/m/P/S/R) is
@@ -1463,7 +1461,7 @@ func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, bina
 		totalOut = m.totalOut
 		// Cancel any still-running background processes and wait up to 2s for
 		// their goroutines to exit before the shared session adapters are torn down.
-		(&m).killAllProcs()
+		m.killAllProcs()
 		deadline := time.After(2 * time.Second)
 		for _, proc := range m.procs {
 			select {

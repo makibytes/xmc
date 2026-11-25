@@ -71,7 +71,7 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	}
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-	return pollSQS(ctx, a.sqsc, queueURL, timeout, true, "subscriber queue for topic "+opts.Topic)
+	return pollSQS(ctx, a.sqsc, queueURL, timeout, true, "subscriber queue for topic "+opts.Topic, 0)
 }
 
 // ensureSubscriberQueue creates, authorizes, and SNS-subscribes the backing

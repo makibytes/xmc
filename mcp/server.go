@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -129,31 +130,31 @@ func (s *Server) AddTool(t *Tool) {
 // ---- Dispatch --------------------------------------------------------------
 
 // handle processes one raw JSON-RPC message. It returns the encoded response
-// bytes, or notification=true (no response is owed) for notifications and other
-// id-less messages.
-func (s *Server) handle(ctx context.Context, raw []byte) (response []byte, notification bool) {
+// bytes, or nil when no response is owed (notifications and other id-less
+// messages).
+func (s *Server) handle(ctx context.Context, raw []byte) []byte {
 	var req rpcRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return s.encodeError(nil, codeParseError, "parse error"), false
+		return s.encodeError(nil, codeParseError, "parse error")
 	}
 	if req.JSONRPC != "2.0" || req.Method == "" {
 		if req.ID == nil {
-			return nil, true
+			return nil
 		}
-		return s.encodeError(req.ID, codeInvalidRequest, "invalid request"), false
+		return s.encodeError(req.ID, codeInvalidRequest, "invalid request")
 	}
 
 	// Notifications (no id) get no response. We accept and ignore the lifecycle
 	// notifications a client may send.
 	if req.ID == nil {
-		return nil, true
+		return nil
 	}
 
 	result, rpcErr := s.route(ctx, req.Method, req.Params)
 	if rpcErr != nil {
-		return s.encode(rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}), false
+		return s.encode(rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: rpcErr})
 	}
-	return s.encode(rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result}), false
+	return s.encode(rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result})
 }
 
 func (s *Server) route(ctx context.Context, method string, params json.RawMessage) (any, *rpcError) {
@@ -293,8 +294,8 @@ func (s *Server) ServeStdio(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			resp, notification := s.handle(ctx, line)
-			if notification || resp == nil {
+			resp := s.handle(ctx, line)
+			if resp == nil {
 				continue
 			}
 			_, _ = writer.Write(resp)
@@ -312,14 +313,7 @@ func (s *Server) ServeStdio(ctx context.Context) error {
 // io.EOF for a final unterminated line) is returned alongside any bytes read.
 func readLine(r *bufio.Reader) ([]byte, error) {
 	line, err := r.ReadBytes('\n')
-	return trimNewline(line), err
-}
-
-func trimNewline(b []byte) []byte {
-	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
-		b = b[:len(b)-1]
-	}
-	return b
+	return bytes.TrimRight(line, "\r\n"), err
 }
 
 // ---- Streamable HTTP transport ---------------------------------------------
@@ -355,8 +349,8 @@ func (s *Server) serveHTTPMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-	resp, notification := s.handle(r.Context(), body)
-	if notification || resp == nil {
+	resp := s.handle(r.Context(), body)
+	if resp == nil {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}

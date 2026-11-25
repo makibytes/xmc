@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makibytes/xmc/broker/backends"
@@ -119,7 +118,7 @@ func resolvePurgePublishAction(m *aiTUIModel, wi int) (string, func() (tea.Model
 			if !ow.subscriptionEligible(child.Kind) || child.Name == "" {
 				return "", nil, false
 			}
-			if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.PurgeSubscription == nil {
+			if ms := m.manageSpec(); ms == nil || ms.PurgeSubscription == nil {
 				return "", nil, false
 			}
 			childName := child.Name
@@ -151,7 +150,7 @@ func resolvePurgePublishAction(m *aiTUIModel, wi int) (string, func() (tea.Model
 	if !ow.drain {
 		return "", nil, false
 	}
-	if m.session == nil || m.session.spec.ManageSpec == nil || m.session.spec.ManageSpec.Purge == nil {
+	if ms := m.manageSpec(); ms == nil || ms.Purge == nil {
 		return "", nil, false
 	}
 	name := node.Name
@@ -191,6 +190,24 @@ func withMetadataRender(msg *backends.Message, fmtMode metadataFormat) sideActio
 	return formatMessageMetadataForSideAction(msg, fmtMode)
 }
 
+// runRead is the shared body of the peek, peek-metadata and receive hotkeys:
+// it echoes desc, switches to the executing state and returns a Cmd that
+// fetches one message and renders it. An empty source is not an error.
+func (m *aiTUIModel) runRead(desc string, render func(*backends.Message, metadataFormat) sideActionMsg, fetch func() (*backends.Message, error)) (tea.Model, tea.Cmd) {
+	fmtMode := m.metadataFormat
+	m.beginSideAction(desc)
+	return *m, func() tea.Msg {
+		msg, err := fetch()
+		if err != nil {
+			if isNoMessage(err) {
+				return sideActionMsg{action: "   └ (no messages available)"}
+			}
+			return sideActionMsg{err: err}
+		}
+		return render(msg, fmtMode)
+	}
+}
+
 // resolveReadAction returns a resolve func for "R" (receive: hint="receive",
 // descVerb="receive", ack=true), "p" (peek: hint="peek", descVerb="peek",
 // ack=false), or "m" (peek metadata: hint="metadata", descVerb="peek
@@ -211,24 +228,22 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 			if !ow.subscriptionEligible(child.Kind) || child.Name == "" {
 				return "", nil, false
 			}
-			childName, session, fmtMode := child.Name, m.session, m.metadataFormat
+			sub := child.Name
 			return hint, func() (tea.Model, tea.Cmd) {
-				desc := fmt.Sprintf("▶ %s Subscription \"%s\"", descVerb, childName)
-				m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-				m.state = tuiExecuting
 				topic, resolveErr := m.sidebarTarget(parentName, true, false)
-				sub := childName
-				return *m, func() tea.Msg {
+				session := m.session
+				desc := fmt.Sprintf("▶ %s Subscription \"%s\"", descVerb, sub)
+				return m.runRead(desc, render, func() (*backends.Message, error) {
 					if resolveErr != nil {
-						return sideActionMsg{err: resolveErr}
+						return nil, resolveErr
 					}
 					ta, err := session.getTopicAdapter()
 					if err != nil {
-						return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+						return nil, fmt.Errorf("adapter: %w", err)
 					}
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					ctx, cancel := context.WithTimeout(context.Background(), sideActionTimeout)
 					defer cancel()
-					msg, err := ta.Subscribe(ctx, backends.SubscribeOptions{
+					return ta.Subscribe(ctx, backends.SubscribeOptions{
 						Topic:       topic,
 						Extra:       map[string]string{"subscription": sub},
 						Acknowledge: ack,
@@ -236,14 +251,7 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 						Timeout:     1,
 						Wait:        false,
 					})
-					if err != nil {
-						if isNoMessage(err) {
-							return sideActionMsg{action: "   └ (no messages available)"}
-						}
-						return sideActionMsg{err: err}
-					}
-					return render(msg, fmtMode)
-				}
+				})
 			}, true
 		}
 
@@ -254,37 +262,29 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 		if !ok || node.Name == "" {
 			return "", nil, false
 		}
-		name, session, fmtMode := node.Name, m.session, m.metadataFormat
+		name := node.Name
 		return hint, func() (tea.Model, tea.Cmd) {
-			desc := fmt.Sprintf("▶ %s %s \"%s\"", descVerb, ow.singularLabel(), name)
-			m.appendTranscript(histCmdStyle.Render(desc) + "\n")
-			m.state = tuiExecuting
 			queue, resolveErr := m.sidebarTarget(name, false, false)
-			return *m, func() tea.Msg {
+			session := m.session
+			desc := fmt.Sprintf("▶ %s %s \"%s\"", descVerb, ow.singularLabel(), name)
+			return m.runRead(desc, render, func() (*backends.Message, error) {
 				if resolveErr != nil {
-					return sideActionMsg{err: resolveErr}
+					return nil, resolveErr
 				}
 				qa, err := session.getQueueAdapter()
 				if err != nil {
-					return sideActionMsg{err: fmt.Errorf("adapter: %w", err)}
+					return nil, fmt.Errorf("adapter: %w", err)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), sideActionTimeout)
 				defer cancel()
-				msg, err := qa.Receive(ctx, backends.ReceiveOptions{
+				return qa.Receive(ctx, backends.ReceiveOptions{
 					Queue:       queue,
 					Acknowledge: ack,
 					Verbosity:   verbosity,
 					Timeout:     1,
 					Wait:        false,
 				})
-				if err != nil {
-					if isNoMessage(err) {
-						return sideActionMsg{action: "   └ (no messages available)"}
-					}
-					return sideActionMsg{err: err}
-				}
-				return render(msg, fmtMode)
-			}
+			})
 		}, true
 	}
 }

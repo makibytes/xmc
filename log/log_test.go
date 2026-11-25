@@ -139,6 +139,7 @@ func TestIsStdoutRedirected_WithCharDevice(t *testing.T) {
 	os.Stdout = tty
 	defer func() { os.Stdout = old }()
 
-	// Calling with a char device exercises the syscall.Stat_t path
-	_ = isStdoutRedirected()
+	if isStdoutRedirected() {
+		t.Error("expected isStdoutRedirected() = false when stdout is a terminal")
+	}
 }

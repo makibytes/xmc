@@ -9,7 +9,6 @@ import (
 	"maps"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -77,35 +76,8 @@ func parseConsumeFlags(cmd *cobra.Command, hasOmit bool) (consumeFlagValues, err
 		return consumeFlagValues{}, err
 	}
 	v.streaming = sf
-	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
-		v.count = 0
-	}
+	v.count = sf.effectiveCount(cmd, v.count)
 	return v, nil
-}
-
-// dataWriter returns the configured data output writer, defaulting to os.Stdout.
-func (c consumeConfig) dataWriter() io.Writer {
-	if c.dataOut != nil {
-		return c.dataOut
-	}
-	return os.Stdout
-}
-
-// metaWriter returns the configured metadata output writer, defaulting to os.Stderr.
-func (c consumeConfig) metaWriter() io.Writer {
-	if c.metaOut != nil {
-		return c.metaOut
-	}
-	return os.Stderr
-}
-
-type flagValueGetter interface {
-	GetString(name string) (string, error)
-	GetStringSlice(name string) ([]string, error)
-	GetBool(name string) (bool, error)
-	GetInt(name string) (int, error)
-	GetInt64(name string) (int64, error)
-	GetFloat32(name string) (float32, error)
 }
 
 type messageReceiver func(context.Context) (*backends.Message, error)
@@ -119,8 +91,8 @@ type consumeConfig struct {
 	follow     bool   // streaming: keep polling across empty reads until ctx ends
 	omit       int    // skip (offset past) the first N messages before outputting
 	stats      *streamStats
-	dataOut    io.Writer // message payload output; nil defaults to os.Stdout
-	metaOut    io.Writer // metadata/properties output; nil defaults to os.Stderr
+	dataOut    io.Writer // message payload output
+	metaOut    io.Writer // metadata/properties output
 }
 
 func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeConfig) error {
@@ -176,9 +148,7 @@ func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeCo
 		if err := outputMessage(message, cfg); err != nil {
 			return err
 		}
-		if cfg.stats != nil {
-			cfg.stats.record(len(message.Data))
-		}
+		cfg.stats.record(len(message.Data))
 		received++
 	}
 
@@ -188,37 +158,25 @@ func consumeMessages(ctx context.Context, receive messageReceiver, cfg consumeCo
 // runConsume wraps consumeMessages with the streaming context (--for) and the
 // optional live throughput reporter (--stats), printing a final summary when the
 // stream ends. When neither streaming option is active it behaves exactly like a
-// plain consumeMessages call on a background context.
+// plain consumeMessages call.
 //
-// An optional parent context may be supplied so that external cancellation
-// (e.g. the AI TUI's Esc handler or cobra's ExecuteContext ctx) propagates
-// into the receive loop alongside SIGINT.
-func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool, parents ...context.Context) error {
-	var parent context.Context
-	if len(parents) > 0 && parents[0] != nil {
-		parent = parents[0]
-	}
-	// streamContext merges SIGINT with the optional parent so that both
-	// Ctrl-C (shell) and Esc (AI TUI) cleanly stop the consume loop.
+// parent is typically cmd.Context(), so that external cancellation (e.g. the AI
+// TUI's Esc handler) propagates into the receive loop alongside SIGINT.
+func runConsume(receive messageReceiver, cfg consumeConfig, duration time.Duration, stats bool, parent context.Context) error {
+	// streamContext merges SIGINT with the parent so that both Ctrl-C (shell)
+	// and Esc (AI TUI) cleanly stop the consume loop.
 	ctx, cancel := streamContext(duration, parent)
 	defer cancel()
 
-	if stats {
-		st := newStreamStats()
-		cfg.stats = st
-		metaW := cfg.metaWriter()
-		stop := startStatsReporter(st, time.Second, metaW)
-		defer func() {
-			stop()
-			_, _ = fmt.Fprintln(metaW, st.summary())
-		}()
-	}
+	var stopStats func()
+	cfg.stats, stopStats = startStats(stats, cfg.metaOut)
+	defer stopStats()
 
 	return consumeMessages(ctx, receive, cfg)
 }
 
 func outputMessage(message *backends.Message, cfg consumeConfig) error {
-	w := cfg.dataWriter()
+	w := cfg.dataOut
 	switch {
 	case cfg.ndjson:
 		return displayMessageNDJSON(w, message)
@@ -227,7 +185,7 @@ func outputMessage(message *backends.Message, cfg consumeConfig) error {
 	case cfg.jsonOutput:
 		return displayMessageJSON(w, message, cfg.verbosity)
 	default:
-		return displayMessage(w, cfg.metaWriter(), message, cfg.verbosity)
+		return displayMessage(w, cfg.metaOut, message, cfg.verbosity)
 	}
 }
 
@@ -246,13 +204,15 @@ func commandVerbosity(quiet bool) backends.Verbosity {
 
 func displayMessage(dataOut, metaOut io.Writer, message *backends.Message, verbosity backends.Verbosity) error {
 	if verbosity >= backends.VerbosityVerbose {
-		if err := writeKeyValueMap(metaOut, message.InternalMetadata, "", "%s: %v\n"); err != nil {
-			return err
+		for _, key := range slices.Sorted(maps.Keys(message.InternalMetadata)) {
+			if _, err := fmt.Fprintf(metaOut, "%s: %v\n", key, message.InternalMetadata[key]); err != nil {
+				return err
+			}
 		}
 	}
 
-	if verbosity >= backends.VerbosityNormal {
-		if err := writeProperties(metaOut, message.Properties); err != nil {
+	if verbosity >= backends.VerbosityNormal && len(message.Properties) > 0 {
+		if _, err := fmt.Fprintf(metaOut, "Properties: %s\n", formatProperties(message.Properties)); err != nil {
 			return err
 		}
 	}
@@ -280,7 +240,7 @@ func shouldAddNewline(w io.Writer) bool {
 // displayMessageJSON outputs the message as a JSON object, using the same
 // messageRecord schema as --ndjson (see recordForDisplay). Verbose mode
 // (-v) also includes internalMetadata, matching what verbose text output
-// (displayMessage) shows via writeKeyValueMap.
+// (displayMessage) shows as sorted key: value lines.
 func displayMessageJSON(w io.Writer, message *backends.Message, verbosity backends.Verbosity) error {
 	rec := recordForDisplay(message, true, verbosity >= backends.VerbosityVerbose)
 	data, err := json.Marshal(rec)
@@ -292,34 +252,3 @@ func displayMessageJSON(w io.Writer, message *backends.Message, verbosity backen
 	_, _ = w.Write(data)
 	return nil
 }
-
-func writeProperties(w ioWriter, properties map[string]any) error {
-	if len(properties) == 0 {
-		return nil
-	}
-
-	names := slices.Sorted(maps.Keys(properties))
-	values := make([]string, 0, len(names))
-	for _, name := range names {
-		values = append(values, fmt.Sprintf("%s=%v", name, properties[name]))
-	}
-
-	_, err := fmt.Fprintf(w, "Properties: %s\n", strings.Join(values, ","))
-	return err
-}
-
-func writeKeyValueMap(w ioWriter, values map[string]any, prefix, format string) error {
-	if len(values) == 0 {
-		return nil
-	}
-
-	for _, key := range slices.Sorted(maps.Keys(values)) {
-		if _, err := fmt.Fprintf(w, prefix+format, key, values[key]); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-type ioWriter = io.Writer

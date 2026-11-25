@@ -21,6 +21,11 @@ type ManagementArgs struct {
 	Password string
 }
 
+// ManagementFor returns the management API parameters for an AMQP connection.
+func ManagementFor(c ConnArguments) ManagementArgs {
+	return ManagementArgs{Server: c.Server, User: c.User, Password: c.Password}
+}
+
 // managementBaseOverride, when non-empty, replaces the management API base URL
 // derived from the AMQP server URL. Used by integration tests, where the
 // container remaps the management port.

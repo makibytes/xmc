@@ -4,7 +4,6 @@ package broker
 
 import (
 	"context"
-	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
 	redispkg "github.com/makibytes/xmc/broker/redis"
@@ -19,11 +18,6 @@ func GetRootCommand() *cobra.Command {
 	var prefix string
 	var maxLen int64
 
-	defaultServer := os.Getenv("REDMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "redis://localhost:6379"
-	}
-
 	return cmd.NewRootCommand(cmd.BrokerSpec{
 		Use:              "redmc",
 		Short:            "Redis Messaging Client",
@@ -34,7 +28,7 @@ func GetRootCommand() *cobra.Command {
 			return redispkg.ResolveTarget(t.IsTopic, t.To, prefix)
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "REDMC_", defaultServer,
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "REDMC_", "redis://localhost:6379",
 				"Server URL", "Username for authentication", "Password for authentication")
 			c.PersistentFlags().StringVar(&prefix, "prefix", "xmc", "Key prefix for Redis streams")
 			c.PersistentFlags().Int64Var(&maxLen, "maxlen", 10000, "Maximum topic stream length (0 = no trim)")
