@@ -654,7 +654,7 @@ func TestGeminiClient_Streaming(t *testing.T) {
 func TestParseSSE(t *testing.T) {
 	input := "event: start\ndata: {\"a\":1}\n\ndata: {\"b\":2}\n\ndata: [DONE]\n\ndata: {\"c\":3}\n\n"
 	var collected []string
-	err := parseSSE(strings.NewReader(input), func(data string) error {
+	_, err := parseSSE(strings.NewReader(input), func(data string) error {
 		collected = append(collected, data)
 		return nil
 	})
