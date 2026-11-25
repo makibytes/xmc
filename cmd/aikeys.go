@@ -1339,17 +1339,6 @@ func (m *aiTUIModel) selectedChildNode() (node backends.ObjectNode, parentName s
 // sendEligible/sendsViaTopic/subscriptionEligible/singularLabel methods
 // (cmd/aitui.go) — see those for the rules this used to hand-match on Label.
 
-// isNoMessage reports whether err means "the source was empty this read" —
-// either the explicit sentinel or a bare receive/poll timeout. The AMQP
-// backends (Artemis, RabbitMQ) surface an empty queue as the raw
-// context.DeadlineExceeded from their own per-call wait deadline rather than
-// ErrNoMessageAvailable (unlike their Browse/peek-cursor path, which already
-// maps it); without this, the sidebar showed a confusing
-// "✗ context deadline exceeded" instead of "no message available".
-func isNoMessage(err error) bool {
-	return errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded)
-}
-
 // cycleSort advances the sort mode for the focused pane.
 func (m *aiTUIModel) cycleSort() {
 	wi, ok := m.focusedWindow()

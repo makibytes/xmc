@@ -286,22 +286,17 @@ func capTopologyLines(topology string, maxLines int) string {
 	return fmt.Sprintf("%s\n… (%d more lines)", kept, remaining)
 }
 
-// buildVerbSet returns the set of known top-level xmc verbs from the cobra tree.
-// Shell/AI/help are excluded since they cannot be run as inline commands.
-func buildVerbSet(rootCmd *cobra.Command) map[string]bool {
-	verbs := make(map[string]bool)
-	for _, cmd := range rootCmd.Commands() {
-		if !aiSkipCommands[cmd.Name()] && !cmd.Hidden {
-			verbs[cmd.Name()] = true
-		}
-	}
-	return verbs
+// isAIVerb reports whether token starts a command the AI may propose: any verb
+// the shell runs in-process (aliases included), except the shell's own help.
+func isAIVerb(token string) bool {
+	v := canonicalVerb(token)
+	return v != "" && v != "help"
 }
 
 // extractCommandWithVerbs extends extractCommand with a prose-fallback: if the
 // stripped response is not a known xmc verb (and not a # comment), it scans
 // each line for the first whose first token is in the verb set.
-func extractCommandWithVerbs(response string, verbs map[string]bool) string {
+func extractCommandWithVerbs(response string) string {
 	cmd := extractCommand(response)
 	if cmd == "" {
 		return cmd
@@ -313,8 +308,7 @@ func extractCommandWithVerbs(response string, verbs map[string]bool) string {
 	if strings.HasPrefix(cmd, "# ask:") || strings.HasPrefix(cmd, "# cannot:") {
 		return cmd
 	}
-	first := strings.Fields(cmd)[0]
-	if verbs[first] {
+	if isAIVerb(strings.Fields(cmd)[0]) {
 		return cmd
 	}
 	// Prose response: scan lines for a line beginning with a known verb.
@@ -328,7 +322,7 @@ func extractCommandWithVerbs(response string, verbs map[string]bool) string {
 		if len(fields) == 0 {
 			continue
 		}
-		if verbs[fields[0]] {
+		if isAIVerb(fields[0]) {
 			return line
 		}
 	}

@@ -151,7 +151,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 		switch {
 		case errors.Is(err, context.Canceled):
 			return finishReply(served)
-		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
+		case backends.IsNoMessage(err), message == nil && err == nil:
 			if sf.Follow || count == 0 {
 				continue // keep waiting for the next request
 			}

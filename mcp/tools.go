@@ -135,7 +135,7 @@ func collect(ctx context.Context, n int, verb string, next func(context.Context)
 	for range n {
 		msg, err := next(ctx)
 		if err != nil {
-			if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
+			if backends.IsNoMessage(err) {
 				break
 			}
 			return nil, fmt.Errorf("%s failed after %d messages: %v", verb, len(messages), err)
@@ -290,7 +290,7 @@ func registerRequest(s *Server, d Deps) {
 					if sendErr, ok := errors.AsType[*backends.RequestSendError](err); ok {
 						return nil, fmt.Errorf("failed to send request to %s: %v", a.Address, sendErr.Err)
 					}
-					if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, backends.ErrNoMessageAvailable) {
+					if backends.IsNoMessage(err) {
 						return nil, fmt.Errorf("no reply received on %s within %.0fs", replyTo, timeout)
 					}
 					if errors.Is(err, backends.ErrReplyMismatch) {

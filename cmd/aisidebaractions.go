@@ -199,7 +199,7 @@ func (m *aiTUIModel) runRead(desc string, render func(*backends.Message, metadat
 	return *m, func() tea.Msg {
 		msg, err := fetch()
 		if err != nil {
-			if isNoMessage(err) {
+			if backends.IsNoMessage(err) {
 				return sideActionMsg{action: "   └ (no messages available)"}
 			}
 			return sideActionMsg{err: err}

@@ -3,7 +3,6 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -201,11 +200,8 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 			if ctx.Err() != nil {
 				break
 			}
-			// DeadlineExceeded is the AMQP backend's internal poll timeout
-			// (100ms, from its own Background context), not the outer deadline.
-			// ErrNoMessageAvailable is its logical equivalent. Both mean "empty
-			// source this poll" — keep looping.
-			if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
+			// An empty poll (see backends.IsNoMessage) — keep looping.
+			if backends.IsNoMessage(err) {
 				// Source empty this poll: flush now so a trickle stream still
 				// reaches the target promptly instead of sitting in the buffer.
 				if err := bw.Flush(); err != nil {

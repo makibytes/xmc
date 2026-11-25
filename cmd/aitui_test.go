@@ -1886,8 +1886,8 @@ func TestIsNoMessage(t *testing.T) {
 		{"other error", fmt.Errorf("connection refused"), false},
 	}
 	for _, c := range cases {
-		if got := isNoMessage(c.err); got != c.want {
-			t.Errorf("isNoMessage(%v) [%s] = %v, want %v", c.err, c.name, got, c.want)
+		if got := backends.IsNoMessage(c.err); got != c.want {
+			t.Errorf("IsNoMessage(%v) [%s] = %v, want %v", c.err, c.name, got, c.want)
 		}
 	}
 }

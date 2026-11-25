@@ -100,7 +100,7 @@ Broker-specific differences (Artemis routing annotations, RabbitMQ exchange rout
 - `broker/backends/naming.go` - `RandomSuffix()` (crypto/rand hex), `SubscriptionName(opts)` (group / durable / ephemeral naming convention), and `ScopedSubscriptionName(opts, sep)` (group form additionally scoped by topic, for brokers whose subscription namespace is global: AWS queue names, Google subscription IDs)
 - `broker/backends/properties.go` - `StringifyProps()`, `PropMessageID`/`PropCorrelationID`/`PropReplyTo`/`PropContentType` constants (the cross-broker metadata contract)
 - `broker/backends/timeout.go` - `TimeoutDuration(timeout, wait)` (shared timeout semantics)
-- `broker/backends/errors.go` - `ErrNoMessageAvailable` (shared no-message sentinel)
+- `broker/backends/errors.go` - `ErrNoMessageAvailable` (shared no-message sentinel) and `IsNoMessage(err)` (the sentinel or a bare per-call wait deadline — the AMQP backends surface an empty poll as `context.DeadlineExceeded`; check `ctx.Err()` first when the caller has its own deadline)
 - `broker/backends/browse.go` - `Browse(ctx, qb, opts) (Browser, error)` (native `BrowseBackend` cursor when the adapter has one, else a stateless-Receive fallback; see the `BrowseBackend` bullet above)
 - `broker/backends/common.go` - `RegisterCommonFlags` (server/user/password persistent flags with env-var binding; used by every non-cloud broker entry file)
 - `cmd/root.go` - `BrokerSpec` + `NewRootCommand()` (shared CLI skeleton for all entry files); `TargetResolver`/`TargetSpec` for broker-specific address resolution; `ExchangeRouting` to toggle `-e/-q` flags (RabbitMQ); `ProduceFlags`/`ConsumeFlags`/`ProduceExtra`/`ConsumeExtra` hooks for per-message broker-specific flags (e.g. QoS, FIFO, routing-type)

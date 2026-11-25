@@ -252,11 +252,10 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 		switch {
 		case errors.Is(err, context.Canceled):
 			return summarizeForward(out, forwarded, source, destination)
-		// DeadlineExceeded here is from the AMQP internal poll timeout (the
-		// backend creates its own context from Background(), not from our ctx),
-		// so it means "no message in this poll window" — keep looping. The
-		// outer --for deadline is caught by ctx.Err() at the top of the loop.
-		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
+		// An empty poll (possibly a bare per-call wait deadline, see
+		// backends.IsNoMessage): keep looping. The outer --for deadline is
+		// caught by ctx.Err() at the top of the loop.
+		case backends.IsNoMessage(err), message == nil && err == nil:
 			continue
 		case err != nil:
 			return err

@@ -154,7 +154,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		log.Verbose("AI tokens: %d input, %d output", msg.usage.InputTokens, msg.usage.OutputTokens)
 	}
 
-	command := extractCommandWithVerbs(msg.text, m.ai.verbSet)
+	command := extractCommandWithVerbs(msg.text)
 	isAsk := strings.HasPrefix(command, "# ask:")
 	isCannot := strings.HasPrefix(command, "# cannot:")
 	// A "#" line that isn't one of the two canonical forms is not a command —

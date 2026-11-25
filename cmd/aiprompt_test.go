@@ -259,71 +259,34 @@ func TestCapTopologyLines_OverLimit(t *testing.T) {
 	}
 }
 
-// ---------- buildVerbSet ----------
-
-func testVerbRoot() *cobra.Command {
-	root := &cobra.Command{Use: "amc"}
-	root.AddCommand(&cobra.Command{Use: "send", Short: "Send"})
-	root.AddCommand(&cobra.Command{Use: "receive", Short: "Receive"})
-	root.AddCommand(&cobra.Command{Use: "peek", Short: "Peek"})
-	root.AddCommand(&cobra.Command{Use: "shell", Short: "Shell"}) // excluded
-	root.AddCommand(&cobra.Command{Use: "ai", Short: "AI"})       // excluded
-	root.AddCommand(&cobra.Command{Use: "help", Short: "Help"})   // excluded
-	manage := &cobra.Command{Use: "manage", Short: "Manage"}
-	manage.AddCommand(&cobra.Command{Use: "list", Short: "List"})
-	manage.AddCommand(&cobra.Command{Use: "purge", Short: "Purge"})
-	root.AddCommand(manage)
-	return root
-}
-
-func TestBuildVerbSet(t *testing.T) {
-	verbs := buildVerbSet(testVerbRoot())
-
-	for _, v := range []string{"send", "receive", "peek", "manage"} {
-		if !verbs[v] {
-			t.Errorf("verb %q should be in set", v)
-		}
-	}
-	// Excluded verbs.
-	for _, v := range []string{"shell", "ai", "help"} {
-		if verbs[v] {
-			t.Errorf("verb %q should NOT be in set", v)
-		}
-	}
-}
-
 // ---------- extractCommandWithVerbs ----------
 
 func TestExtractCommandWithVerbs_ProseFallback(t *testing.T) {
-	verbs := buildVerbSet(testVerbRoot())
 	input := "Sure, here's how to do it:\nreceive orders -n 5\nThis reads 5 messages."
-	got := extractCommandWithVerbs(input, verbs)
+	got := extractCommandWithVerbs(input)
 	if got != "receive orders -n 5" {
 		t.Errorf("got %q, want 'receive orders -n 5'", got)
 	}
 }
 
 func TestExtractCommandWithVerbs_FencedPassthrough(t *testing.T) {
-	verbs := buildVerbSet(testVerbRoot())
 	input := "```\nreceive orders -n 5\n```"
-	got := extractCommandWithVerbs(input, verbs)
+	got := extractCommandWithVerbs(input)
 	if got != "receive orders -n 5" {
 		t.Errorf("got %q, want 'receive orders -n 5'", got)
 	}
 }
 
 func TestExtractCommandWithVerbs_KnownVerbDirect(t *testing.T) {
-	verbs := buildVerbSet(testVerbRoot())
-	got := extractCommandWithVerbs("send q hello", verbs)
+	got := extractCommandWithVerbs("send q hello")
 	if got != "send q hello" {
 		t.Errorf("got %q, want 'send q hello'", got)
 	}
 }
 
 func TestExtractCommandWithVerbs_CommentPassthrough(t *testing.T) {
-	verbs := buildVerbSet(testVerbRoot())
 	for _, input := range []string{"# ask: what queue?", "# cannot: no such command"} {
-		got := extractCommandWithVerbs(input, verbs)
+		got := extractCommandWithVerbs(input)
 		if got != input {
 			t.Errorf("extractCommandWithVerbs(%q) = %q, want unchanged", input, got)
 		}
@@ -331,11 +294,10 @@ func TestExtractCommandWithVerbs_CommentPassthrough(t *testing.T) {
 }
 
 func TestExtractCommandWithVerbs_TwoWordProse(t *testing.T) {
-	verbs := buildVerbSet(testVerbRoot())
 	// "manage list" must appear as the first tokens on its own line for the
 	// prose fallback to recognise it.
 	input := "Here's what to run:\nmanage list\nThat lists all queues."
-	got := extractCommandWithVerbs(input, verbs)
+	got := extractCommandWithVerbs(input)
 	if got != "manage list" {
 		t.Errorf("got %q, want 'manage list'", got)
 	}
@@ -346,9 +308,8 @@ func TestExtractCommandWithVerbs_StrayCommentPassesThroughUnrecognized(t *testin
 	// own confirmation question) has no verb anywhere in the response, so it
 	// should come back unchanged — the caller (handleAIDone) is responsible
 	// for refusing to propose/execute anything starting with an unrecognized "#".
-	verbs := buildVerbSet(testVerbRoot())
 	input := "# This will permanently delete 5 queues. Proceed? (yes/no)"
-	got := extractCommandWithVerbs(input, verbs)
+	got := extractCommandWithVerbs(input)
 	if got != input {
 		t.Errorf("got %q, want unchanged %q", got, input)
 	}
@@ -359,9 +320,8 @@ func TestExtractCommandWithVerbs_StrayCommentThenRealCommand(t *testing.T) {
 	// the actual command on a later line must still be found — a non-canonical
 	// "#" prefix must not short-circuit the prose scan the way "# ask:"/
 	// "# cannot:" intentionally do.
-	verbs := buildVerbSet(testVerbRoot())
 	input := "# This deletes the queue\nmanage delete-queue orders"
-	got := extractCommandWithVerbs(input, verbs)
+	got := extractCommandWithVerbs(input)
 	if got != "manage delete-queue orders" {
 		t.Errorf("got %q, want 'manage delete-queue orders'", got)
 	}
@@ -369,8 +329,17 @@ func TestExtractCommandWithVerbs_StrayCommentThenRealCommand(t *testing.T) {
 
 func TestExtractCommandWithVerbs_NilVerbSet(t *testing.T) {
 	// With a nil verb set, falls back to extractCommand behaviour.
-	got := extractCommandWithVerbs("receive q -n 5", nil)
+	got := extractCommandWithVerbs("receive q -n 5")
 	if got != "receive q -n 5" {
 		t.Errorf("got %q, want 'receive q -n 5'", got)
+	}
+}
+
+// "help" is a verb of the shell, but a prose line that merely starts with the
+// word must not be mistaken for a command; verb aliases (put) are commands.
+func TestExtractCommandWithVerbs_HelpIsProseButAliasesAreVerbs(t *testing.T) {
+	got := extractCommandWithVerbs("help yourself to this:\nput orders hello\nbye")
+	if got != "put orders hello" {
+		t.Errorf("got %q, want the alias line", got)
 	}
 }

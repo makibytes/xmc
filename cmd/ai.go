@@ -52,12 +52,11 @@ const maxFixAttempts = 2
 type aiSession struct {
 	mu                 sync.Mutex
 	client             aiClient
-	sysPrompt          string          // guarded by mu
-	topology           string          // guarded by mu
-	capabilities       string          // cached buildCapabilities result (command tree is static)
-	destructive        []string        // cached destructiveCommands result (command tree is static)
-	verbSet            map[string]bool // cached verb set for extractCommandWithVerbs
-	session            *shellSession   // also the source of the aliases and the broker's AI doc
+	sysPrompt          string        // guarded by mu
+	topology           string        // guarded by mu
+	capabilities       string        // cached buildCapabilities result (command tree is static)
+	destructive        []string      // cached destructiveCommands result (command tree is static)
+	session            *shellSession // also the source of the aliases and the broker's AI doc
 	rootCmd            *cobra.Command
 	history            []aiMessage // UI-goroutine-owned; see struct doc above
 	initOnce           sync.Once
@@ -94,7 +93,6 @@ func (a *aiSession) init() error {
 		if setter, ok := a.client.(modelSettable); ok && a.effort != "" {
 			setter.SetEffort(a.effort)
 		}
-		a.verbSet = buildVerbSet(a.rootCmd)
 		a.mu.Lock()
 		a.rebuildPrompt()
 		a.mu.Unlock()
