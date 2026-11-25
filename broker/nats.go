@@ -89,21 +89,7 @@ func GetRootCommand() *cobra.Command {
 					return natspkg.NewTopicAdapter(connArgs)
 				},
 				ListQueues: func(_ context.Context) ([]backends.QueueInfo, error) {
-					nodes, err := natspkg.ListStreamsWithConsumers(connArgs)
-					if err != nil {
-						return nil, err
-					}
-					infos := make([]backends.QueueInfo, len(nodes))
-					for i, n := range nodes {
-						var msgs int64
-						for _, m := range n.Metrics {
-							if m.Label == "msgs" {
-								msgs = m.Value
-							}
-						}
-						infos[i] = backends.QueueInfo{Name: n.Name, MessageCount: msgs, ConsumerCount: len(n.Children)}
-					}
-					return infos, nil
+					return natspkg.ListStreams(connArgs)
 				},
 				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
 					return natspkg.PurgeStream(connArgs, queue)

@@ -53,6 +53,27 @@ func CreateStream(connArgs ConnArguments, queue string, retention string, maxMsg
 	return nil
 }
 
+// ListStreams returns the streams with their message and consumer counts. The
+// stream info already carries the consumer count, so unlike
+// ListStreamsWithConsumers this costs no per-stream consumer listing.
+func ListStreams(connArgs ConnArguments) ([]backends.QueueInfo, error) {
+	nc, js, err := ConnectWithJetStream(connArgs)
+	if err != nil {
+		return nil, err
+	}
+	defer nc.Close()
+
+	var streams []backends.QueueInfo
+	for info := range js.StreamsInfo() {
+		streams = append(streams, backends.QueueInfo{
+			Name:          info.Config.Name,
+			MessageCount:  int64(info.State.Msgs),
+			ConsumerCount: info.State.Consumers,
+		})
+	}
+	return streams, nil
+}
+
 // ListStreamsWithConsumers returns streams with their consumers as children.
 func ListStreamsWithConsumers(connArgs ConnArguments) ([]backends.ObjectNode, error) {
 	nc, js, err := ConnectWithJetStream(connArgs)

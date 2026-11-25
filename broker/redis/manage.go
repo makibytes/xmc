@@ -179,12 +179,20 @@ func listByPattern(connArgs ConnArguments, prefix string) ([]backends.QueueInfo,
 		return nil, fmt.Errorf("scanning %s: %w", prefix, err)
 	}
 
+	// One round trip for all lengths. A key that is not a stream fails its own
+	// XLEN (counted as 0, like before) without failing the others.
+	pipe := client.Pipeline()
+	lengths := make([]*redis.IntCmd, len(keys))
+	for i, k := range keys {
+		lengths[i] = pipe.XLen(ctx, k)
+	}
+	_, _ = pipe.Exec(ctx)
+
 	var queues []backends.QueueInfo
-	for _, k := range keys {
-		length, _ := client.XLen(ctx, k).Result()
+	for i, k := range keys {
 		queues = append(queues, backends.QueueInfo{
 			Name:         strings.TrimPrefix(k, prefix),
-			MessageCount: length,
+			MessageCount: lengths[i].Val(),
 		})
 	}
 	return queues, nil

@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
@@ -199,12 +201,28 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 			Use:   "list",
 			Short: "List broker objects",
 			RunE: func(c *cobra.Command, _ []string) error {
-				w := c.OutOrStdout()
-				for _, ot := range spec.Objects {
-					nodes, err := ot.List()
+				// Each List is a management-API round trip: fetch them all
+				// concurrently, then report in declaration order (the first
+				// error in that order wins, as with sequential fetching).
+				lists := make([][]backends.ObjectNode, len(spec.Objects))
+				errs := make([]error, len(spec.Objects))
+				var wg sync.WaitGroup
+				for i, ot := range spec.Objects {
+					wg.Go(func() { lists[i], errs[i] = ot.List() })
+				}
+				wg.Wait()
+				for _, err := range errs {
 					if err != nil {
 						return err
 					}
+				}
+
+				w := c.OutOrStdout()
+				for i, ot := range spec.Objects {
+					// Brokers differ in the order they list objects in (Artemis
+					// returns map order); present them sorted by name.
+					nodes := slices.Clone(lists[i])
+					slices.SortStableFunc(nodes, func(a, b backends.ObjectNode) int { return strings.Compare(a.Name, b.Name) })
 					prefix := ""
 					if hasMultiple {
 						prefix = strings.ToLower(ot.Label) + "  "

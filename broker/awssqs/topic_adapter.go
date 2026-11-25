@@ -18,6 +18,7 @@ import (
 type TopicAdapter struct {
 	sqsc            *sqs.Client
 	snsc            *sns.Client
+	topicARNs       map[string]string // topic name → ARN (CreateTopic is idempotent, but a request per publish is not free)
 	subQueues       map[string]string // (topic|group) → ready subscriber queue URL
 	ephemeralQueues []string
 	subscriptions   []string
@@ -29,12 +30,25 @@ func NewTopicAdapter(args ConnArguments) (*TopicAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapter{sqsc: sqsc, snsc: snsc, subQueues: make(map[string]string)}, nil
+	return &TopicAdapter{sqsc: sqsc, snsc: snsc, topicARNs: make(map[string]string), subQueues: make(map[string]string)}, nil
+}
+
+// topicARN returns the ARN of the named topic, creating the topic on first use.
+func (a *TopicAdapter) topicARN(ctx context.Context, name string) (string, error) {
+	if arn, ok := a.topicARNs[name]; ok {
+		return arn, nil
+	}
+	arn, err := ensureTopic(ctx, a.snsc, name)
+	if err != nil {
+		return "", err
+	}
+	a.topicARNs[name] = arn
+	return arn, nil
 }
 
 // Publish publishes a message to a topic.
 func (a *TopicAdapter) Publish(ctx context.Context, opts backends.PublishOptions) error {
-	topicARN, err := ensureTopic(ctx, a.snsc, opts.Topic)
+	topicARN, err := a.topicARN(ctx, opts.Topic)
 	if err != nil {
 		return err
 	}
@@ -85,7 +99,7 @@ func (a *TopicAdapter) ensureSubscriberQueue(ctx context.Context, opts backends.
 		return url, nil
 	}
 
-	topicARN, err := ensureTopic(ctx, a.snsc, opts.Topic)
+	topicARN, err := a.topicARN(ctx, opts.Topic)
 	if err != nil {
 		return "", err
 	}
