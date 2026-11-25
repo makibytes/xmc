@@ -35,14 +35,14 @@ func reconnectTick() tea.Cmd {
 // for the auto-reconnect loop, kept distinct so the two paths don't collide.
 func (m aiTUIModel) probe(mk func(error) tea.Msg) tea.Cmd {
 	ping := m.session.spec.Ping
-	return func() tea.Msg {
+	return guard(func(err error) tea.Msg { return mk(err) }, func() tea.Msg {
 		conn, err := ping()
 		if err != nil {
 			return mk(err)
 		}
 		_ = conn.Close()
 		return mk(nil)
-	}
+	})
 }
 
 func (m aiTUIModel) startProbeConnection() tea.Cmd {

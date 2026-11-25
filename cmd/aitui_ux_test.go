@@ -368,8 +368,8 @@ func TestAITUI_Reset_KeepsSessionTokenTotals(t *testing.T) {
 	if len(m.ai.history) != 0 || len(m.copyItems) != 0 {
 		t.Error("/reset must clear the conversation and clipboard items")
 	}
-	if cmd == nil {
-		t.Error("/reset should refresh the topology in the background (a tea.Cmd), not inline")
+	if cmd != nil {
+		t.Error("/reset must not run anything: the topology comes from the sidebar, not a second listing")
 	}
 }
 

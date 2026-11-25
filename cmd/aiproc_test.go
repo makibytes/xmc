@@ -222,13 +222,3 @@ func TestProcessDone_AfterKill_SaysStopped(t *testing.T) {
 		t.Errorf("a killed process should be announced as stopped:\n%s", m.transcript.String())
 	}
 }
-
-func TestProcessPane_KillBeforeCancelFuncArrives(t *testing.T) {
-	m := newTestModelWithProcs(1)
-	m = pressRune(t, m, "K") // no cancel func yet
-	cancelled := false
-	_, _ = m.Update(procCancelMsg{id: 0, cancel: func() { cancelled = true }})
-	if !cancelled {
-		t.Error("a kill requested before the cancel func arrived must fire it on arrival")
-	}
-}

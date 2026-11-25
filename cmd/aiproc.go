@@ -41,7 +41,7 @@ type bgProcess struct {
 	id      int
 	name    string
 	command string
-	cancel  context.CancelFunc // set via procCancelMsg; UI goroutine only thereafter
+	cancel  context.CancelFunc // created with the process on the UI goroutine; kill/delete call it
 	doneCh  chan struct{}      // closed by the background goroutine when it exits
 
 	mu           sync.Mutex
@@ -53,6 +53,13 @@ type bgProcess struct {
 	// Set in handleProcDoneMsg (UI goroutine only):
 	done bool
 	err  error
+}
+
+// stop cancels the process's context (a no-op for one without, as in tests).
+func (p *bgProcess) stop() {
+	if p.cancel != nil {
+		p.cancel()
+	}
 }
 
 // snapshotText returns a safe copy of the captured output under mu.
@@ -101,13 +108,6 @@ func (w procWriter) Write(b []byte) (int, error) {
 }
 
 // ---------- Bubble Tea messages ----------
-
-// procCancelMsg delivers the context cancel func from the spawned goroutine
-// back to the UI goroutine so it can be stored for kill/delete operations.
-type procCancelMsg struct {
-	id     int
-	cancel context.CancelFunc
-}
 
 // procDoneMsg is sent by the background goroutine when the process finishes.
 type procDoneMsg struct {
@@ -320,6 +320,8 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 		doneCh:  make(chan struct{}),
 	}
 	p.out.max = maxProcCapture
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
 	m.procNextID++
 	m.procs = append(m.procs, p)
 	m.ensureProcWindow()
@@ -357,35 +359,16 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 	// foreground session, so the process still gets auto-reconnect.
 	procSess := newShellSession(m.session.spec, m.session.aliases)
 
-	return m, func() tea.Msg {
+	return m, guard(func(err error) tea.Msg { return procDoneMsg{id: id, err: err} }, func() tea.Msg {
 		defer close(p.doneCh)
 		defer procSess.close()
-		ctx, cancel := context.WithCancel(context.Background())
-		if prog := derefProgram(pptr); prog != nil {
-			prog.Send(procCancelMsg{id: id, cancel: cancel})
-		}
+		defer cancel()
 		err := procSess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), pwOut, pwErr)
-		cancel()
 		return procDoneMsg{id: id, err: err}
-	}
+	})
 }
 
 // ---------- Message handlers ----------
-
-func (m aiTUIModel) handleProcCancelMsg(msg procCancelMsg) (tea.Model, tea.Cmd) {
-	for _, p := range m.procs {
-		if p.id == msg.id {
-			p.cancel = msg.cancel // UI goroutine; no lock needed
-			if p.killed {
-				msg.cancel() // K was pressed before the cancel func arrived
-			}
-			return m, nil
-		}
-	}
-	// Process was already deleted before the cancel arrived — fire it now.
-	msg.cancel()
-	return m, nil
-}
 
 func (m aiTUIModel) handleProcDoneMsg(msg procDoneMsg) (tea.Model, tea.Cmd) {
 	for _, p := range m.procs {
@@ -470,22 +453,15 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.procs) == 0 {
 				return m, nil
 			}
-			p := m.procs[m.procSel]
-			if p.cancel != nil {
-				p.cancel()
-			}
+			m.procs[m.procSel].stop()
 			m.procs = append(m.procs[:m.procSel], m.procs[m.procSel+1:]...)
 			m.procsChanged()
 
 		case "K": // kill but keep in list (its output stays viewable)
 			if len(m.procs) > 0 && m.procSel < len(m.procs) {
-				// The cancel func may not have arrived yet (procCancelMsg);
-				// handleProcCancelMsg then fires it on arrival.
 				if p := m.procs[m.procSel]; !p.done {
 					p.killed = true
-					if p.cancel != nil {
-						p.cancel()
-					}
+					p.stop()
 				}
 			}
 
@@ -626,9 +602,7 @@ func (m *aiTUIModel) dumpProcessOutput(p *bgProcess) {
 // killAllProcs cancels every running background process. Safe to call multiple times.
 func (m *aiTUIModel) killAllProcs() {
 	for _, p := range m.procs {
-		if p.cancel != nil {
-			p.cancel()
-		}
+		p.stop()
 	}
 }
 

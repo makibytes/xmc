@@ -192,20 +192,21 @@ func withMetadataRender(msg *backends.Message, fmtMode metadataFormat) sideActio
 
 // runRead is the shared body of the peek, peek-metadata and receive hotkeys:
 // it echoes desc, switches to the executing state and returns a Cmd that
-// fetches one message and renders it. An empty source is not an error.
-func (m *aiTUIModel) runRead(desc string, render func(*backends.Message, metadataFormat) sideActionMsg, fetch func() (*backends.Message, error)) (tea.Model, tea.Cmd) {
+// fetches one message and renders it. An empty source is not an error. fetch
+// gets a context that Esc cancels.
+func (m *aiTUIModel) runRead(desc string, render func(*backends.Message, metadataFormat) sideActionMsg, fetch func(ctx context.Context) (*backends.Message, error)) (tea.Model, tea.Cmd) {
 	fmtMode := m.metadataFormat
-	m.beginSideAction(desc)
-	return *m, func() tea.Msg {
-		msg, err := fetch()
+	cmd := m.startSideAction(desc, func(ctx context.Context) sideActionMsg {
+		msg, err := fetch(ctx)
 		if err != nil {
-			if backends.IsNoMessage(err) {
+			if backends.IsNoMessage(err) && ctx.Err() == nil {
 				return sideActionMsg{action: "   └ (no messages available)"}
 			}
 			return sideActionMsg{err: err}
 		}
 		return render(msg, fmtMode)
-	}
+	})
+	return *m, cmd
 }
 
 // resolveReadAction returns a resolve func for "R" (receive: hint="receive",
@@ -233,7 +234,7 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 				topic, resolveErr := m.sidebarTarget(parentName, true, false)
 				session := m.session
 				desc := fmt.Sprintf("▶ %s Subscription \"%s\"", descVerb, sub)
-				return m.runRead(desc, render, func() (*backends.Message, error) {
+				return m.runRead(desc, render, func(ctx context.Context) (*backends.Message, error) {
 					if resolveErr != nil {
 						return nil, resolveErr
 					}
@@ -241,7 +242,7 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 					if err != nil {
 						return nil, fmt.Errorf("adapter: %w", err)
 					}
-					ctx, cancel := context.WithTimeout(context.Background(), sideActionTimeout)
+					ctx, cancel := context.WithTimeout(ctx, sideActionTimeout)
 					defer cancel()
 					return ta.Subscribe(ctx, backends.SubscribeOptions{
 						Topic:       topic,
@@ -267,7 +268,7 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 			queue, resolveErr := m.sidebarTarget(name, false, false)
 			session := m.session
 			desc := fmt.Sprintf("▶ %s %s \"%s\"", descVerb, ow.singularLabel(), name)
-			return m.runRead(desc, render, func() (*backends.Message, error) {
+			return m.runRead(desc, render, func(ctx context.Context) (*backends.Message, error) {
 				if resolveErr != nil {
 					return nil, resolveErr
 				}
@@ -275,7 +276,7 @@ func resolveReadAction(hint, descVerb string, ack bool, verbosity backends.Verbo
 				if err != nil {
 					return nil, fmt.Errorf("adapter: %w", err)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), sideActionTimeout)
+				ctx, cancel := context.WithTimeout(ctx, sideActionTimeout)
 				defer cancel()
 				return qa.Receive(ctx, backends.ReceiveOptions{
 					Queue:       queue,

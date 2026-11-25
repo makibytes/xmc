@@ -212,7 +212,8 @@ func (m aiTUIModel) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		trimHistory(&m.ai.history, maxHistory)
 
 		m.fixAttempts = 0
-		return m, m.beginAIRequest()
+		request := m.beginAIRequest() // a statement of its own: it mutates m
+		return m, request
 	}
 
 	// Everything else edits the input. Pre-size BEFORE forwarding the key:
@@ -364,13 +365,6 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.fixAttempts = 0
 		m.clearTranscript()
 		m.appendTranscript(dimStyle.Render("(conversation reset)") + "\n\n")
-		// Re-read the topology for the fresh conversation off the UI
-		// goroutine: "manage list" can take seconds on a management API.
-		ai := m.ai
-		return m, func() tea.Msg {
-			ai.refreshTopology()
-			return nil
-		}
 
 	case "/refresh":
 		if arg != "" {
@@ -390,7 +384,8 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			m.noteSaved("periodic refresh → "+persistVal, saveRefreshInterval(persistVal))
 			// If turned on and not already refreshing, kick off the loop.
 			if enabled && !wasEnabled && !m.refreshing && len(m.objTypes) > 0 {
-				return m, m.beginRefresh()
+				refresh := m.beginRefresh()
+				return m, refresh
 			}
 			return m, nil
 		}
@@ -511,15 +506,14 @@ Processes window
 
 func (m aiTUIModel) handleKeyThinking(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
-		if m.execCancel != nil {
-			m.execCancel()
+		if m.aiCancel != nil {
+			m.aiCancel()
+			m.aiCancel = nil
 		}
+		m.aiGen++ // whatever the cancelled request still reports is stale
 		m.appendTranscript(dimStyle.Render("(cancelled)") + "\n\n")
-		m.state = tuiIdle
-		if len(m.ai.history) > 0 && m.ai.history[len(m.ai.history)-1].Role == "user" {
-			m.ai.history = m.ai.history[:len(m.ai.history)-1]
-		}
-		m.input.Focus()
+		m.dropPendingUserTurn()
+		m.toIdle()
 		return m, nil
 	}
 	return m, nil
@@ -755,13 +749,27 @@ func promptSpecs() map[string]promptSpec {
 // action (peek, receive, send, publish).
 const sideActionTimeout = 5 * time.Second
 
-// beginSideAction echoes desc into the transcript, ends the active prompt (if
-// any) and switches to the executing state; the caller returns the tea.Cmd
-// that does the work.
-func (m *aiTUIModel) beginSideAction(desc string) {
+// startSideAction echoes desc into the transcript, ends the active prompt (if
+// any), switches to the executing state and returns the tea.Cmd that runs work.
+// work gets a context that Esc cancels (create/delete/purge call the broker's
+// management API without one, so for those only the UI-side abandon applies);
+// a panic in it, or a result arriving after the UI gave up on the action
+// (abandonExec), never reaches the transcript.
+func (m *aiTUIModel) startSideAction(desc string, work func(ctx context.Context) sideActionMsg) tea.Cmd {
 	m.appendTranscript(histCmdStyle.Render(desc) + "\n")
 	m.promptActive = false
 	m.state = tuiExecuting
+	ctx, cancel := context.WithCancel(context.Background())
+	m.execCancel = cancel
+	m.execCancelled = false
+	m.execGen++
+	gen := m.execGen
+	return guard(func(err error) tea.Msg { return sideActionMsg{err: err, gen: gen} }, func() tea.Msg {
+		defer cancel()
+		msg := work(ctx)
+		msg.gen = gen
+		return msg
+	})
 }
 
 // closePrompt ends the active sidebar prompt without running anything.
@@ -801,11 +809,11 @@ func confirmCreatePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 		m.closePrompt()
 		return m, nil
 	}
-	m.beginSideAction(fmt.Sprintf("▶ create %s \"%s\"", ow.singularLabel(), name))
 	initManageAction(action)
-	return m, func() tea.Msg {
+	cmd := m.startSideAction(fmt.Sprintf("▶ create %s \"%s\"", ow.singularLabel(), name), func(context.Context) sideActionMsg {
 		return sideActionMsg{err: action.Run(name), objects: true}
-	}
+	})
+	return m, cmd
 }
 
 func confirmDeletePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
@@ -815,11 +823,11 @@ func confirmDeletePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	name := m.promptName
-	m.beginSideAction(fmt.Sprintf("▶ delete %s \"%s\"", ow.singularLabel(), name))
 	initManageAction(action)
-	return m, func() tea.Msg {
+	cmd := m.startSideAction(fmt.Sprintf("▶ delete %s \"%s\"", ow.singularLabel(), name), func(context.Context) sideActionMsg {
 		return sideActionMsg{err: action.Run(name), objects: true}
-	}
+	})
+	return m, cmd
 }
 
 func confirmPurgePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
@@ -829,8 +837,10 @@ func confirmPurgePrompt(m aiTUIModel, ow *objWindow) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	name, purge := m.promptName, ms.Purge
-	m.beginSideAction(fmt.Sprintf("▶ purge %s \"%s\"", ow.singularLabel(), name))
-	return m, func() tea.Msg { return purgedMsg(purge(name)) }
+	cmd := m.startSideAction(fmt.Sprintf("▶ purge %s \"%s\"", ow.singularLabel(), name), func(context.Context) sideActionMsg {
+		return purgedMsg(purge(name))
+	})
+	return m, cmd
 }
 
 func confirmPurgeSubscriptionPrompt(m aiTUIModel, _ *objWindow) (tea.Model, tea.Cmd) {
@@ -840,8 +850,10 @@ func confirmPurgeSubscriptionPrompt(m aiTUIModel, _ *objWindow) (tea.Model, tea.
 		return m, nil
 	}
 	sub, topic, purge := m.promptName, m.promptTarget, ms.PurgeSubscription
-	m.beginSideAction(fmt.Sprintf("▶ purge Subscription \"%s\"", sub))
-	return m, func() tea.Msg { return purgedMsg(purge(topic, sub)) }
+	cmd := m.startSideAction(fmt.Sprintf("▶ purge Subscription \"%s\"", sub), func(context.Context) sideActionMsg {
+		return purgedMsg(purge(topic, sub))
+	})
+	return m, cmd
 }
 
 // confirmSendPrompt sends the typed payload to the selected object: through
@@ -871,14 +883,13 @@ func (m aiTUIModel) confirmProduce(ow *objWindow, useTopic, viaExchange bool) (t
 	if useTopic {
 		verb = "publish"
 	}
-	m.beginSideAction(fmt.Sprintf("▶ %s %s \"%s\"", verb, ow.singularLabel(), name))
 	target, resolveErr := m.sidebarTarget(name, useTopic, viaExchange)
 	session := m.session
-	return m, func() tea.Msg {
+	cmd := m.startSideAction(fmt.Sprintf("▶ %s %s \"%s\"", verb, ow.singularLabel(), name), func(ctx context.Context) sideActionMsg {
 		if resolveErr != nil {
 			return sideActionMsg{err: resolveErr}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), sideActionTimeout)
+		ctx, cancel := context.WithTimeout(ctx, sideActionTimeout)
 		defer cancel()
 		if useTopic {
 			ta, err := session.getTopicAdapter()
@@ -898,7 +909,8 @@ func (m aiTUIModel) confirmProduce(ow *objWindow, useTopic, viaExchange bool) (t
 			return sideActionMsg{err: err}
 		}
 		return sideActionMsg{action: "   └ sent"}
-	}
+	})
+	return m, cmd
 }
 
 func (m aiTUIModel) handleKeyPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1034,15 +1046,23 @@ func formatMessageMetadataForSideAction(msg *backends.Message, format metadataFo
 	}
 }
 
+// handleKeyExecuting: Esc/Ctrl+C cancels the running command or sidebar action.
+// A well-behaved one returns within milliseconds; if it ignores its context
+// (a blocked broker driver) the UI stops waiting — after execAbandonAfter, or
+// at once on a second press — instead of staying "Running…" for good.
 func (m aiTUIModel) handleKeyExecuting(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
-		if m.execCancel != nil {
-			m.execCancel()
-			m.execCancelled = true
-		}
+	if msg.Type != tea.KeyEsc && msg.Type != tea.KeyCtrlC {
 		return m, nil
 	}
-	return m, nil
+	if m.execCancel != nil {
+		m.execCancel()
+	}
+	if m.execCancelled {
+		return m.abandonExec() // pressed again: stop waiting now
+	}
+	m.execCancelled = true
+	gen := m.execGen
+	return m, tea.Tick(execAbandonAfter, func(time.Time) tea.Msg { return execAbandonMsg{gen: gen} })
 }
 
 // ---------- Input prompt helpers ----------
@@ -1090,7 +1110,7 @@ func (m aiTUIModel) startLoadObjects() tea.Cmd {
 	for i, w := range m.objTypes {
 		fns[i] = listFn{fn: w.listFn}
 	}
-	return func() tea.Msg {
+	return guard(func(err error) tea.Msg { return objectsMsg{errs: []error{err}} }, func() tea.Msg {
 		if len(fns) == 0 {
 			return objectsMsg{errs: []error{errNoManageAPI}}
 		}
@@ -1119,7 +1139,7 @@ func (m aiTUIModel) startLoadObjects() tea.Cmd {
 		}
 		_ = g.Wait()
 		return msg
-	}
+	})
 }
 
 // autoUpdateEnabled returns true when periodic sidebar refresh is enabled.
@@ -1165,6 +1185,14 @@ func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// The model learns the broker's contents from this same listing — it never
+	// lists the broker itself, and a request never waits for one.
+	if m.ai != nil {
+		if text, ok := m.topologyText(); ok {
+			m.ai.setTopology(text)
+		}
+	}
+
 	// Schedule the next periodic refresh if this was a background fetch.
 	if m.refreshing {
 		m.refreshing = false
@@ -1175,6 +1203,28 @@ func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// topologyText renders the sidebar's object windows the way "manage list"
+// prints them. ok is false while any window has no listing (never loaded, or
+// the last fetch failed), so a failed refresh keeps the previous topology.
+func (m aiTUIModel) topologyText() (string, bool) {
+	var groups []objectGroup
+	for _, ow := range m.objTypes {
+		if ow.kind == objWindowProcs {
+			continue
+		}
+		if ow.err != nil {
+			return "", false
+		}
+		groups = append(groups, objectGroup{label: ow.label, nodes: ow.nodes})
+	}
+	if len(groups) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	writeObjectList(&b, groups)
+	return b.String(), true
 }
 
 // ---------- Sidebar helpers ----------

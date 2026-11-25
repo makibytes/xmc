@@ -62,6 +62,7 @@ func runAI(cmd *cobra.Command, spec BrokerSpec) error {
 		rootCmd:            rootCmd,
 		autoUpdateObjects:  cfg.AI.autoUpdateObjectsEnabled(),
 		autoUpdateMessages: cfg.AI.autoUpdateMessagesEnabled(),
+		requestTimeout:     cfg.AI.requestTimeoutDuration(),
 		refreshPeriod:      period,
 		refreshEnabled:     intervalOn && (cfg.AI.autoUpdateObjectsEnabled() || cfg.AI.autoUpdateMessagesEnabled()),
 	}

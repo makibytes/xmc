@@ -4,6 +4,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,6 +62,7 @@ type aiSession struct {
 	history            []aiMessage // UI-goroutine-owned; see struct doc above
 	initOnce           sync.Once
 	initErr            error
+	requestTimeout     time.Duration // 0: defaultRequestTimeout
 	providerName       string
 	modelName          string
 	notice             string        // guarded by mu; shown once, see takeNotice
@@ -149,31 +151,40 @@ func (a *aiSession) rebuildPrompt() {
 	log.Verbose("AI system prompt: %d bytes", len(a.sysPrompt))
 }
 
-// refreshTopology runs "manage list" to discover queues/topics on the broker
-// and caches the result for the system prompt. Errors are swallowed —
-// topology is a nice-to-have, not a requirement.
-func (a *aiSession) refreshTopology() {
-	if a.session.spec.ManageSpec == nil {
-		return
-	}
-
-	var buf bytes.Buffer
-	err := a.session.executePipelineIO(context.Background(), "manage list", a.rootCmd, strings.NewReader(""), &buf, io.Discard)
-	if err != nil {
-		log.Verbose("AI topology refresh: %s", err)
-		return
-	}
-
-	result := strings.TrimSpace(buf.String())
-	if result == "" {
-		return
-	}
+// setTopology records the broker's current queues/topics/… (as "manage list"
+// prints them) for the system prompt. It is fed from the sidebar's own listing
+// — the AI shell never lists the broker a second time, and a request never
+// waits for a listing.
+func (a *aiSession) setTopology(text string) {
+	text = strings.TrimSpace(text)
 	a.mu.Lock()
-	if result != a.topology {
-		a.topology = result
+	defer a.mu.Unlock()
+	if text == "" || text == a.topology {
+		return
+	}
+	a.topology = text
+	if a.sysPrompt != "" { // not built yet: init() will include the topology
 		a.rebuildPrompt()
 	}
-	a.mu.Unlock()
+}
+
+// timeout is the request timeout in effect.
+func (a *aiSession) timeout() time.Duration {
+	if a.requestTimeout > 0 {
+		return a.requestTimeout
+	}
+	return defaultRequestTimeout
+}
+
+// describeError words an AI request failure for the transcript.
+func (a *aiSession) describeError(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("the AI request timed out after %s (raise ai.request-timeout in the config)", a.timeout())
+	case errors.Is(err, context.Canceled):
+		return "the AI request was cancelled"
+	}
+	return err.Error()
 }
 
 // trimHistory keeps the last maxLen messages, preserving conversation order.

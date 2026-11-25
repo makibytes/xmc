@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makibytes/xmc/log"
@@ -12,16 +13,26 @@ import (
 
 // ---------- AI request ----------
 
+// aiWatchdogGrace is how long past the request timeout the UI waits before it
+// gives up on an AI request that has not reported back.
+const aiWatchdogGrace = 15 * time.Second
+
 // beginAIRequest enters the thinking state and starts a new AI request with
-// a fresh generation; every AI request goes through here.
+// a fresh generation; every AI request goes through here. The request's
+// context is created here, on the UI goroutine, so Esc can cancel it from the
+// first instant — and a watchdog bounds how long the UI can wait for it.
 func (m *aiTUIModel) beginAIRequest() tea.Cmd {
 	m.aiGen++
 	m.state = tuiThinking
 	m.streamBuf.Reset()
-	return m.startAIRequest(m.aiGen)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.aiCancel = cancel
+	gen := m.aiGen
+	watchdog := tea.Tick(m.ai.timeout()+aiWatchdogGrace, func(time.Time) tea.Msg { return aiWatchdogMsg{gen: gen} })
+	return tea.Batch(m.startAIRequest(ctx, cancel, gen), watchdog)
 }
 
-func (m aiTUIModel) startAIRequest(gen int) tea.Cmd {
+func (m aiTUIModel) startAIRequest(ctx context.Context, cancel context.CancelFunc, gen int) tea.Cmd {
 	ai := m.ai
 	pptr := m.program
 
@@ -36,32 +47,15 @@ func (m aiTUIModel) startAIRequest(gen int) tea.Cmd {
 	// the first AI prompt, which trimHistory alone doesn't catch until
 	// history exceeds maxHistory).
 	history := append([]aiMessage(nil), leadingUserHistory(ai.history)...)
-	// topology is mu-guarded (refreshTopology writes it from background
-	// goroutines), so the read needs the lock even here on the UI goroutine.
-	ai.mu.Lock()
-	needsTopology := ai.topology == "" && len(ai.history) <= 1
-	ai.mu.Unlock()
 
-	return func() tea.Msg {
+	return guard(func(err error) tea.Msg { return aiDoneMsg{err: err, gen: gen} }, func() tea.Msg {
+		defer cancel()
 		if err := ai.init(); err != nil {
 			return aiDoneMsg{err: err, gen: gen}
 		}
 
-		if needsTopology {
-			ai.refreshTopology()
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		prog := derefProgram(pptr)
-
-		if prog != nil {
-			prog.Send(setCancelMsg{cancel: cancel})
-		}
-
 		var onToken func(string)
-		if prog != nil {
+		if prog := derefProgram(pptr); prog != nil {
 			onToken = func(token string) {
 				prog.Send(tokenMsg{text: token, gen: gen})
 			}
@@ -73,12 +67,39 @@ func (m aiTUIModel) startAIRequest(gen int) tea.Cmd {
 
 		text, usage, err := ai.client.Complete(ctx, sysPrompt, history, onToken)
 		return aiDoneMsg{text: text, usage: usage, err: err, gen: gen}
+	})
+}
+
+// handleAIWatchdog gives up on an AI request that outlived its timeout (plus
+// grace) without reporting back — a wedged goroutine must not leave the UI
+// thinking forever. The generation check makes it a no-op for any request
+// that already finished, was cancelled, or was replaced.
+func (m aiTUIModel) handleAIWatchdog(msg aiWatchdogMsg) (tea.Model, tea.Cmd) {
+	if m.state != tuiThinking || msg.gen != m.aiGen {
+		return m, nil
+	}
+	if m.aiCancel != nil {
+		m.aiCancel()
+		m.aiCancel = nil
+	}
+	m.aiGen++ // whatever the stuck request eventually reports is stale
+	m.appendTranscript(warnStyle.Render("error: no answer from the AI provider in time — try again") + "\n\n")
+	m.dropPendingUserTurn()
+	m.toIdle()
+	return m, nil
+}
+
+// dropPendingUserTurn removes the user message of a request that produced no
+// answer, so the history stays alternating and a retry doesn't repeat it.
+func (m *aiTUIModel) dropPendingUserTurn() {
+	if n := len(m.ai.history); n > 0 && m.ai.history[n-1].Role == "user" {
+		m.ai.history = m.ai.history[:n-1]
 	}
 }
 
 func (m aiTUIModel) startListModels() tea.Cmd {
 	ai := m.ai
-	return func() tea.Msg {
+	return guard(func(err error) tea.Msg { return modelsMsg{err: err} }, func() tea.Msg {
 		if err := ai.init(); err != nil {
 			return modelsMsg{err: err}
 		}
@@ -88,7 +109,7 @@ func (m aiTUIModel) startListModels() tea.Cmd {
 		}
 		models, err := lister.ListModels(context.Background())
 		return modelsMsg{models: models, err: err}
-	}
+	})
 }
 
 func (m aiTUIModel) handleModelsDone(msg modelsMsg) (tea.Model, tea.Cmd) {
@@ -134,18 +155,17 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 	if m.state != tuiThinking || msg.gen != m.aiGen {
 		return m, nil
 	}
-	m.execCancel = nil
+	m.aiCancel = nil
 	if n := m.ai.takeNotice(); n != "" {
 		m.appendTranscript(dimStyle.Render(n) + "\n\n")
 	}
 	if msg.err != nil {
-		if errors.Is(msg.err, context.Canceled) {
-			return m, nil
-		}
-		m.appendTranscript(warnStyle.Render("error: "+msg.err.Error()) + "\n\n")
-		if len(m.ai.history) > 0 && m.ai.history[len(m.ai.history)-1].Role == "user" {
-			m.ai.history = m.ai.history[:len(m.ai.history)-1]
-		}
+		// Every failure ends the same way: one line saying what happened, the
+		// unanswered question dropped from the history, back to the prompt.
+		// (A cancellation the user asked for never gets here — Esc already
+		// returned to idle, and the generation check above drops the result.)
+		m.appendTranscript(warnStyle.Render("error: "+m.ai.describeError(msg.err)) + "\n\n")
+		m.dropPendingUserTurn()
 		m.toIdle()
 		return m, nil
 	}
@@ -174,9 +194,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.appendTranscript(dimStyle.Render(fmt.Sprintf("(empty response from %s — try rephrasing)", m.ai.modelName)) + "\n\n")
 		}
-		if len(m.ai.history) > 0 && m.ai.history[len(m.ai.history)-1].Role == "user" {
-			m.ai.history = m.ai.history[:len(m.ai.history)-1]
-		}
+		m.dropPendingUserTurn()
 		m.toIdle()
 		return m, nil
 	}
@@ -251,38 +269,63 @@ func (m aiTUIModel) startExecution(command string) (tea.Model, tea.Cmd) {
 
 	m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: command})
 
+	// The context is created here, on the UI goroutine, so Esc cancels from the
+	// first instant; execGen lets the UI ignore this run's result should it
+	// have to abandon the run (abandonExec).
+	ctx, cancel := context.WithCancel(context.Background())
+	m.execCancel = cancel
+	m.execCancelled = false
+	m.execGen++
+	gen := m.execGen
+
 	ai := m.ai
 	sess := m.session
 	rootCmd := m.rootCmd
-	pptr := m.program
+	// Whether the sidebar must be re-read afterwards: listings, and anything
+	// that changes objects or messages per the auto-update settings.
+	refresh := anyCommand(command, sess.aliases, isManageList) ||
+		(ai.autoUpdateObjects && anyCommand(command, sess.aliases, mutatesObjects)) ||
+		(ai.autoUpdateMessages && anyCommand(command, sess.aliases, mutatesMessages))
 
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithCancel(context.Background())
+	return m, guard(func(err error) tea.Msg { return execDoneMsg{err: err, gen: gen} }, func() tea.Msg {
 		defer cancel()
-
-		prog := derefProgram(pptr)
-
-		if prog != nil {
-			prog.Send(setCancelMsg{cancel: cancel})
-		}
-
 		execErr := sess.executePipelineIO(ctx, command, rootCmd, strings.NewReader(""), capture.writer(false), capture.writer(true))
-
-		refresh := anyCommand(command, sess.aliases, isManageList) ||
-			(ai.autoUpdateObjects && anyCommand(command, sess.aliases, mutatesObjects)) ||
-			(ai.autoUpdateMessages && anyCommand(command, sess.aliases, mutatesMessages))
-		if refresh {
-			ai.refreshTopology()
-		}
 
 		chunks, truncated, stdout, stderr := capture.snapshot()
 		// The feedback message is appended to ai.history in handleExecDone,
 		// on the UI goroutine — not here (see aiSession doc comment on history).
-		return execDoneMsg{err: execErr, stdout: stdout, stderr: stderr, chunks: chunks, truncated: truncated}
+		return execDoneMsg{gen: gen, refresh: refresh, err: execErr, stdout: stdout, stderr: stderr, chunks: chunks, truncated: truncated}
+	})
+}
+
+// execAbandonAfter is how long a cancelled command gets to return before the
+// UI stops waiting for it.
+const execAbandonAfter = 2 * time.Second
+
+// abandonExec stops waiting for a command or sidebar action that was cancelled
+// but has not returned (it ignores its context — a blocked driver call): the
+// UI goes back to idle at once and the late result, whenever it arrives, is
+// dropped by the generation check.
+func (m aiTUIModel) abandonExec() (tea.Model, tea.Cmd) {
+	foreground := m.liveCapture != nil
+	m.execGen++
+	m.execCancelled = false
+	m.execCancel = nil
+	m.liveCapture = nil
+	m.appendTranscript(dimStyle.Render("(cancelled — it did not stop in time; its result is ignored)") + "\n\n")
+	if foreground {
+		shellHistory.Append(m.proposedCmd)
+		m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: buildFeedback(errors.New("cancelled by the user"), "", "")})
+		trimHistory(&m.ai.history, maxHistory)
 	}
+	m.toIdle()
+	return m, nil
 }
 
 func (m aiTUIModel) handleExecDone(msg execDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.gen != m.execGen {
+		return m, nil // the run was abandoned; its late result is of no interest
+	}
 	cancelled := m.execCancelled
 	m.execCancelled = false
 	m.execCancel = nil
@@ -320,17 +363,31 @@ func (m aiTUIModel) handleExecDone(msg execDoneMsg) (tea.Model, tea.Cmd) {
 	m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: feedback})
 	trimHistory(&m.ai.history, maxHistory)
 
+	// The sidebar shows what the command may have changed (or listed).
+	var reload tea.Cmd
+	if msg.refresh && len(m.objTypes) > 0 {
+		m.loadingObjects = true
+		reload = m.startLoadObjects()
+	}
+
 	// Auto-fix: on error, ask the AI to correct the command (up to
 	// maxFixAttempts). Never after a user cancel — the interrupted command
-	// (e.g. "signal: killed" from an external one) isn't a mistake to fix.
-	if msg.err != nil && !cancelled && m.fixAttempts < maxFixAttempts && m.mode == modeAI {
-		m.fixAttempts++
-		m.appendTranscript(dimStyle.Render("↻ auto-fixing…") + "\n\n")
-		return m, m.beginAIRequest()
+	// (e.g. "signal: killed" from an external one) isn't a mistake to fix —
+	// and never for a connection problem, which no rewording of the command
+	// cures (the title bar shows the reconnect in progress).
+	if msg.err != nil && !cancelled && m.mode == modeAI && m.fixAttempts < maxFixAttempts {
+		if isConnectionError(msg.err) {
+			m.appendTranscript(dimStyle.Render("(connection problem — not asking the AI to fix it; see the title bar)") + "\n\n")
+		} else {
+			m.fixAttempts++
+			m.appendTranscript(dimStyle.Render("↻ auto-fixing…") + "\n\n")
+			request := m.beginAIRequest()
+			return m, tea.Batch(reload, request)
+		}
 	}
 
 	m.toIdle()
-	return m, nil
+	return m, reload
 }
 
 // renderExecOutput renders a finished command's output for the transcript:

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -9,6 +10,49 @@ import (
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/spf13/cobra"
 )
+
+// objectGroup is one kind of broker object (Queues, Topics, …) with its listing.
+type objectGroup struct {
+	label string
+	nodes []backends.ObjectNode
+}
+
+// writeObjectList prints the listing "manage list" produces — shared with the
+// AI shell, which hands the same text to the model as the broker's topology:
+// every group's objects sorted by name (brokers differ in the order they list
+// in — Artemis returns map order), each with its kind and metrics and its
+// children underneath, and, when there are several groups, the group's label
+// in front of every line.
+func writeObjectList(w io.Writer, groups []objectGroup) {
+	for _, g := range groups {
+		prefix := ""
+		if len(groups) > 1 {
+			prefix = strings.ToLower(g.label) + "  "
+		}
+		nodes := slices.Clone(g.nodes)
+		slices.SortStableFunc(nodes, func(a, b backends.ObjectNode) int { return strings.Compare(a.Name, b.Name) })
+		for _, n := range nodes {
+			detail := strings.TrimSpace(n.Kind + " " + formatMetrics(n.Metrics))
+			if detail != "" {
+				_, _ = fmt.Fprintf(w, "%s%-40s  %s\n", prefix, n.Name, detail)
+			} else {
+				_, _ = fmt.Fprintf(w, "%s%s\n", prefix, n.Name)
+			}
+			for _, child := range n.Children {
+				childMetrics := formatMetrics(child.Metrics)
+				kind := child.Kind
+				if kind != "" {
+					kind += " "
+				}
+				if childMetrics != "" {
+					_, _ = fmt.Fprintf(w, "%s  └ %s%s  %s\n", prefix, kind, child.Name, childMetrics)
+				} else {
+					_, _ = fmt.Fprintf(w, "%s  └ %s%s\n", prefix, kind, child.Name)
+				}
+			}
+		}
+	}
+}
 
 // formatMetrics formats a node's metrics as "label=value" pairs for text output.
 func formatMetrics(metrics []backends.Metric) string {
@@ -194,8 +238,6 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 		spec.SetupFlags(mgmtCmd)
 	}
 
-	hasMultiple := len(spec.Objects) > 1
-
 	if len(spec.Objects) > 0 {
 		mgmtCmd.AddCommand(&cobra.Command{
 			Use:   "list",
@@ -217,38 +259,11 @@ func NewManageCommand(spec ManageSpec) *cobra.Command {
 					}
 				}
 
-				w := c.OutOrStdout()
+				groups := make([]objectGroup, len(spec.Objects))
 				for i, ot := range spec.Objects {
-					// Brokers differ in the order they list objects in (Artemis
-					// returns map order); present them sorted by name.
-					nodes := slices.Clone(lists[i])
-					slices.SortStableFunc(nodes, func(a, b backends.ObjectNode) int { return strings.Compare(a.Name, b.Name) })
-					prefix := ""
-					if hasMultiple {
-						prefix = strings.ToLower(ot.Label) + "  "
-					}
-					for _, n := range nodes {
-						metricStr := formatMetrics(n.Metrics)
-						detail := strings.TrimSpace(n.Kind + " " + metricStr)
-						if detail != "" {
-							_, _ = fmt.Fprintf(w, "%s%-40s  %s\n", prefix, n.Name, detail)
-						} else {
-							_, _ = fmt.Fprintf(w, "%s%s\n", prefix, n.Name)
-						}
-						for _, child := range n.Children {
-							childMetrics := formatMetrics(child.Metrics)
-							kind := child.Kind
-							if kind != "" {
-								kind += " "
-							}
-							if childMetrics != "" {
-								_, _ = fmt.Fprintf(w, "%s  └ %s%s  %s\n", prefix, kind, child.Name, childMetrics)
-							} else {
-								_, _ = fmt.Fprintf(w, "%s  └ %s%s\n", prefix, kind, child.Name)
-							}
-						}
-					}
+					groups[i] = objectGroup{label: ot.Label, nodes: lists[i]}
 				}
+				writeObjectList(c.OutOrStdout(), groups)
 				return nil
 			},
 		})

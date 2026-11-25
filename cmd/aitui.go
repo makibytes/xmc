@@ -72,18 +72,22 @@ type aiDoneMsg struct {
 	gen   int
 } // AI request completed
 type execDoneMsg struct {
+	gen            int  // execGen of the run that produced it; a stale one (abandoned run) is ignored
+	refresh        bool // the command may have changed what the sidebar shows
 	err            error
 	stdout, stderr string     // each stream's tail, for the AI feedback
 	chunks         []outChunk // interleaved display output; nil → built from stdout/stderr
 	truncated      bool       // older display output was dropped (maxDisplayCapture)
 } // command finished
 type sideActionMsg struct {
+	gen     int // execGen of the action that produced it; a stale one (abandoned action) is ignored
 	action  string
 	copy    string
 	err     error
 	objects bool // the action created/deleted an object (vs. changed messages) — picks the auto-update setting
-}                                                     // sidebar action finished
-type setCancelMsg struct{ cancel context.CancelFunc } // pass cancel from bg goroutine to model
+}                                     // sidebar action finished
+type aiWatchdogMsg struct{ gen int }  // an AI request outlived its timeout plus grace: give up on it
+type execAbandonMsg struct{ gen int } // Esc was pressed and the command still has not returned
 type modelsMsg struct {
 	models []string
 	err    error
@@ -401,12 +405,14 @@ type aiTUIModel struct {
 	transcript          *strings.Builder // full transcript (pointer: Builder must not be copied)
 	streamBuf           *strings.Builder // tokens streamed so far (pointer: Builder must not be copied)
 	proposedCmd         string
-	proposedDestructive bool // true when the proposed command is flagged as destructive
-	shimmerPhase        int  // animation frame counter for the proposal shimmer
-	execCancel          context.CancelFunc
-	execCancelled       bool         // the user pressed Esc/Ctrl+C while the command ran
-	liveCapture         *execCapture // output of the running foreground command (live preview)
-	liveGen             int          // liveCapture generation last rendered
+	proposedDestructive bool               // true when the proposed command is flagged as destructive
+	shimmerPhase        int                // animation frame counter for the proposal shimmer
+	aiCancel            context.CancelFunc // cancels the AI request in flight; created with it on the UI goroutine
+	execCancel          context.CancelFunc // cancels the running command or sidebar action; same
+	execGen             int                // generation of the current command/sidebar action (see execDoneMsg.gen)
+	execCancelled       bool               // the user pressed Esc/Ctrl+C while the command ran
+	liveCapture         *execCapture       // output of the running foreground command (live preview)
+	liveGen             int                // liveCapture generation last rendered
 	quitting            bool
 	fetchingModels      bool // spinner while /model fetches the list
 	fixAttempts         int  // auto-fix retry counter (reset on success or new user prompt)
@@ -730,7 +736,15 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleExecDone(msg)
 
 	case sideActionMsg:
-		if msg.err != nil {
+		if msg.gen != m.execGen {
+			return m, nil // the action was abandoned (Esc)
+		}
+		cancelled := m.execCancelled
+		m.execCancelled = false
+		m.execCancel = nil
+		if cancelled && errors.Is(msg.err, context.Canceled) {
+			m.appendTranscript(dimStyle.Render("(cancelled)") + "\n\n")
+		} else if msg.err != nil {
 			m.appendTranscript(warnStyle.Render("✗ "+msg.err.Error()) + "\n\n")
 		} else if msg.action != "" {
 			action := strings.TrimRight(msg.action, "\n")
@@ -756,12 +770,14 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.restoreInputFocus()
 		return m, tea.Batch(cmds...)
 
-	case setCancelMsg:
-		m.execCancel = msg.cancel
-		return m, nil
+	case aiWatchdogMsg:
+		return m.handleAIWatchdog(msg)
 
-	case procCancelMsg:
-		return m.handleProcCancelMsg(msg)
+	case execAbandonMsg:
+		if m.state == tuiExecuting && m.execCancelled && msg.gen == m.execGen {
+			return m.abandonExec()
+		}
+		return m, nil
 
 	case procDoneMsg:
 		return m.handleProcDoneMsg(msg)
