@@ -390,6 +390,10 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// No arg: manual one-shot reload.
+		if m.connDown() {
+			m.appendTranscript(warnStyle.Render("broker unreachable — "+m.conn.statusLine()) + "\n\n")
+			return m, nil
+		}
 		if len(m.objTypes) > 0 {
 			m.appendTranscript(dimStyle.Render("refreshing…") + "\n\n")
 			m.loadingObjects = true
@@ -399,9 +403,7 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 
 	case "/disconnect":
 		if m.conn.reconnecting {
-			m.conn.reconnecting = false
-			m.conn.reconnectDisabled = true
-			m.conn.reconnectStatus = ""
+			m.disconnect()
 			m.appendTranscript(dimStyle.Render("Auto-reconnect disabled. Use /connect to reconnect manually.") + "\n\n")
 		} else {
 			m.appendTranscript(dimStyle.Render("Not currently reconnecting.") + "\n\n")
@@ -416,12 +418,9 @@ func (m aiTUIModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			m.appendTranscript(dimStyle.Render("Already connected.") + "\n\n")
 			return m, nil
 		}
-		m.conn.reconnectDisabled = false
-		m.conn.reconnecting = true
-		m.conn.reconnectAt = time.Now() // fire probe immediately
-		m.conn.reconnectStatus = "↻ connecting…"
 		m.appendTranscript(dimStyle.Render("Connecting…") + "\n\n")
-		return m, m.startReconnectProbe()
+		probe := m.reconnectNow()
+		return m, probe
 
 	case "/clear":
 		m.clearTranscript()
@@ -647,6 +646,13 @@ func (m aiTUIModel) handleKeyPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cycleSort()
 			return m, nil
 		case "r":
+			if m.connDown() && m.session != nil && m.session.spec.Ping != nil {
+				// A refresh can't succeed before the connection is back, and
+				// the reconnect countdown is the one clock: fire it now.
+				m.appendTranscript(dimStyle.Render("Connecting…") + "\n\n")
+				probe := m.reconnectNow()
+				return m, probe
+			}
 			m.loadingObjects = true
 			return m, m.startLoadObjects()
 		case "x":
@@ -1193,16 +1199,37 @@ func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// A listing that failed only because the broker is unreachable starts the
+	// reconnect countdown (confirmed by a probe) — the windows don't retry on
+	// a schedule of their own.
+	probe := m.noteConnFailure(m.connectionErrorOf(msg))
+
 	// Schedule the next periodic refresh if this was a background fetch.
 	if m.refreshing {
 		m.refreshing = false
 		m.lastFetchDur = time.Since(m.refreshStart)
 		if m.autoUpdateEnabled() {
 			next := max(time.Duration(refreshFactor)*m.lastFetchDur, m.refreshPeriod)
-			return m, tea.Tick(next, func(time.Time) tea.Msg { return refreshTickMsg{} })
+			return m, tea.Batch(probe, tea.Tick(next, func(time.Time) tea.Msg { return refreshTickMsg{} }))
 		}
 	}
-	return m, nil
+	return m, probe
+}
+
+// connectionErrorOf returns a connection error when every window that was
+// listed failed with one (a window that listed fine proves the management
+// connection is up), else nil.
+func (m aiTUIModel) connectionErrorOf(msg objectsMsg) error {
+	var first error
+	for i := range msg.errs {
+		if msg.errs[i] == nil && i < len(msg.windows) {
+			return nil
+		}
+		if msg.errs[i] != nil && first == nil && isConnectionError(msg.errs[i]) {
+			first = msg.errs[i]
+		}
+	}
+	return first
 }
 
 // topologyText renders the sidebar's object windows the way "manage list"

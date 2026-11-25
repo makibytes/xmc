@@ -201,16 +201,23 @@ type shellSession struct {
 	queueFactory QueueAdapterFactory
 	topicFactory TopicAdapterFactory
 	aliases      map[string]string
+	gate         *connGate // the AI shell's reconnect clock; nil elsewhere (see aiconn.go)
 }
 
 // newShellSession builds a session whose adapters connect lazily and
-// reconnect transparently after connection loss.
-func newShellSession(spec BrokerSpec, aliases map[string]string) *shellSession {
+// reconnect transparently after connection loss. With a gate (the AI shell),
+// they reconnect on the gate's clock instead of a backoff of their own.
+func newShellSession(spec BrokerSpec, aliases map[string]string, gate *connGate) *shellSession {
+	opts := ReconnectOptions{}
+	if gate != nil {
+		opts.Pace = gate.pace
+	}
 	return &shellSession{
 		spec:         spec,
-		queueFactory: wrapReconnectQueue(spec.Queue, ReconnectOptions{}),
-		topicFactory: wrapReconnectTopic(spec.Topic, ReconnectOptions{}),
+		queueFactory: wrapReconnectQueue(spec.Queue, opts),
+		topicFactory: wrapReconnectTopic(spec.Topic, opts),
 		aliases:      aliases,
+		gate:         gate,
 	}
 }
 

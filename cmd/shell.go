@@ -76,7 +76,7 @@ func runShell(cmd *cobra.Command, spec BrokerSpec) error {
 		return fmt.Errorf("initialize readline: %w", err)
 	}
 	defer rl.Close() //nolint:errcheck
-	session := newShellSession(spec, cfg.Aliases)
+	session := newShellSession(spec, cfg.Aliases, nil)
 	defer session.close()
 
 	fmt.Fprintf(os.Stderr, "%s shell — type \"help\" for commands, \"exit\" to quit\n", binBaseName())

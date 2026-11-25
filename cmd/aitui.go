@@ -602,6 +602,7 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 		follow:         true,
 		objTypes:       windows,
 		loadingObjects: len(windows) > 0,
+		conn:           connState{lastCheck: time.Now()}, // Init probes right away
 		refreshPeriod:  period,
 		refreshEnabled: refreshOn,
 		metadataFormat: mdFmt,
@@ -742,8 +743,11 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cancelled := m.execCancelled
 		m.execCancelled = false
 		m.execCancel = nil
+		probe := m.noteConnFailure(msg.err)
 		if cancelled && errors.Is(msg.err, context.Canceled) {
 			m.appendTranscript(dimStyle.Render("(cancelled)") + "\n\n")
+		} else if msg.err != nil && m.connDown() && (isConnectionError(msg.err) || errors.Is(msg.err, context.DeadlineExceeded) || errors.Is(msg.err, errReconnectDisabled)) {
+			m.appendTranscript(warnStyle.Render("✗ broker unreachable — "+m.conn.statusLine()) + "\n\n")
 		} else if msg.err != nil {
 			m.appendTranscript(warnStyle.Render("✗ "+msg.err.Error()) + "\n\n")
 		} else if msg.action != "" {
@@ -762,10 +766,11 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Refresh per the matching auto-update setting: create/delete change
 		// the object list, send/receive/purge/peek the message counts.
-		if m.ai != nil && ((msg.objects && m.ai.autoUpdateObjects) || (!msg.objects && m.ai.autoUpdateMessages)) {
+		if !m.connDown() && m.ai != nil && ((msg.objects && m.ai.autoUpdateObjects) || (!msg.objects && m.ai.autoUpdateMessages)) {
 			m.loadingObjects = true
 			cmds = append(cmds, m.startLoadObjects())
 		}
+		cmds = append(cmds, probe)
 		m.state = tuiIdle
 		m.restoreInputFocus()
 		return m, tea.Batch(cmds...)
@@ -796,6 +801,9 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connMsg:
 		return m.handleConnDone(msg)
 
+	case connLostMsg:
+		return m.handleConnLost(msg)
+
 	case reconnectTickMsg:
 		return m.handleReconnectTick()
 
@@ -803,16 +811,24 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleReconnectProbe(msg)
 
 	case refreshTickMsg:
+		// While the broker is unreachable the title bar's countdown is the one
+		// clock: the periodic refresh stops here (nothing re-arms it) and
+		// resumeSidebar restarts it the moment the probe succeeds.
+		if m.connDown() {
+			return m, nil
+		}
 		if !m.refreshing && len(m.objTypes) > 0 && m.autoUpdateEnabled() {
-			return m, m.beginRefresh()
+			refresh := m.beginRefresh()
+			return m, refresh
 		}
 		return m, nil
 
 	case refreshWatchdogMsg:
 		// Re-issue the fetch only if the wedged generation matches.
-		if m.refreshing && msg.gen == m.refreshGen && len(m.objTypes) > 0 {
+		if m.refreshing && msg.gen == m.refreshGen && len(m.objTypes) > 0 && !m.connDown() {
 			log.Verbose("sidebar refresh watchdog: fetch gen %d timed out, re-issuing", msg.gen)
-			return m, m.beginRefresh()
+			refresh := m.beginRefresh()
+			return m, refresh
 		}
 		return m, nil
 	}
@@ -1521,6 +1537,11 @@ func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, bina
 	model.program = &prog
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	prog = p
+	if session != nil && session.gate != nil {
+		// An adapter of the session lost its connection: let the UI start the
+		// countdown that every connection then follows (see aiconn.go).
+		session.gate.onLost = func(err error) { p.Send(connLostMsg{err: err}) }
+	}
 	finalModel, runErr := p.Run()
 	if m, ok := finalModel.(aiTUIModel); ok {
 		totalIn = m.totalIn

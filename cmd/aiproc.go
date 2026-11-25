@@ -357,7 +357,7 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 	// are not safe for concurrent use of one connection this way. Wrapping
 	// with wrapReconnectQueue/Topic mirrors the wrapping runAI gives the
 	// foreground session, so the process still gets auto-reconnect.
-	procSess := newShellSession(m.session.spec, m.session.aliases)
+	procSess := newShellSession(m.session.spec, m.session.aliases, m.session.gate)
 
 	return m, guard(func(err error) tea.Msg { return procDoneMsg{id: id, err: err} }, func() tea.Msg {
 		defer close(p.doneCh)

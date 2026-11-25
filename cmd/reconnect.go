@@ -22,7 +22,20 @@ type ReconnectOptions struct {
 	// MaxElapsed caps how long the wrapper will keep retrying before giving up.
 	// Zero means use the default (5 minutes).
 	MaxElapsed time.Duration
+
+	// Pace, when set, replaces the wrapper's own backoff: after a connection
+	// error the wrapper calls it (with the error) and retries once it returns
+	// nil — the caller owns the clock. The AI shell uses this so that every
+	// connection (title bar, sidebar, foreground and background commands)
+	// recovers on the one countdown shown in the title bar. A non-nil result
+	// (cancelled, auto-reconnect disabled) ends the retrying.
+	Pace func(ctx context.Context, cause error) error
 }
+
+// paceMaxAttempts bounds how often a paced wrapper reconnects for one failed
+// call when the pacer says "connected" but the broker keeps dropping the
+// connection.
+const paceMaxAttempts = 5
 
 func (o ReconnectOptions) maxElapsed() time.Duration {
 	if o.MaxElapsed > 0 {
@@ -170,13 +183,14 @@ func (r *reconnectingAdapter[T]) Close() error {
 	return nil
 }
 
-// retryOp reconnects and retries op with exponential backoff. The caller must
-// hold r.mu.
-func (r *reconnectingAdapter[T]) retryOp(ctx context.Context, desc string, op func() error) error {
+// retryOp reconnects and retries op with exponential backoff (or the caller's
+// Pace). cause is the connection error that made the first attempt fail. The
+// caller must hold r.mu.
+func (r *reconnectingAdapter[T]) retryOp(ctx context.Context, desc string, cause error, op func() error) error {
 	b := newBackoffPolicy(r.opts)
-	var lastErr error
+	lastErr := cause
 
-	for {
+	for attempt := 1; ; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -184,21 +198,32 @@ func (r *reconnectingAdapter[T]) retryOp(ctx context.Context, desc string, op fu
 			return fmt.Errorf("%s: adapter closed", desc)
 		}
 
-		wait := b.NextBackOff()
-		if wait == backoff.Stop {
-			return fmt.Errorf("reconnect exhausted for %s: %w", desc, lastErr)
-		}
+		if r.opts.Pace != nil {
+			if attempt > paceMaxAttempts {
+				return fmt.Errorf("reconnect exhausted for %s: %w", desc, lastErr)
+			}
+			if err := r.opts.Pace(ctx, lastErr); err != nil {
+				return fmt.Errorf("%s: %w", desc, err)
+			}
+		} else {
+			wait := b.NextBackOff()
+			if wait == backoff.Stop {
+				return fmt.Errorf("reconnect exhausted for %s: %w", desc, lastErr)
+			}
 
-		log.Error("connection lost (%s), reconnecting in %s...\n", desc, wait.Round(time.Millisecond))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
+			log.Error("connection lost (%s), reconnecting in %s...", desc, wait.Round(time.Millisecond))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
 		}
 
 		if err := r.reconnect(); err != nil {
 			lastErr = err
-			log.Error("reconnect failed: %s\n", err)
+			if r.opts.Pace == nil {
+				log.Error("reconnect failed: %s", err)
+			}
 			continue
 		}
 		log.Verbose("reconnected successfully (%s)", desc)
@@ -244,7 +269,7 @@ func adapterCall[T Closeable, R any](ctx context.Context, r *reconnectingAdapter
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var final R
-	retryErr := r.retryOp(ctx, desc, func() error {
+	retryErr := r.retryOp(ctx, desc, err, func() error {
 		var innerErr error
 		final, innerErr = op(r.adapter)
 		return innerErr

@@ -53,7 +53,7 @@ func runAI(cmd *cobra.Command, spec BrokerSpec) error {
 		cfg = &xmcConfig{}
 	}
 
-	session := newShellSession(spec, cfg.Aliases)
+	session := newShellSession(spec, cfg.Aliases, newConnGate())
 	defer session.close()
 
 	period, intervalOn := cfg.AI.refreshIntervalDuration()

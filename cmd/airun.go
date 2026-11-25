@@ -363,11 +363,14 @@ func (m aiTUIModel) handleExecDone(msg execDoneMsg) (tea.Model, tea.Cmd) {
 	m.ai.history = append(m.ai.history, aiMessage{Role: "user", Content: feedback})
 	trimHistory(&m.ai.history, maxHistory)
 
-	// The sidebar shows what the command may have changed (or listed).
-	var reload tea.Cmd
-	if msg.refresh && len(m.objTypes) > 0 {
+	// The sidebar shows what the command may have changed (or listed) — unless
+	// the broker is unreachable, when the title bar's countdown decides when
+	// it reloads (see aiconn.go).
+	probe := m.noteConnFailure(msg.err)
+	reload := probe
+	if msg.refresh && len(m.objTypes) > 0 && !m.connDown() {
 		m.loadingObjects = true
-		reload = m.startLoadObjects()
+		reload = tea.Batch(probe, m.startLoadObjects())
 	}
 
 	// Auto-fix: on error, ask the AI to correct the command (up to
