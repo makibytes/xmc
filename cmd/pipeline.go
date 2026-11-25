@@ -319,47 +319,40 @@ func (s *shellSession) runOnePipeline(ctx context.Context, line string, rootCmd 
 		return s.executeBlock(ctx, blocks[0], in, out, errw, rootCmd, false, false)
 	}
 
-	// Multi-block pipeline: wire up os.Pipe between blocks.
+	// Multi-block pipeline: wire up os.Pipe between blocks. Each block reads
+	// what the previous one wrote; the read end of every pipe is closed once
+	// the pipeline is done, so no descriptor outlives a command line.
 	g, ctx := errgroup.WithContext(ctx)
-	var prevReader = in
-
-	for i, block := range blocks {
-		isLast := i == len(blocks)-1
-		isFirst := i == 0
-
-		var nextWriter io.WriteCloser
-		var reader io.Reader
-
-		if isLast {
-			reader = prevReader
-			// Last block writes to out.
-			g.Go(func() error {
-				return s.executeBlock(ctx, block, reader, out, errw, rootCmd,
-					!isFirst && block.isVerb && prevBlockIsVerb(blocks, i),
-					false)
-			})
-		} else {
-			pr, pw, err := os.Pipe()
-			if err != nil {
-				return fmt.Errorf("create pipe: %w", err)
-			}
-			reader = prevReader
-			nextWriter = pw
-
-			nextIsVerb := blocks[i+1].isVerb
-			currentBlock := block
-			currentReader := reader
-			currentWriter := nextWriter
-
-			g.Go(func() error {
-				defer currentWriter.Close() //nolint:errcheck
-				return s.executeBlock(ctx, currentBlock, currentReader, currentWriter, errw, rootCmd,
-					false,
-					currentBlock.isVerb && nextIsVerb)
-			})
-
-			prevReader = pr
+	var readEnds []*os.File
+	defer func() {
+		for _, f := range readEnds {
+			_ = f.Close()
 		}
+	}()
+
+	var src io.Reader = in
+	for i, block := range blocks {
+		reader := src
+		if i == len(blocks)-1 {
+			// The last block writes to out.
+			verbInput := block.isVerb && prevBlockIsVerb(blocks, i)
+			g.Go(func() error {
+				return s.executeBlock(ctx, block, reader, out, errw, rootCmd, verbInput, false)
+			})
+			break
+		}
+
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			return fmt.Errorf("create pipe: %w", err)
+		}
+		readEnds = append(readEnds, pr)
+		verbOutput := block.isVerb && blocks[i+1].isVerb
+		g.Go(func() error {
+			defer pw.Close() //nolint:errcheck
+			return s.executeBlock(ctx, block, reader, pw, errw, rootCmd, false, verbOutput)
+		})
+		src = pr
 	}
 
 	return g.Wait()

@@ -81,7 +81,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-nats",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return natspkg.NewQueueAdapter(connArgs)
 				},

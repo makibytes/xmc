@@ -77,12 +77,10 @@ func runAI(cmd *cobra.Command, spec BrokerSpec) error {
 	// counts, reconnect retries, background-process errors, etc.). Capture
 	// that output instead and flush it to stderr once the alt-screen closes.
 	var logBuf syncBuffer
-	restoreOut := log.SetOutput(&logBuf)
 	restoreErr := log.SetErrorOutput(&logBuf)
 
 	totalIn, totalOut, err := runAITUI(ai, session, rootCmd, baseName, server)
 
-	log.SetOutput(restoreOut)
 	log.SetErrorOutput(restoreErr)
 	if captured := logBuf.String(); captured != "" {
 		fmt.Fprint(os.Stderr, captured)

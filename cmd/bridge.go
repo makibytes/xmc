@@ -8,7 +8,6 @@ import (
 	"io"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -133,18 +132,19 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := timedOrInterruptCtx(cmd.Context(), sf.Duration)
+	ctx, cancel := streamContext(sf.Duration, cmd.Context())
 	defer cancel()
 
 	st, stopStats := startStats(sf.Stats, errw)
 	defer stopStats()
 
-	// Use cmd.Context() (interrupt-only), not the --for-bounded ctx: exec.CommandContext
-	// kills the process the instant its context is done, which would abort the target
+	// Use cmd.Context(), not the --for-bounded ctx: exec.CommandContext kills the
+	// process the instant its context is done, which would abort the target
 	// mid-drain the moment --for expires, dropping whatever it hadn't yet published from
-	// its stdin buffer. The bounded ctx still governs the read loop below; once it ends,
-	// the deferred stdinPipe.Close()+proc.Wait() lets the target finish gracefully via EOF.
-	// A real interrupt (Ctrl-C) still kills it immediately, since that cancels cmd.Context() too.
+	// its stdin buffer. The bounded ctx still governs the read loop below; once it ends
+	// (--for expiry, count reached, or Ctrl-C, which streamContext turns into a clean
+	// stop), the deferred flush, stdinPipe.Close() and proc.Wait() let the target finish
+	// gracefully via EOF and the summary is printed.
 	proc, stdinPipe, err := startTargetProcess(cmd.Context(), target, out, errw)
 	if err != nil {
 		return err
@@ -250,13 +250,4 @@ func startTargetProcess(ctx context.Context, target string, out, errw io.Writer)
 	}
 
 	return proc, stdinPipe, nil
-}
-
-// timedOrInterruptCtx returns a context that cancels on interrupt or after
-// duration (if > 0).
-func timedOrInterruptCtx(parent context.Context, duration time.Duration) (context.Context, context.CancelFunc) {
-	if duration > 0 {
-		return context.WithTimeout(parent, duration)
-	}
-	return context.WithCancel(parent)
 }

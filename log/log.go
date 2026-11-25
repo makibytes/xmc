@@ -1,55 +1,38 @@
-// Package log provides Info/Error/Verbose output helpers with a verbose toggle.
+// Package log provides Error/Verbose output helpers with a verbose toggle.
+// Both write to stderr: stdout is reserved for message data, so diagnostics
+// must never mix into it (or into a pipe fed from it).
 package log
 
 import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 )
 
 // IsVerbose enables Verbose output when set.
 var IsVerbose bool
 
-// out/errOut, when non-nil, override the default os.Stdout/os.Stderr sinks.
-// Used to redirect (or suppress) log output while a full-screen TUI owns the
-// terminal — see SetOutput/SetErrorOutput. Guarded by outMu: background
-// goroutines (reconnect loops, background processes) log concurrently with
-// the goroutine that swaps the sinks around a TUI session.
+// errOut, when non-nil, overrides the default os.Stderr sink. Used to redirect
+// (or suppress) log output while a full-screen TUI owns the terminal — see
+// SetErrorOutput. Guarded by outMu: background goroutines (reconnect loops,
+// background processes) log concurrently with the goroutine that swaps the
+// sink around a TUI session.
 var (
-	outMu       sync.Mutex
-	out, errOut io.Writer
+	outMu  sync.Mutex
+	errOut io.Writer
 )
 
-// SetOutput redirects Info/Verbose output. Pass nil to restore the default
-// (os.Stdout). Returns the previous override (nil if none was set) so the
-// caller can restore it later.
-func SetOutput(w io.Writer) io.Writer {
-	outMu.Lock()
-	defer outMu.Unlock()
-	prev := out
-	out = w
-	return prev
-}
-
-// SetErrorOutput redirects Error output. Pass nil to restore the default
-// (os.Stderr). Returns the previous override (nil if none was set) so the
-// caller can restore it later.
+// SetErrorOutput redirects Error and Verbose output. Pass nil to restore the
+// default (os.Stderr). Returns the previous override (nil if none was set) so
+// the caller can restore it later.
 func SetErrorOutput(w io.Writer) io.Writer {
 	outMu.Lock()
 	defer outMu.Unlock()
 	prev := errOut
 	errOut = w
 	return prev
-}
-
-func stdout() io.Writer {
-	outMu.Lock()
-	defer outMu.Unlock()
-	if out != nil {
-		return out
-	}
-	return os.Stdout
 }
 
 func stderr() io.Writer {
@@ -61,22 +44,24 @@ func stderr() io.Writer {
 	return os.Stderr
 }
 
-// Error writes an error message to stderr.
-func Error(s string, args ...any) {
+// write formats s with args (when there are any) and ends the message with
+// exactly one newline, whether or not s already carries one.
+func write(w io.Writer, s string, args []any) {
 	if len(args) > 0 {
-		_, _ = fmt.Fprintf(stderr(), s, args...)
-	} else {
-		_, _ = fmt.Fprintln(stderr(), s)
+		s = fmt.Sprintf(s, args...)
 	}
+	if !strings.HasSuffix(s, "\n") {
+		s += "\n"
+	}
+	_, _ = io.WriteString(w, s)
 }
 
-// Verbose writes a message to stdout when IsVerbose is set.
+// Error writes an error message to stderr.
+func Error(s string, args ...any) { write(stderr(), s, args) }
+
+// Verbose writes a message to stderr when IsVerbose is set.
 func Verbose(s string, args ...any) {
 	if IsVerbose {
-		if len(args) > 0 {
-			_, _ = fmt.Fprintf(stdout(), s, args...)
-		} else {
-			_, _ = fmt.Fprintln(stdout(), s)
-		}
+		write(stderr(), s, args)
 	}
 }

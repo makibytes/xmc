@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"time"
 
@@ -119,9 +118,9 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 
 	// A fixed response body is only meaningful when not echoing or shelling out.
 	if !echo && command == "" {
-		body, err := readReplyBody(args)
+		body, err := readCommandMessage(args, cmd.InOrStdin())
 		if err != nil {
-			return err
+			return fmt.Errorf("no response provided: pass a response argument, --echo, or --command (%w)", err)
 		}
 		cfg.staticBody = body
 	}
@@ -185,7 +184,7 @@ func respondToRequest(ctx context.Context, backend backends.QueueBackend, reques
 		return nil
 	}
 
-	body, err := replyBody(cfg, request)
+	body, err := replyBody(ctx, cfg, request)
 	if err != nil {
 		// A failing command should not tear down the whole responder. Write to
 		// the command's error stream (not the global log) so the message lands
@@ -209,12 +208,12 @@ func respondToRequest(ctx context.Context, backend backends.QueueBackend, reques
 	})
 }
 
-func replyBody(cfg replyConfig, request *backends.Message) ([]byte, error) {
+func replyBody(ctx context.Context, cfg replyConfig, request *backends.Message) ([]byte, error) {
 	switch {
 	case cfg.echo:
 		return request.Data, nil
 	case cfg.command != "":
-		return runShellCommand(cfg.command, request.Data, cfg.errOut)
+		return runShellCommand(ctx, cfg.command, request.Data, cfg.errOut)
 	default:
 		return cfg.staticBody, nil
 	}
@@ -225,22 +224,11 @@ func replyBody(cfg replyConfig, request *backends.Message) ([]byte, error) {
 // (the calling command's error stream) so its diagnostics are visible — and,
 // in shell/AI mode, captured with the rest of the command's output instead of
 // leaking to the terminal. Shared by the reply responder and forward --command.
-func runShellCommand(command string, input []byte, errOut io.Writer) ([]byte, error) {
-	c := exec.Command("sh", "-c", command)
+// The command runs under the user's $SHELL like every other external command,
+// and is killed when ctx ends (Esc in the AI shell, --for expiry, Ctrl-C).
+func runShellCommand(ctx context.Context, command string, input []byte, errOut io.Writer) ([]byte, error) {
+	c := exec.CommandContext(ctx, systemShell(), "-c", command)
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = errOut
 	return c.Output()
-}
-
-// readReplyBody resolves the static response body from the command argument or,
-// failing that, stdin. It is only called when neither --echo nor --command is set.
-func readReplyBody(args []string) ([]byte, error) {
-	if len(args) > 1 {
-		return []byte(args[1]), nil
-	}
-	stat, err := os.Stdin.Stat()
-	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		return io.ReadAll(os.Stdin)
-	}
-	return nil, fmt.Errorf("no response provided: pass a response argument, --echo, or --command")
 }

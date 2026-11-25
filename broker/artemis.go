@@ -159,7 +159,7 @@ address, delete it and bind it again.`
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-artemis",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return artemis.NewQueueAdapter(connArgs)
 				},

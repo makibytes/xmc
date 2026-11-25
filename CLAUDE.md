@@ -271,7 +271,7 @@ The AI shell sidebar's `S`/`p`/`m`/`R`/publish actions call the adapters directl
   - `tools.go` - tool registry from `mcp.Deps` (per-broker factories + optional management hooks; credentials live in closures, never in tool params): send, request, peek (uses `BrowseBackend` cursor when available, like the CLI), receive, publish, consume, ping, manage_* (purge requires `confirm: true`)
   - `command.go` - `mcp.NewCommand` cobra subcommand, wired via `BrokerSpec.Extra` in every broker entry file
   - `message.go` - message JSON shape (mirrors the NDJSON record; binary payloads base64) + JSON-Schema builders
-- `log/` - Logging utilities with verbose mode support
+- `log/` - `Error`/`Verbose` helpers (verbose toggle). Both write to stderr — stdout carries message data only — and each message ends with exactly one newline, whether or not the format string has one
 - `test/` - bats integration test files
 
 See `docs/BROKERS.md` for protocol-specific differences and topology patterns.

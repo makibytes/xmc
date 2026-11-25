@@ -124,3 +124,18 @@ func TestReceiveCommand_ForEmptyStops(t *testing.T) {
 		t.Errorf("--for did not stop the stream promptly: took %v", d)
 	}
 }
+
+// After stop returns, no further tick line may be written — otherwise a tick
+// could print after the caller's final summary.
+func TestStartStatsReporter_NothingWrittenAfterStop(t *testing.T) {
+	var buf syncBuffer
+	st := newStreamStats()
+	stop := startStatsReporter(st, 2*time.Millisecond, &buf)
+	time.Sleep(15 * time.Millisecond)
+	stop()
+	n := len(buf.String())
+	time.Sleep(20 * time.Millisecond)
+	if got := len(buf.String()); got != n {
+		t.Errorf("reporter wrote %d bytes after stop returned", got-n)
+	}
+}

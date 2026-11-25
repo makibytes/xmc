@@ -81,7 +81,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-google",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Project,
+				Target:        func() string { return connArgs.Project },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return gcppkg.NewQueueAdapter(connArgs)
 				},

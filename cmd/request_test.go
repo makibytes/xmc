@@ -286,3 +286,37 @@ func TestRequestCommand_InvalidProperty(t *testing.T) {
 		t.Fatal("expected error for invalid property, got nil")
 	}
 }
+
+// The shell pipeline injects --ndjson into consumer verbs, request included, so
+// "request q x | send out" must not fail with an unknown flag.
+func TestRequestCommand_NDJSONOutput(t *testing.T) {
+	mock := &mockQueueBackend{receiveMsg: &backends.Message{Data: []byte("pong")}}
+	cmd := NewRequestCommand(mock)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"svc", "ping", "--ndjson"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("request --ndjson: %v", err)
+	}
+	var rec messageRecord
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &rec); err != nil {
+		t.Fatalf("output is not one NDJSON record: %v\n%s", err, out.String())
+	}
+	if rec.Data != "pong" {
+		t.Errorf("record data = %q, want pong", rec.Data)
+	}
+}
+
+func TestMove_PreservesKey(t *testing.T) {
+	src := &backends.Message{Data: []byte("m"), Key: "partition-key"}
+	mock := &mockQueueBackend{receiveMsg: src}
+	cmd := NewMoveCommand(mock)
+	cmd.SetArgs([]string{"from", "to", "-n", "1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if mock.lastSendOpts.Key != "partition-key" {
+		t.Errorf("moved message key = %q, want it preserved", mock.lastSendOpts.Key)
+	}
+}

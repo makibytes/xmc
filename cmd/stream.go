@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -127,7 +128,8 @@ func (s *streamStats) summary() string {
 // rather than leaking to the raw terminal.
 func startStatsReporter(s *streamStats, interval time.Duration, w io.Writer) (stop func()) {
 	stopCh := make(chan struct{})
-	go func() {
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		lastCount := int64(0)
@@ -149,8 +151,13 @@ func startStatsReporter(s *streamStats, interval time.Duration, w io.Writer) (st
 				lastTime = now
 			}
 		}
-	}()
-	return func() { close(stopCh) }
+	})
+	// Waiting for the goroutine guarantees no tick line is printed after the
+	// caller's final summary.
+	return func() {
+		close(stopCh)
+		wg.Wait()
+	}
 }
 
 // startStats returns a stats accumulator and a stop function. When stats are

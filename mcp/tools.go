@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -34,7 +36,7 @@ type TopicFactory func() (backends.TopicBackend, error)
 type Deps struct {
 	ServerName    string
 	ServerVersion string
-	Target        string // broker URL, surfaced in descriptions for context
+	Target        func() string // broker URL, read when a tool runs (flags are parsed by then)
 
 	NewQueue QueueFactory // optional on topic-only brokers (e.g. Kafka)
 	NewTopic TopicFactory // optional on queue-only brokers (e.g. IBM MQ)
@@ -43,6 +45,14 @@ type Deps struct {
 	PurgeQueue func(ctx context.Context, queue string) (int64, error)
 	QueueStats func(ctx context.Context, queue string) (*backends.QueueStats, error)
 	ListTopics func(ctx context.Context) ([]backends.TopicInfo, error)
+}
+
+// target returns the broker URL for messages, or "" when none was wired.
+func (d Deps) target() string {
+	if d.Target == nil {
+		return ""
+	}
+	return d.Target()
 }
 
 // NewServerFromDeps builds a Server with the standard messaging tool set plus
@@ -112,7 +122,7 @@ func positiveCount(p *int) (int, error) {
 func withConn[T io.Closer](d Deps, open func() (T, error), fn func(T) (*ToolResult, error)) (*ToolResult, error) {
 	c, err := open()
 	if err != nil {
-		return nil, fmt.Errorf("could not connect to broker %s: %v", d.Target, err)
+		return nil, fmt.Errorf("could not connect to broker %s: %v", d.target(), err)
 	}
 	defer c.Close() //nolint:errcheck
 	return fn(c)
@@ -560,12 +570,12 @@ func registerPing(s *Server, d Deps) {
 			conn, err := connect()
 			elapsed := time.Since(start)
 			if err != nil {
-				return nil, fmt.Errorf("broker %s unreachable: %v", d.Target, err)
+				return nil, fmt.Errorf("broker %s unreachable: %v", d.target(), err)
 			}
 			_ = conn.Close()
 			return jsonResult(map[string]any{
 				"ok":     true,
-				"target": d.Target,
+				"target": d.target(),
 				"rttMs":  float64(elapsed.Microseconds()) / 1000.0,
 			})
 		},
@@ -589,6 +599,7 @@ func registerListQueues(s *Server, d Deps) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to list queues: %v", err)
 			}
+			slices.SortStableFunc(queues, func(a, b backends.QueueInfo) int { return strings.Compare(a.Name, b.Name) })
 			return jsonResult(map[string]any{"count": len(queues), "queues": queues})
 		},
 	})
@@ -609,6 +620,7 @@ func registerListTopics(s *Server, d Deps) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to list topics: %v", err)
 			}
+			slices.SortStableFunc(topics, func(a, b backends.TopicInfo) int { return strings.Compare(a.Name, b.Name) })
 			return jsonResult(map[string]any{"count": len(topics), "topics": topics})
 		},
 	})

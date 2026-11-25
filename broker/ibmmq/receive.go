@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ibm-messaging/mq-golang/v5/ibmmq"
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 )
 
@@ -76,12 +77,16 @@ func ReceiveMessage(qMgr ibmmq.MQQueueManager, args ReceiveArguments) (*ibmmq.MQ
 	log.Verbose("📩 receiving message from queue %s...", args.Queue)
 	datalen, err := qObject.Get(md, gmo, buffer)
 	if err != nil {
-		mqret := err.(*ibmmq.MQReturn)
+		mqret, ok := err.(*ibmmq.MQReturn)
+		if !ok {
+			discardHandle()
+			return nil, nil, msgHandle, fmt.Errorf("failed to get message: %w", err)
+		}
 		switch mqret.MQRC {
 		case ibmmq.MQRC_NO_MSG_AVAILABLE:
 			// Timeout - no message available
 			discardHandle()
-			return nil, nil, msgHandle, fmt.Errorf("timeout: %w", err)
+			return nil, nil, msgHandle, backends.ErrNoMessageAvailable
 		case ibmmq.MQRC_TRUNCATED_MSG_FAILED:
 			// Message too large for buffer; a failed truncated Get leaves the
 			// message in place (and does not advance the browse cursor), so

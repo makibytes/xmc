@@ -262,7 +262,7 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 			return err
 		}
 
-		body, ok := runCommandOrRecover(command, message.Data, out, errw)
+		body, ok := runCommandOrRecover(ctx, command, message.Data, out, errw)
 		if !ok {
 			continue
 		}
@@ -286,11 +286,11 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 // the command's output and true. If the command fails, it logs the error,
 // writes the original (already-consumed) payload to out for recovery, and
 // returns false so the caller skips the message instead of losing it.
-func runCommandOrRecover(command string, data []byte, out, errw io.Writer) ([]byte, bool) {
+func runCommandOrRecover(ctx context.Context, command string, data []byte, out, errw io.Writer) ([]byte, bool) {
 	if command == "" {
 		return data, true
 	}
-	result, err := runShellCommand(command, data, errw)
+	result, err := runShellCommand(ctx, command, data, errw)
 	if err != nil {
 		_, _ = fmt.Fprintf(errw, "command failed: %s\n", err)
 		emitUndelivered(out, data)

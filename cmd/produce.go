@@ -104,7 +104,9 @@ func runProduce(ctx context.Context, input io.Reader, args []string, pf produceF
 ) error {
 	if pf.ndjson {
 		sent, err := forEachRecord(input, func(rec messageRecord) error {
-			pf.limiter.wait()
+			if err := pf.limiter.wait(ctx); err != nil {
+				return err
+			}
 			return emitRecord(ctx, rec)
 		})
 		if err != nil {
@@ -116,7 +118,9 @@ func runProduce(ctx context.Context, input io.Reader, args []string, pf produceF
 
 	if pf.lines {
 		sent, err := forEachInputLine(input, func(line string) error {
-			pf.limiter.wait()
+			if err := pf.limiter.wait(ctx); err != nil {
+				return err
+			}
 			return emit(ctx, []byte(line))
 		})
 		if err != nil {
@@ -135,7 +139,9 @@ func runProduce(ctx context.Context, input io.Reader, args []string, pf produceF
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		pf.limiter.wait()
+		if err := pf.limiter.wait(ctx); err != nil {
+			return err
+		}
 		if err := emit(ctx, data); err != nil {
 			return err
 		}

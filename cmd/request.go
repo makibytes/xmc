@@ -37,6 +37,7 @@ Uses the correlation ID from the request as the message ID for matching.`,
 	cmd.Flags().BoolP("quiet", "q", false, "Quiet about properties, show data only")
 	cmd.Flags().BoolP("json", "J", false, "Output reply as JSON")
 	cmd.Flags().StringP("format", "F", "", "Output format string, e.g. \"%i %s\\n\" (overrides --json)")
+	cmd.Flags().Bool("ndjson", false, "Output the reply as one lossless JSON record (overrides --format/--json)")
 	// Accept legacy concatenated spellings (--contenttype) as aliases of the
 	// kebab-case names (--content-type).
 	cmd.Flags().SetNormalizeFunc(aliasNormalize)
@@ -109,6 +110,9 @@ func doRequest(cmd *cobra.Command, args []string, backend backends.QueueBackend)
 
 	dataOut := cmd.OutOrStdout()
 	metaOut := cmd.ErrOrStderr()
+	if ndjson, _ := cmd.Flags().GetBool("ndjson"); ndjson {
+		return displayMessageNDJSON(dataOut, message)
+	}
 	if format != "" {
 		return displayMessageFormat(dataOut, message, format)
 	}

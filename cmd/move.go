@@ -97,6 +97,7 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 			ContentType:   message.ContentType,
 			Priority:      message.Priority,
 			Persistent:    message.Persistent,
+			Key:           message.Key,
 		})
 		if sendErr != nil {
 			// The message was already consumed from the source; surface it so

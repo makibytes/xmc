@@ -17,6 +17,7 @@ import (
 type messageJSON struct {
 	Data          string         `json:"data,omitempty"`
 	DataBase64    string         `json:"dataBase64,omitempty"`
+	Key           string         `json:"key,omitempty"`
 	MessageID     string         `json:"messageId,omitempty"`
 	CorrelationID string         `json:"correlationId,omitempty"`
 	ReplyTo       string         `json:"replyTo,omitempty"`
@@ -28,6 +29,7 @@ type messageJSON struct {
 
 func toMessageJSON(m *backends.Message) messageJSON {
 	rec := messageJSON{
+		Key:           m.Key,
 		MessageID:     m.MessageID,
 		CorrelationID: m.CorrelationID,
 		ReplyTo:       m.ReplyTo,

@@ -133,7 +133,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-kafka",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewTopic: func() (backends.TopicBackend, error) {
 					return kafka.NewTopicAdapter(connArgs)
 				},
