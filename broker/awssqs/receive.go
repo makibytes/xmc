@@ -37,13 +37,7 @@ func pollSQS(ctx context.Context, sqsc *sqs.Client, queueURL string, timeout tim
 			return nil, backends.ErrNoMessageAvailable
 		}
 
-		waitSecs := int32(remaining.Seconds())
-		if waitSecs > 20 {
-			waitSecs = 20
-		}
-		if waitSecs < 1 {
-			waitSecs = 1
-		}
+		waitSecs := max(min(int32(remaining.Seconds()), 20), 1)
 
 		out, err := sqsc.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:              &queueURL,

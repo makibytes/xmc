@@ -175,10 +175,7 @@ func (p *sidebarPlan) autoCollapseToFit() {
 
 	surplus := p.height - p.total(p.current)
 	if p.focusedIdx >= 0 && !p.m.objTypes[p.focusedIdx].collapsed && surplus > 0 {
-		add := p.nat[p.focusedIdx] - p.bodyAlloc[p.focusedIdx]
-		if add > surplus {
-			add = surplus
-		}
+		add := min(p.nat[p.focusedIdx]-p.bodyAlloc[p.focusedIdx], surplus)
 		if add > 0 {
 			p.bodyAlloc[p.focusedIdx] += add
 		}
@@ -289,10 +286,7 @@ func (m aiTUIModel) writeWindow(
 	}
 	full := glyph + headerText
 	if focused {
-		pad := width - lipgloss.Width(full) - 4
-		if pad < 0 {
-			pad = 0
-		}
+		pad := max(width-lipgloss.Width(full)-4, 0)
 		b.WriteString(m.theme().focusHeader().Render(full + strings.Repeat(" ", pad) + "◂"))
 	} else {
 		b.WriteString(histTitleStyle.Render(full))
@@ -333,10 +327,7 @@ func (m aiTUIModel) writeWindow(
 	showBottomHint := end < nRows
 	limit := end
 	if showBottomHint {
-		limit = end - 1
-		if limit < start {
-			limit = start
-		}
+		limit = max(end-1, start)
 	}
 
 	for ri := start; ri < limit; ri++ {
@@ -398,10 +389,7 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 		// Surface List() errors visibly rather than showing a silent "(none)".
 		// Common for cloud brokers on auth/permission failures.
 		msg := "⚠ " + w.err.Error()
-		maxLen := width - 3
-		if maxLen < 5 {
-			maxLen = 5
-		}
+		maxLen := max(width-3, 5)
 		if len([]rune(msg)) > maxLen {
 			msg = string([]rune(msg)[:maxLen-1]) + "…"
 		}
@@ -439,33 +427,21 @@ func (m aiTUIModel) writeObjectSection(b *strings.Builder, width, bodyLines, idx
 
 		name := r.name
 		metricStr := r.metric
-		maxName := width - len(metricStr) - len(prefix) - 2
-		if maxName < 5 {
-			maxName = 5
-		}
+		maxName := max(width-len(metricStr)-len(prefix)-2, 5)
 		if nameRunes := []rune(name); len(nameRunes) > maxName {
 			name = string(nameRunes[:maxName-1]) + "…"
 		}
 
 		if selected && r.indent {
 			marker := "▸ └ "
-			pad := width - len(marker) - 2 - len(name) - len(metricStr)
-			if pad < 1 {
-				pad = 1
-			}
+			pad := max(width-len(marker)-2-len(name)-len(metricStr), 1)
 			return sidebarSelStyle.Render(fmt.Sprintf("%s%s%s%s", marker, name, strings.Repeat(" ", pad), metricStr))
 		}
 		if selected {
-			pad := width - 4 - len(name) - len(metricStr)
-			if pad < 1 {
-				pad = 1
-			}
+			pad := max(width-4-len(name)-len(metricStr), 1)
 			return sidebarSelStyle.Render(fmt.Sprintf("▸ %s%s%s", name, strings.Repeat(" ", pad), metricStr))
 		}
-		pad := width - len(prefix) - len(name) - len(metricStr) - 1
-		if pad < 1 {
-			pad = 1
-		}
+		pad := max(width-len(prefix)-len(name)-len(metricStr)-1, 1)
 		if metricStr != "" {
 			return fmt.Sprintf("%s%s%s%s", prefix, name, strings.Repeat(" ", pad), dimStyle.Render(metricStr))
 		}
@@ -565,17 +541,11 @@ func computeWindow(total, selected, visible int) (start, end int) {
 	if total <= visible {
 		return 0, total
 	}
-	start = selected - visible/2
-	if start < 0 {
-		start = 0
-	}
+	start = max(selected-visible/2, 0)
 	end = start + visible
 	if end > total {
 		end = total
-		start = end - visible
-		if start < 0 {
-			start = 0
-		}
+		start = max(end-visible, 0)
 	}
 	return start, end
 }

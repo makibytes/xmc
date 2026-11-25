@@ -284,8 +284,8 @@ func (f *fakeBrowseQueue) Browse(_ context.Context, _ backends.ReceiveOptions) (
 func TestPeekUsesBrowseCursor(t *testing.T) {
 	fq := &fakeBrowseQueue{
 		// Receive would repeat this head message forever:
-		fakeQueue: fakeQueue{toReturn: []*backends.Message{{Data: []byte("head")}}},
-		browsed:   []*backends.Message{{Data: []byte("m1")}, {Data: []byte("m2")}},
+		toReturn: []*backends.Message{{Data: []byte("head")}},
+		browsed:  []*backends.Message{{Data: []byte("m1")}, {Data: []byte("m2")}},
 	}
 	s := NewServerFromDeps(Deps{
 		NewQueue: func() (backends.QueueBackend, error) { return fq, nil },

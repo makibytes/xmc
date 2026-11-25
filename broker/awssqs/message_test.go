@@ -12,8 +12,8 @@ import (
 
 func TestSQSToBackendMessage_BackfillMessageID(t *testing.T) {
 	msg := sqstypes.Message{
-		Body:      strPtr("hello"),
-		MessageId: strPtr("sqs-assigned-id"),
+		Body:      new("hello"),
+		MessageId: new("sqs-assigned-id"),
 	}
 
 	result := sqsToBackendMessage(msg)
@@ -24,10 +24,10 @@ func TestSQSToBackendMessage_BackfillMessageID(t *testing.T) {
 
 func TestSQSToBackendMessage_SenderIDWins(t *testing.T) {
 	msg := sqstypes.Message{
-		Body:      strPtr("hello"),
-		MessageId: strPtr("sqs-assigned-id"),
+		Body:      new("hello"),
+		MessageId: new("sqs-assigned-id"),
 		MessageAttributes: map[string]sqstypes.MessageAttributeValue{
-			backends.PropMessageID: {DataType: strPtr("String"), StringValue: strPtr("explicit-id")},
+			backends.PropMessageID: {DataType: new("String"), StringValue: new("explicit-id")},
 		},
 	}
 
@@ -39,7 +39,7 @@ func TestSQSToBackendMessage_SenderIDWins(t *testing.T) {
 
 func TestSQSToBackendMessage_GroupIDToKey(t *testing.T) {
 	msg := sqstypes.Message{
-		Body: strPtr("hello"),
+		Body: new("hello"),
 		Attributes: map[string]string{
 			string(sqstypes.MessageSystemAttributeNameMessageGroupId): "checkout",
 		},

@@ -75,8 +75,7 @@ func isConnectionError(err error) bool {
 	}
 
 	// net.Error covers dial/read/write timeouts and other network failures.
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
 

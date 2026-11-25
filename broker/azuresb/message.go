@@ -3,6 +3,7 @@
 package azuresb
 
 import (
+	"maps"
 	"strconv"
 	"time"
 
@@ -62,9 +63,7 @@ func sbToBackendMessage(msg *azservicebus.ReceivedMessage) *backends.Message {
 		result.ContentType = *msg.ContentType
 	}
 
-	for k, v := range msg.ApplicationProperties {
-		result.Properties[k] = v
-	}
+	maps.Copy(result.Properties, msg.ApplicationProperties)
 
 	if msg.SequenceNumber != nil {
 		result.InternalMetadata["sequence-number"] = *msg.SequenceNumber

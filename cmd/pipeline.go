@@ -691,10 +691,8 @@ func isConsumer(verb string) bool {
 
 // ensureFlag appends a flag to args if it is not already present.
 func ensureFlag(args []string, flag string) []string {
-	for _, a := range args {
-		if a == flag {
-			return args
-		}
+	if slices.Contains(args, flag) {
+		return args
 	}
 	return append(args, flag)
 }

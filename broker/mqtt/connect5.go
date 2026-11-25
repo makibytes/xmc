@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/eclipse/paho.golang/autopaho"
-	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/tlsutil"
@@ -58,9 +57,7 @@ func Connect5(args ConnArguments) (*autopaho.ConnectionManager, error) {
 			lastErr = err
 			lastErrMu.Unlock()
 		},
-		ClientConfig: paho.ClientConfig{
-			ClientID: clientID,
-		},
+		ClientID: clientID,
 	}
 	if args.User != "" {
 		cfg.ConnectPassword = []byte(args.Password)

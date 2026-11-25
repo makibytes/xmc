@@ -338,7 +338,7 @@ func extractCommandWithVerbs(response string, verbs map[string]bool) string {
 		return cmd
 	}
 	// Prose response: scan lines for a line beginning with a known verb.
-	for _, line := range strings.Split(response, "\n") {
+	for line := range strings.SplitSeq(response, "\n") {
 		line = strings.TrimSpace(line)
 		line = stripBinaryPrefix(line)
 		if line == "" || strings.HasPrefix(line, "#") {

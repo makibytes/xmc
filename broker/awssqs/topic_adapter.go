@@ -118,7 +118,7 @@ func (a *TopicAdapter) ensureSubscriberQueue(ctx context.Context, opts backends.
 
 	subOut, err := a.snsc.Subscribe(ctx, &sns.SubscribeInput{
 		TopicArn:              &topicARN,
-		Protocol:              strPtr("sqs"),
+		Protocol:              new("sqs"),
 		Endpoint:              &qARN,
 		Attributes:            map[string]string{"RawMessageDelivery": "true"},
 		ReturnSubscriptionArn: true,

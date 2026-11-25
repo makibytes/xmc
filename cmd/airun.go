@@ -110,10 +110,7 @@ func (m aiTUIModel) handleModelsDone(msg modelsMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 	}
-	startSel := currentIdx
-	if startSel < 0 {
-		startSel = 0
-	}
+	startSel := max(currentIdx, 0)
 	models := msg.models // capture for closure
 	m.picker = &pickerState{
 		title:   fmt.Sprintf("Select model (%s):", m.ai.providerName),

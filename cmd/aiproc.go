@@ -662,10 +662,7 @@ func (m aiTUIModel) writeProcessSection(b *strings.Builder, width, bodyLines int
 		}
 
 		name := p.name
-		maxName := width - 5
-		if maxName < 3 {
-			maxName = 3
-		}
+		maxName := max(width-5, 3)
 		runes := []rune(name)
 		if len(runes) > maxName {
 			name = string(runes[:maxName-1]) + "…"

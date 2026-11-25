@@ -30,8 +30,8 @@ func sqsAttributes(props map[string]any, messageID, correlationID, replyTo, cont
 	attrs := make(map[string]sqstypes.MessageAttributeValue, len(raw))
 	for k, v := range raw {
 		attrs[k] = sqstypes.MessageAttributeValue{
-			DataType:    strPtr("String"),
-			StringValue: strPtr(v),
+			DataType:    new("String"),
+			StringValue: new(v),
 		}
 	}
 	return attrs
@@ -42,8 +42,8 @@ func snsAttributes(props map[string]any, messageID, correlationID, replyTo, cont
 	attrs := make(map[string]snstypes.MessageAttributeValue, len(raw))
 	for k, v := range raw {
 		attrs[k] = snstypes.MessageAttributeValue{
-			DataType:    strPtr("String"),
-			StringValue: strPtr(v),
+			DataType:    new("String"),
+			StringValue: new(v),
 		}
 	}
 	return attrs
@@ -89,8 +89,6 @@ func sqsToBackendMessage(msg sqstypes.Message) *backends.Message {
 
 	return result
 }
-
-func strPtr(s string) *string { return &s }
 
 func derefStr(s *string) string {
 	if s == nil {

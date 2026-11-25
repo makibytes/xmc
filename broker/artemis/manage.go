@@ -476,8 +476,8 @@ func ListAddresses(args ManagementArgs) ([]backends.ObjectNode, error) {
 
 // parseAddressFromMBean extracts the address= value from a JMX MBean name.
 func parseAddressFromMBean(name string) string {
-	parts := strings.Split(stripMBeanDomain(name), ",")
-	for _, part := range parts {
+	parts := strings.SplitSeq(stripMBeanDomain(name), ",")
+	for part := range parts {
 		kv := strings.SplitN(part, "=", 2)
 		if len(kv) == 2 && kv[0] == "address" {
 			return strings.Trim(kv[1], "\"")
@@ -491,8 +491,8 @@ func parseAddressFromMBean(name string) string {
 // so "address" comes first and would otherwise be glued to the domain
 // ("org.apache.activemq.artemis:address=...") and never match.
 func stripMBeanDomain(name string) string {
-	if i := strings.Index(name, ":"); i >= 0 {
-		return name[i+1:]
+	if _, after, ok := strings.Cut(name, ":"); ok {
+		return after
 	}
 	return name
 }
@@ -524,8 +524,8 @@ type QueueStats = backends.QueueStats
 
 func parseMBeanName(name string) QueueInfo {
 	qi := QueueInfo{}
-	parts := strings.Split(stripMBeanDomain(name), ",")
-	for _, part := range parts {
+	parts := strings.SplitSeq(stripMBeanDomain(name), ",")
+	for part := range parts {
 		kv := strings.SplitN(part, "=", 2)
 		if len(kv) != 2 {
 			continue

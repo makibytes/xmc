@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -307,10 +308,8 @@ func isMessageRead(stage string) bool {
 // "grep x | send q" as message-mutating.
 func anyCommand(line string, aliases map[string]string, predicate func(string) bool) bool {
 	for _, command := range splitCommands(expandAlias(strings.TrimSpace(line), aliases)) {
-		for _, stage := range splitPipeline(command) {
-			if predicate(stage) {
-				return true
-			}
+		if slices.ContainsFunc(splitPipeline(command), predicate) {
+			return true
 		}
 	}
 	return false

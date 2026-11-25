@@ -1195,10 +1195,7 @@ func (m aiTUIModel) handleObjectsDone(msg objectsMsg) (tea.Model, tea.Cmd) {
 		m.refreshing = false
 		m.lastFetchDur = time.Since(m.refreshStart)
 		if m.autoUpdateEnabled() {
-			next := time.Duration(refreshFactor) * m.lastFetchDur
-			if next < m.refreshPeriod {
-				next = m.refreshPeriod
-			}
+			next := max(time.Duration(refreshFactor)*m.lastFetchDur, m.refreshPeriod)
 			return m, tea.Tick(next, func(time.Time) tea.Msg { return refreshTickMsg{} })
 		}
 	}
@@ -1501,10 +1498,7 @@ func longestCommonPrefix(candidates [][]rune) []rune {
 	}
 	prefix := candidates[0]
 	for _, c := range candidates[1:] {
-		n := len(prefix)
-		if len(c) < n {
-			n = len(c)
-		}
+		n := min(len(c), len(prefix))
 		i := 0
 		for i < n && prefix[i] == c[i] {
 			i++

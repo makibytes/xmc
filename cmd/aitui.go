@@ -822,10 +822,7 @@ func (m aiTUIModel) View() string {
 	}
 	binaryText := " " + m.binaryName + " "
 	serverInfo := m.serverInfo()
-	padLen := w - lipgloss.Width(titleText) - lipgloss.Width(binaryText) - lipgloss.Width(modelInfo) - lipgloss.Width(serverInfo)
-	if padLen < 1 {
-		padLen = 1
-	}
+	padLen := max(w-lipgloss.Width(titleText)-lipgloss.Width(binaryText)-lipgloss.Width(modelInfo)-lipgloss.Width(serverInfo), 1)
 	titleBar := th.titleMain().Render(titleText) +
 		th.titleDim().Render(binaryText) +
 		th.titleDim().Render(strings.Repeat("─", padLen)) +
@@ -909,13 +906,7 @@ func (m aiTUIModel) sidebarVisible() bool {
 // terminal size and whether sidebar windows are configured.
 func (m aiTUIModel) paneWidths() (convWidth, sideWidth int) {
 	if m.width >= 90 && len(m.objTypes) > 0 {
-		sideWidth = m.width / 3
-		if sideWidth < 32 {
-			sideWidth = 32
-		}
-		if sideWidth > 40 {
-			sideWidth = 40
-		}
+		sideWidth = min(max(m.width/3, 32), 40)
 	}
 	convWidth = m.width
 	if sideWidth > 0 {
@@ -977,16 +968,13 @@ func (m aiTUIModel) renderMainContent() string {
 	// Build a full-height vertical separator. Use the same grey (dimStyle) as
 	// the sidebar window underlines. On rows that align with a window underline,
 	// emit ├ to visually connect the vertical bar to the horizontal rule.
-	h := m.viewport.Height
-	if h < 1 {
-		h = 1
-	}
+	h := max(m.viewport.Height, 1)
 	junctionSet := make(map[int]bool, len(junctionRows))
 	for _, r := range junctionRows {
 		junctionSet[r] = true
 	}
 	sepLines := make([]string, h)
-	for row := 0; row < h; row++ {
+	for row := range h {
 		ch := "│"
 		if junctionSet[row] {
 			ch = "├"
@@ -1010,10 +998,7 @@ func (m aiTUIModel) renderStatusBar() string {
 	// Available width for the left (hint) segment, reserving space for right
 	// and at least one padding column — used by the object-pane branch below
 	// to decide whether its hint list needs to scroll.
-	hintWidth := m.width - lipgloss.Width(right) - 1
-	if hintWidth < 1 {
-		hintWidth = 1
-	}
+	hintWidth := max(m.width-lipgloss.Width(right)-1, 1)
 
 	// While a sidebar prompt (create/delete/purge/send/publish) is active,
 	// the object window's hotkeys are not live — only Enter (confirm the
@@ -1121,10 +1106,7 @@ func (m aiTUIModel) renderStatusBar() string {
 // padStatusBar right-pads left with spaces (at least one) so right lands
 // flush against the terminal's right edge.
 func padStatusBar(left, right string, width int) string {
-	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if pad < 1 {
-		pad = 1
-	}
+	pad := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	return left + strings.Repeat(" ", pad) + right
 }
 
@@ -1205,10 +1187,7 @@ func (m *aiTUIModel) recalcLayout() {
 	headerHeight := 2
 	// Use the textarea's authoritative height so the budget always matches what
 	// View() actually renders (textarea.View() always emits exactly m.input.Height() lines).
-	inputLines := m.input.Height()
-	if inputLines < 1 {
-		inputLines = 1
-	}
+	inputLines := max(m.input.Height(), 1)
 	inputHeight := 2 + inputLines // top rule + textarea rows + bottom rule
 	statusHeight := 1
 	slack := 1
@@ -1217,10 +1196,7 @@ func (m *aiTUIModel) recalcLayout() {
 	if m.conn.reconnectStatus != "" {
 		reconnectLine = 1
 	}
-	vpHeight := m.height - headerHeight - inputHeight - statusHeight - slack - reconnectLine
-	if vpHeight < 3 {
-		vpHeight = 3
-	}
+	vpHeight := max(m.height-headerHeight-inputHeight-statusHeight-slack-reconnectLine, 3)
 	convWidth, _ := m.paneWidths()
 	m.viewport.Width = convWidth - 2
 	m.viewport.Height = vpHeight
@@ -1236,12 +1212,9 @@ func (m *aiTUIModel) recalcLayout() {
 // undercounts as soon as a word soft-wraps, which made the textarea scroll its
 // first line out of view before the height caught up.
 func (m *aiTUIModel) computeInputLines(value string) int {
-	w := m.input.Width() // inner content width (after prompt and reserved margins)
-	if w < 1 {
-		w = 1
-	}
+	w := max(m.input.Width(), 1) // inner content width (after prompt and reserved margins)
 	n := 0
-	for _, line := range strings.Split(value, "\n") {
+	for line := range strings.SplitSeq(value, "\n") {
 		n += len(textareaWrap([]rune(line), w))
 	}
 	if n < 1 {
@@ -1423,10 +1396,7 @@ func (m *aiTUIModel) setViewportContent() {
 		for _, l := range lines {
 			totalRunes += len([]rune(l))
 		}
-		period := totalRunes + shimmerBand
-		if period < 1 {
-			period = 1
-		}
+		period := max(totalRunes+shimmerBand, 1)
 		pos := m.shimmerPhase % period // left edge of the bright band
 		var shimmed strings.Builder
 		globalIdx := 0 // continuous rune index across all wrapped lines

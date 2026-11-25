@@ -100,8 +100,8 @@ func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("listing subscriptions: %w", err)
 		}
-		if strings.HasPrefix(s.ID(), prefix) {
-			queues = append(queues, backends.QueueInfo{Name: strings.TrimPrefix(s.ID(), prefix)})
+		if after, ok := strings.CutPrefix(s.ID(), prefix); ok {
+			queues = append(queues, backends.QueueInfo{Name: after})
 		}
 	}
 	return queues, nil
