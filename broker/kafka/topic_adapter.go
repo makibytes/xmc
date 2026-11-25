@@ -102,30 +102,28 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 		Offset:    OffsetUnset,
 	}
 
-	if opts.Extra != nil {
-		if v, ok := opts.Extra["partition"]; ok {
-			p, err := strconv.Atoi(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid --partition value %q: %w", v, err)
-			}
-			args.Partition = p
+	if v, ok := opts.Extra["partition"]; ok {
+		p, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --partition value %q: %w", v, err)
 		}
-		if v, ok := opts.Extra["offset"]; ok {
-			switch v {
-			case "earliest":
-				args.Offset = kafka.FirstOffset
-			case "latest":
-				args.Offset = kafka.LastOffset
-			default:
-				o, err := strconv.ParseInt(v, 10, 64)
-				if err != nil {
-					return nil, fmt.Errorf("invalid --offset value %q (use earliest, latest, or a number): %w", v, err)
-				}
-				args.Offset = o
+		args.Partition = p
+	}
+	if v, ok := opts.Extra["offset"]; ok {
+		switch v {
+		case "earliest":
+			args.Offset = kafka.FirstOffset
+		case "latest":
+			args.Offset = kafka.LastOffset
+		default:
+			o, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --offset value %q (use earliest, latest, or a number): %w", v, err)
 			}
-			if args.Partition < 0 {
-				return nil, fmt.Errorf("--offset requires --partition (offsets are per-partition)")
-			}
+			args.Offset = o
+		}
+		if args.Partition < 0 {
+			return nil, fmt.Errorf("--offset requires --partition (offsets are per-partition)")
 		}
 	}
 

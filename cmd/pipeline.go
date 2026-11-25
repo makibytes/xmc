@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -202,6 +203,17 @@ type shellSession struct {
 	aliases      map[string]string
 }
 
+// newShellSession builds a session whose adapters connect lazily and
+// reconnect transparently after connection loss.
+func newShellSession(spec BrokerSpec, aliases map[string]string) *shellSession {
+	return &shellSession{
+		spec:         spec,
+		queueFactory: wrapReconnectQueue(spec.Queue, ReconnectOptions{}),
+		topicFactory: wrapReconnectTopic(spec.Topic, ReconnectOptions{}),
+		aliases:      aliases,
+	}
+}
+
 func (s *shellSession) getQueueAdapter() (backends.QueueBackend, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -307,47 +319,40 @@ func (s *shellSession) runOnePipeline(ctx context.Context, line string, rootCmd 
 		return s.executeBlock(ctx, blocks[0], in, out, errw, rootCmd, false, false)
 	}
 
-	// Multi-block pipeline: wire up os.Pipe between blocks.
+	// Multi-block pipeline: wire up os.Pipe between blocks. Each block reads
+	// what the previous one wrote; the read end of every pipe is closed once
+	// the pipeline is done, so no descriptor outlives a command line.
 	g, ctx := errgroup.WithContext(ctx)
-	var prevReader = in
-
-	for i, block := range blocks {
-		isLast := i == len(blocks)-1
-		isFirst := i == 0
-
-		var nextWriter io.WriteCloser
-		var reader io.Reader
-
-		if isLast {
-			reader = prevReader
-			// Last block writes to out.
-			g.Go(func() error {
-				return s.executeBlock(ctx, block, reader, out, errw, rootCmd,
-					!isFirst && block.isVerb && prevBlockIsVerb(blocks, i),
-					false)
-			})
-		} else {
-			pr, pw, err := os.Pipe()
-			if err != nil {
-				return fmt.Errorf("create pipe: %w", err)
-			}
-			reader = prevReader
-			nextWriter = pw
-
-			nextIsVerb := blocks[i+1].isVerb
-			currentBlock := block
-			currentReader := reader
-			currentWriter := nextWriter
-
-			g.Go(func() error {
-				defer currentWriter.Close() //nolint:errcheck
-				return s.executeBlock(ctx, currentBlock, currentReader, currentWriter, errw, rootCmd,
-					false,
-					currentBlock.isVerb && nextIsVerb)
-			})
-
-			prevReader = pr
+	var readEnds []*os.File
+	defer func() {
+		for _, f := range readEnds {
+			_ = f.Close()
 		}
+	}()
+
+	var src io.Reader = in
+	for i, block := range blocks {
+		reader := src
+		if i == len(blocks)-1 {
+			// The last block writes to out.
+			verbInput := block.isVerb && prevBlockIsVerb(blocks, i)
+			g.Go(func() error {
+				return s.executeBlock(ctx, block, reader, out, errw, rootCmd, verbInput, false)
+			})
+			break
+		}
+
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			return fmt.Errorf("create pipe: %w", err)
+		}
+		readEnds = append(readEnds, pr)
+		verbOutput := block.isVerb && blocks[i+1].isVerb
+		g.Go(func() error {
+			defer pw.Close() //nolint:errcheck
+			return s.executeBlock(ctx, block, reader, pw, errw, rootCmd, false, verbOutput)
+		})
+		src = pr
 	}
 
 	return g.Wait()
@@ -650,6 +655,11 @@ func (s *shellSession) executeExternal(ctx context.Context, block pipelineBlock,
 	return runExternal(ctx, strings.Join(parts, " | "), in, out, errw)
 }
 
+// systemShell returns the user's $SHELL, or "sh" when unset.
+func systemShell() string {
+	return cmp.Or(os.Getenv("SHELL"), "sh")
+}
+
 // runExternal runs cmdLine with the user's $SHELL (sh when unset). The process
 // is killed when ctx is cancelled, so Esc in the AI shell stops e.g. a
 // "sleep 100" just like it stops a long-running xmc verb.
@@ -659,12 +669,7 @@ func runExternal(ctx context.Context, cmdLine string, in io.Reader, out io.Write
 		return nil
 	}
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-
-	c := exec.CommandContext(ctx, shell, "-c", cmdLine)
+	c := exec.CommandContext(ctx, systemShell(), "-c", cmdLine)
 	c.Stdin = in
 	c.Stdout = out
 	c.Stderr = errw
@@ -691,10 +696,8 @@ func isConsumer(verb string) bool {
 
 // ensureFlag appends a flag to args if it is not already present.
 func ensureFlag(args []string, flag string) []string {
-	for _, a := range args {
-		if a == flag {
-			return args
-		}
+	if slices.Contains(args, flag) {
+		return args
 	}
 	return append(args, flag)
 }

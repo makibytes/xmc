@@ -41,7 +41,7 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 // Send implements backends.QueueBackend.
 func (a *QueueAdapter) Send(_ context.Context, opts backends.SendOptions) error {
 	sn := streamName(opts.Queue)
-	if opts.Extra != nil && opts.Extra["stream"] != "" {
+	if opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]
 	}
 	subject, err := a.ensureStreamWithName(sn, queueSubject(opts.Queue))
@@ -78,7 +78,7 @@ func (a *QueueAdapter) Send(_ context.Context, opts backends.SendOptions) error 
 // Receive implements backends.QueueBackend.
 func (a *QueueAdapter) Receive(_ context.Context, opts backends.ReceiveOptions) (*backends.Message, error) {
 	sn := streamName(opts.Queue)
-	if opts.Extra != nil && opts.Extra["stream"] != "" {
+	if opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]
 	}
 	subject, err := a.ensureStreamWithName(sn, queueSubject(opts.Queue))

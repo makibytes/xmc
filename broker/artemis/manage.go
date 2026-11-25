@@ -3,7 +3,9 @@
 package artemis
 
 import (
+	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -19,24 +21,21 @@ type ManagementArgs struct {
 	BrokerName string // Artemis broker name for Jolokia MBean paths (default "0.0.0.0")
 }
 
-// brokerMBean returns the Jolokia-encoded broker= prefix for MBean paths.
-// Uses args.BrokerName if set, otherwise defaults to "0.0.0.0".
+// brokerName returns args.BrokerName, defaulting to "0.0.0.0".
+func (args ManagementArgs) brokerName() string {
+	return cmp.Or(args.BrokerName, "0.0.0.0")
+}
+
+// brokerMBean returns the Jolokia-encoded broker= value for MBean paths in
+// GET URLs.
 func (args ManagementArgs) brokerMBean() string {
-	name := args.BrokerName
-	if name == "" {
-		name = "0.0.0.0"
-	}
-	return "%22" + name + "%22"
+	return "%22" + args.brokerName() + "%22"
 }
 
 // brokerMBeanName returns the full server-control MBean name with literal
 // quotes, for use in POST request bodies (no URL encoding).
 func (args ManagementArgs) brokerMBeanName() string {
-	name := args.BrokerName
-	if name == "" {
-		name = "0.0.0.0"
-	}
-	return `org.apache.activemq.artemis:broker="` + name + `"`
+	return `org.apache.activemq.artemis:broker="` + args.brokerName() + `"`
 }
 
 // jolokiaURL converts the AMQP server URL to Jolokia HTTP URL
@@ -50,21 +49,24 @@ func jolokiaURL(amqpServer string) (string, error) {
 	return fmt.Sprintf("http://%s:8161/console/jolokia", host), nil
 }
 
-// ListQueues lists all queues via Jolokia
-func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
+// mbeanAttrs is one MBean returned by a Jolokia read or search.
+type mbeanAttrs struct {
+	name  string
+	attrs map[string]any // nil for names returned by a search
+}
+
+// jolokiaQuery reads readPath and, if that fails, falls back to searchPath
+// (which yields MBean names only). A read answers with a map of MBean name to
+// attributes, a search with an array of MBean names; both are returned in one
+// shape.
+func jolokiaQuery(args ManagementArgs, readPath, searchPath string) ([]mbeanAttrs, error) {
 	base, err := jolokiaURL(args.Server)
 	if err != nil {
 		return nil, err
 	}
-
-	// Query for all queue MBeans (broker=* matches any broker name)
-	path := "/read/org.apache.activemq.artemis:broker=*,component=addresses,address=*,subcomponent=queues,routing-type=%22anycast%22,queue=*"
-	body, err := backends.MgmtGet(base+path, args.User, args.Password)
+	body, err := backends.MgmtGet(base+readPath, args.User, args.Password)
 	if err != nil {
-		// Try alternative: search for queue names
-		path = "/search/org.apache.activemq.artemis:broker=*,component=addresses,address=*,subcomponent=queues,routing-type=*,queue=*"
-		body, err = backends.MgmtGet(base+path, args.User, args.Password)
-		if err != nil {
+		if body, err = backends.MgmtGet(base+searchPath, args.User, args.Password); err != nil {
 			return nil, err
 		}
 	}
@@ -76,37 +78,51 @@ func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
 		return nil, fmt.Errorf("failed to parse Jolokia response: %w", err)
 	}
 
-	// Try parsing as array of MBean names (search result)
-	var mbeanNames []string
-	if err := json.Unmarshal(result.Value, &mbeanNames); err == nil {
-		var queues []QueueInfo
-		for _, name := range mbeanNames {
-			qi := parseMBeanName(name)
-			if qi.Name != "" {
-				queues = append(queues, qi)
-			}
+	var names []string
+	if err := json.Unmarshal(result.Value, &names); err == nil {
+		out := make([]mbeanAttrs, len(names))
+		for i, name := range names {
+			out[i] = mbeanAttrs{name: name}
 		}
-		return queues, nil
+		return out, nil
+	}
+	var byName map[string]map[string]any
+	if err := json.Unmarshal(result.Value, &byName); err == nil {
+		out := make([]mbeanAttrs, 0, len(byName))
+		for name, attrs := range byName {
+			out = append(out, mbeanAttrs{name: name, attrs: attrs})
+		}
+		return out, nil
+	}
+	return nil, errors.New("unexpected Jolokia response format")
+}
+
+// ListQueues lists all queues via Jolokia
+func ListQueues(args ManagementArgs) ([]QueueInfo, error) {
+	// Read the ANYCAST queue MBeans with their attributes; the search fallback
+	// covers every routing type but carries no counts.
+	found, err := jolokiaQuery(args,
+		"/read/org.apache.activemq.artemis:broker=*,component=addresses,address=*,subcomponent=queues,routing-type=%22anycast%22,queue=*",
+		"/search/org.apache.activemq.artemis:broker=*,component=addresses,address=*,subcomponent=queues,routing-type=*,queue=*")
+	if err != nil {
+		return nil, err
 	}
 
-	// Try parsing as map of MBean name -> attributes (read result)
-	var mbeanMap map[string]map[string]any
-	if err := json.Unmarshal(result.Value, &mbeanMap); err == nil {
-		var queues []QueueInfo
-		for name, attrs := range mbeanMap {
-			qi := parseMBeanName(name)
-			if count, ok := attrs["MessageCount"].(float64); ok {
-				qi.MessageCount = int64(count)
-			}
-			if count, ok := attrs["ConsumerCount"].(float64); ok {
-				qi.ConsumerCount = int(count)
-			}
-			queues = append(queues, qi)
+	var queues []QueueInfo
+	for _, m := range found {
+		qi := parseMBeanName(m.name)
+		if qi.Name == "" {
+			continue
 		}
-		return queues, nil
+		if count, ok := m.attrs["MessageCount"].(float64); ok {
+			qi.MessageCount = int64(count)
+		}
+		if count, ok := m.attrs["ConsumerCount"].(float64); ok {
+			qi.ConsumerCount = int(count)
+		}
+		queues = append(queues, qi)
 	}
-
-	return nil, fmt.Errorf("unexpected Jolokia response format")
+	return queues, nil
 }
 
 // jolokiaExec performs a Jolokia exec operation via POST. POST avoids the
@@ -227,11 +243,6 @@ func GetQueueStats(args ManagementArgs, queue string) (*QueueStats, error) {
 	return stats, nil
 }
 
-// CreateQueue creates an ANYCAST address and queue of the same name.
-func CreateQueue(args ManagementArgs, queue string) error {
-	return CreateQueueWithConfig(args, QueueConfig{"name": queue})
-}
-
 // QueueConfig collects Artemis QueueConfiguration attributes (kebab-case JSON
 // keys as defined by the Artemis QueueConfiguration contract: "address",
 // "routing-type", "filter-string", "durable", "max-consumers",
@@ -346,21 +357,9 @@ func DisableQueue(args ManagementArgs, queue string) error {
 
 // DeleteQueue destroys an ANYCAST queue and its address via Jolokia.
 func DeleteQueue(args ManagementArgs, queue string) error {
-	base, err := jolokiaURL(args.Server)
-	if err != nil {
-		return err
-	}
-
 	// destroyQueue(name, removeConsumers, autoDeleteAddress) — true, true
-	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%s/destroyQueue(java.lang.String,boolean,boolean)/%s/true/true",
-		args.brokerMBean(), url.PathEscape(queue))
-	body, err := backends.MgmtGet(base+path, args.User, args.Password)
-	if err != nil {
-		return err
-	}
-
-	return checkJolokiaError(body)
+	_, err := jolokiaExec(args, args.brokerMBeanName(), "destroyQueue(java.lang.String,boolean,boolean)", queue, true, true)
+	return err
 }
 
 // CreateTopic creates a MULTICAST address via Jolokia.
@@ -376,108 +375,46 @@ func DeleteTopic(args ManagementArgs, topic string) error {
 // CreateAddress creates a bare address with the given routing type via Jolokia.
 // routingType may be "ANYCAST", "MULTICAST", or "ANYCAST,MULTICAST".
 func CreateAddress(args ManagementArgs, name, routingType string) error {
-	base, err := jolokiaURL(args.Server)
-	if err != nil {
-		return err
-	}
-	if routingType == "" {
-		routingType = "ANYCAST"
-	}
-	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%s/createAddress(java.lang.String,java.lang.String)/%s/%s",
-		args.brokerMBean(), url.PathEscape(name), url.PathEscape(routingType))
-	body, err := backends.MgmtGet(base+path, args.User, args.Password)
-	if err != nil {
-		return err
-	}
-	return checkJolokiaError(body)
+	_, err := jolokiaExec(args, args.brokerMBeanName(), "createAddress(java.lang.String,java.lang.String)", name, cmp.Or(routingType, "ANYCAST"))
+	return err
 }
 
 // DeleteAddress deletes an address (and all its queues) via Jolokia.
 func DeleteAddress(args ManagementArgs, name string) error {
-	base, err := jolokiaURL(args.Server)
-	if err != nil {
-		return err
-	}
-	path := fmt.Sprintf(
-		"/exec/org.apache.activemq.artemis:broker=%s/deleteAddress(java.lang.String,boolean)/%s/true",
-		args.brokerMBean(), url.PathEscape(name))
-	body, err := backends.MgmtGet(base+path, args.User, args.Password)
-	if err != nil {
-		return err
-	}
-	return checkJolokiaError(body)
+	_, err := jolokiaExec(args, args.brokerMBeanName(), "deleteAddress(java.lang.String,boolean)", name, true)
+	return err
 }
 
-// ListAddresses lists all MULTICAST addresses (topics) via Jolokia.
+// ListAddresses lists all addresses via Jolokia, with their routing type when
+// the read (rather than the search fallback) succeeded.
 func ListAddresses(args ManagementArgs) ([]backends.ObjectNode, error) {
-	base, err := jolokiaURL(args.Server)
+	const pattern = "org.apache.activemq.artemis:broker=*,component=addresses,address=*"
+	found, err := jolokiaQuery(args, "/read/"+pattern, "/search/"+pattern)
 	if err != nil {
 		return nil, err
 	}
 
-	// Search for all address MBeans.
-	path := "/read/org.apache.activemq.artemis:broker=*,component=addresses,address=*"
-	body, err := backends.MgmtGet(base+path, args.User, args.Password)
-	if err != nil {
-		// Fall back to search.
-		path = "/search/org.apache.activemq.artemis:broker=*,component=addresses,address=*"
-		body, err = backends.MgmtGet(base+path, args.User, args.Password)
-		if err != nil {
-			return nil, err
+	seen := make(map[string]bool)
+	var out []backends.ObjectNode
+	for _, m := range found {
+		addr := parseAddressFromMBean(m.name)
+		if addr == "" || seen[addr] {
+			continue
 		}
-	}
-
-	var result struct {
-		Value json.RawMessage `json:"value"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse Jolokia response: %w", err)
-	}
-
-	// Try parsing as array of MBean names (search result).
-	var mbeanNames []string
-	if err := json.Unmarshal(result.Value, &mbeanNames); err == nil {
-		seen := make(map[string]bool)
-		var out []backends.ObjectNode
-		for _, name := range mbeanNames {
-			addr := parseAddressFromMBean(name)
-			if addr == "" || seen[addr] {
-				continue
-			}
-			seen[addr] = true
-			out = append(out, backends.ObjectNode{Name: addr})
+		seen[addr] = true
+		node := backends.ObjectNode{Name: addr}
+		if rt := routingTypesString(m.attrs["RoutingTypes"]); rt != "" {
+			node.Kind = normalizeRoutingType(rt)
 		}
-		return out, nil
+		out = append(out, node)
 	}
-
-	// Try parsing as map of MBean name → attributes.
-	var mbeanMap map[string]map[string]any
-	if err := json.Unmarshal(result.Value, &mbeanMap); err == nil {
-		seen := make(map[string]bool)
-		var out []backends.ObjectNode
-		for name, attrs := range mbeanMap {
-			addr := parseAddressFromMBean(name)
-			if addr == "" || seen[addr] {
-				continue
-			}
-			seen[addr] = true
-			node := backends.ObjectNode{Name: addr}
-			if rt := routingTypesString(attrs["RoutingTypes"]); rt != "" {
-				node.Kind = normalizeRoutingType(rt)
-			}
-			out = append(out, node)
-		}
-		return out, nil
-	}
-
-	return nil, fmt.Errorf("unexpected Jolokia response format")
+	return out, nil
 }
 
 // parseAddressFromMBean extracts the address= value from a JMX MBean name.
 func parseAddressFromMBean(name string) string {
-	parts := strings.Split(stripMBeanDomain(name), ",")
-	for _, part := range parts {
+	parts := strings.SplitSeq(stripMBeanDomain(name), ",")
+	for part := range parts {
 		kv := strings.SplitN(part, "=", 2)
 		if len(kv) == 2 && kv[0] == "address" {
 			return strings.Trim(kv[1], "\"")
@@ -491,8 +428,8 @@ func parseAddressFromMBean(name string) string {
 // so "address" comes first and would otherwise be glued to the domain
 // ("org.apache.activemq.artemis:address=...") and never match.
 func stripMBeanDomain(name string) string {
-	if i := strings.Index(name, ":"); i >= 0 {
-		return name[i+1:]
+	if _, after, ok := strings.Cut(name, ":"); ok {
+		return after
 	}
 	return name
 }
@@ -524,8 +461,8 @@ type QueueStats = backends.QueueStats
 
 func parseMBeanName(name string) QueueInfo {
 	qi := QueueInfo{}
-	parts := strings.Split(stripMBeanDomain(name), ",")
-	for _, part := range parts {
+	parts := strings.SplitSeq(stripMBeanDomain(name), ",")
+	for part := range parts {
 		kv := strings.SplitN(part, "=", 2)
 		if len(kv) != 2 {
 			continue

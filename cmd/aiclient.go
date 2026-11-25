@@ -3,13 +3,14 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -91,7 +92,6 @@ func doWithRetry(ctx context.Context, buildReq func() (*http.Request, error)) (*
 			body, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
-			lastResp = nil
 			return lastErr
 		}
 		if resp.StatusCode >= 400 {
@@ -113,9 +113,9 @@ func doWithRetry(ctx context.Context, buildReq func() (*http.Request, error)) (*
 }
 
 type aiClient interface {
-	// Complete sends a chat completion request. When onToken is non-nil the
-	// client uses the provider's streaming API and calls onToken for each
-	// text chunk as it arrives; when nil, the non-streaming endpoint is used.
+	// Complete sends a chat completion request over the provider's streaming
+	// API, calling onToken (when non-nil) for each text chunk as it arrives,
+	// and returns the full text.
 	Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error)
 }
 
@@ -161,17 +161,14 @@ type modelLister interface {
 const aiListTimeout = 15 * time.Second
 
 func newAIClient(spec providerSpec) aiClient {
-	timeout := spec.requestTimeout
-	if timeout <= 0 {
-		timeout = defaultRequestTimeout
-	}
+	base := baseAIClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: spec.requestTimeout}
 	switch spec.name {
 	case "anthropic":
-		return &anthropicClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
+		return &anthropicClient{baseAIClient: base}
 	case "gemini":
-		return &geminiClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
+		return &geminiClient{baseAIClient: base}
 	default:
-		return &openaiClient{provider: spec.name, apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: timeout}
+		return &openaiClient{baseAIClient: base, provider: spec.name}
 	}
 }
 
@@ -208,17 +205,12 @@ func fetchModelIDs(req *http.Request, extract func(io.Reader) ([]string, error))
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("models API %d: %s", resp.StatusCode, truncate(string(b), 200))
 	}
-	raw, err := extract(resp.Body)
+	ids, err := extract(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(raw))
-	for _, id := range raw {
-		if id != "" {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
+	ids = slices.DeleteFunc(ids, func(id string) bool { return id == "" })
+	slices.Sort(ids)
 	return ids, nil
 }
 
@@ -268,6 +260,45 @@ func (c *baseAIClient) callContext(ctx context.Context) (context.Context, contex
 	return context.WithTimeout(ctx, timeout)
 }
 
+// post sends body as JSON to url, authenticated by setAuth, retrying transient
+// failures (see doWithRetry). The caller must close the response body.
+func (c *baseAIClient) post(ctx context.Context, url string, body any, setAuth func(http.Header)) (*http.Response, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		setAuth(req.Header)
+		return req, nil
+	})
+}
+
+// listModels GETs the provider's model-listing endpoint at path and decodes
+// it with extract (see fetchModelIDs).
+func (c *baseAIClient) listModels(ctx context.Context, path string, setAuth func(http.Header), extract func(io.Reader) ([]string, error)) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	setAuth(req.Header)
+	return fetchModelIDs(req, extract)
+}
+
+// tokenSink returns onToken, or a no-op when the caller doesn't want tokens.
+func tokenSink(onToken func(string)) func(string) {
+	if onToken == nil {
+		return func(string) {}
+	}
+	return onToken
+}
+
 // --- Anthropic (POST /v1/messages) ---
 
 type anthropicClient struct {
@@ -296,16 +327,13 @@ func supportsAnthropicEffort(model string) bool {
 	return false
 }
 
+func (c *anthropicClient) setAuth(h http.Header) {
+	h.Set("x-api-key", c.apiKey)
+	h.Set("anthropic-version", "2023-06-01")
+}
+
 func (c *anthropicClient) ListModels(ctx context.Context) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/v1/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	return fetchModelIDs(req, extractOpenAIModelIDs)
+	return c.listModels(ctx, "/v1/models", c.setAuth, extractOpenAIModelIDs)
 }
 
 func (c *anthropicClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
@@ -322,73 +350,21 @@ func (c *anthropicClient) Complete(ctx context.Context, system string, messages 
 		"max_tokens": c.maxTokens,
 		"system":     system,
 		"messages":   msgs,
+		"stream":     true,
 	}
 	if supportsAnthropicEffort(c.model) {
 		body["output_config"] = map[string]any{"effort": c.Effort()}
 	} else {
 		body["temperature"] = effortTemperature(c.Effort())
 	}
-	if onToken != nil {
-		body["stream"] = true
-	}
 
-	data, err := json.Marshal(body)
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-
-	resp, err := doWithRetry(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.apiKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-		return req, nil
-	})
+	resp, err := c.post(ctx, c.baseURL+"/v1/messages", body, c.setAuth)
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("anthropic API: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	if onToken != nil {
-		return c.parseStream(resp.Body, onToken)
-	}
-	return c.parseResponse(resp.Body)
-}
-
-func (c *anthropicClient) parseResponse(r io.Reader) (string, TokenUsage, error) {
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-	var result struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", TokenUsage{}, fmt.Errorf("parse anthropic response: %w", err)
-	}
-	var text strings.Builder
-	for _, block := range result.Content {
-		if block.Type == "text" || (block.Type == "" && block.Text != "") {
-			text.WriteString(block.Text)
-		}
-	}
-	if text.Len() == 0 {
-		return "", TokenUsage{}, fmt.Errorf("empty response from anthropic")
-	}
-	return text.String(), TokenUsage{
-		InputTokens:  result.Usage.InputTokens,
-		OutputTokens: result.Usage.OutputTokens,
-	}, nil
+	return c.parseStream(resp.Body, tokenSink(onToken))
 }
 
 func (c *anthropicClient) parseStream(r io.Reader, onToken func(string)) (string, TokenUsage, error) {
@@ -555,15 +531,12 @@ func (c *openaiClient) addGenerationConfig(body map[string]any) {
 	body["temperature"] = effortTemperature(effort)
 }
 
+func (c *openaiClient) setAuth(h http.Header) {
+	h.Set("Authorization", "Bearer "+c.apiKey)
+}
+
 func (c *openaiClient) ListModels(ctx context.Context) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/v1/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	return fetchModelIDs(req, extractOpenAIModelIDs)
+	return c.listModels(ctx, "/v1/models", c.setAuth, extractOpenAIModelIDs)
 }
 
 func (c *openaiClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
@@ -576,38 +549,20 @@ func (c *openaiClient) Complete(ctx context.Context, system string, messages []a
 	}
 
 	body := map[string]any{
-		"model":    c.model,
-		"messages": msgs,
+		"model":          c.model,
+		"messages":       msgs,
+		"stream":         true,
+		"stream_options": map[string]any{"include_usage": true},
 	}
 	c.addGenerationConfig(body)
-	if onToken != nil {
-		body["stream"] = true
-		body["stream_options"] = map[string]any{"include_usage": true}
-	}
 
-	data, err := json.Marshal(body)
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-
-	resp, err := doWithRetry(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-		return req, nil
-	})
+	resp, err := c.post(ctx, c.baseURL+"/v1/chat/completions", body, c.setAuth)
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("openai-compatible API (%s): %w", c.baseURL, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	if onToken != nil {
-		return c.parseStream(resp.Body, onToken)
-	}
-	return c.parseResponse(resp.Body)
+	return c.parseStream(resp.Body, tokenSink(onToken))
 }
 
 type chatContent string
@@ -640,43 +595,6 @@ func (content *chatContent) UnmarshalJSON(data []byte) error {
 	}
 	*content = chatContent(result.String())
 	return nil
-}
-
-func (c *openaiClient) parseResponse(r io.Reader) (string, TokenUsage, error) {
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content          chatContent `json:"content"`
-				ReasoningContent string      `json:"reasoning_content"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", TokenUsage{}, fmt.Errorf("parse response: %w", err)
-	}
-	if len(result.Choices) == 0 {
-		return "", TokenUsage{}, fmt.Errorf("empty response from %s", c.baseURL)
-	}
-	var usage TokenUsage
-	if result.Usage != nil {
-		usage.InputTokens = result.Usage.PromptTokens
-		usage.OutputTokens = result.Usage.CompletionTokens
-	}
-	content := string(result.Choices[0].Message.Content)
-	if content == "" && result.Choices[0].Message.ReasoningContent != "" {
-		return "", usage, fmt.Errorf("model %s produced only reasoning, no answer (finish_reason=%s); try raising ai.max-tokens in ~/.xmc config or use a non-reasoning model",
-			c.model, result.Choices[0].FinishReason)
-	}
-	return content, usage, nil
 }
 
 func (c *openaiClient) parseStream(r io.Reader, onToken func(string)) (string, TokenUsage, error) {
@@ -713,10 +631,7 @@ func (c *openaiClient) parseStream(r io.Reader, onToken func(string)) (string, T
 			d := chunk.Choices[0].Delta
 			// Reasoning models stream chain-of-thought in reasoning_content
 			// (or reasoning); show it live but don't include in the returned text.
-			if rc := d.ReasoningContent; rc != "" {
-				reasoning.WriteString(rc)
-				onToken(rc)
-			} else if rc := d.Reasoning; rc != "" {
+			if rc := cmp.Or(d.ReasoningContent, d.Reasoning); rc != "" {
 				reasoning.WriteString(rc)
 				onToken(rc)
 			}
@@ -783,15 +698,12 @@ func extractGeminiModelIDs(r io.Reader) ([]string, error) {
 // the key must never be part of the URL.
 const geminiKeyHeader = "x-goog-api-key"
 
+func (c *geminiClient) setAuth(h http.Header) {
+	h.Set(geminiKeyHeader, c.apiKey)
+}
+
 func (c *geminiClient) ListModels(ctx context.Context) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, aiListTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/v1beta/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(geminiKeyHeader, c.apiKey)
-	return fetchModelIDs(req, extractGeminiModelIDs)
+	return c.listModels(ctx, "/v1beta/models", c.setAuth, extractGeminiModelIDs)
 }
 
 func (c *geminiClient) Complete(ctx context.Context, system string, messages []aiMessage, onToken func(string)) (string, TokenUsage, error) {
@@ -828,68 +740,15 @@ func (c *geminiClient) Complete(ctx context.Context, system string, messages []a
 		"generationConfig": generationConfig,
 		"contents":         contents,
 	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
 
-	var apiURL string
-	if onToken != nil {
-		apiURL = fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", c.baseURL, c.model)
-	} else {
-		apiURL = fmt.Sprintf("%s/v1beta/models/%s:generateContent", c.baseURL, c.model)
-	}
-
-	resp, err := doWithRetry(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(geminiKeyHeader, c.apiKey)
-		return req, nil
-	})
+	apiURL := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", c.baseURL, c.model)
+	resp, err := c.post(ctx, apiURL, body, c.setAuth)
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("gemini API: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	if onToken != nil {
-		return c.parseStream(resp.Body, onToken)
-	}
-	return c.parseResponse(resp.Body)
-}
-
-func (c *geminiClient) parseResponse(r io.Reader) (string, TokenUsage, error) {
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return "", TokenUsage{}, err
-	}
-	var result struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-		UsageMetadata *struct {
-			PromptTokenCount     int `json:"promptTokenCount"`
-			CandidatesTokenCount int `json:"candidatesTokenCount"`
-		} `json:"usageMetadata"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", TokenUsage{}, fmt.Errorf("parse gemini response: %w", err)
-	}
-	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return "", TokenUsage{}, fmt.Errorf("empty response from gemini")
-	}
-	var usage TokenUsage
-	if result.UsageMetadata != nil {
-		usage.InputTokens = result.UsageMetadata.PromptTokenCount
-		usage.OutputTokens = result.UsageMetadata.CandidatesTokenCount
-	}
-	return result.Candidates[0].Content.Parts[0].Text, usage, nil
+	return c.parseStream(resp.Body, tokenSink(onToken))
 }
 
 func (c *geminiClient) parseStream(r io.Reader, onToken func(string)) (string, TokenUsage, error) {

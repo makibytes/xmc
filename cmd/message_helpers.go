@@ -6,10 +6,12 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/spf13/pflag"
 )
 
-func parsePropertiesFlag(cmd flagValueGetter) (map[string]any, error) {
-	values, err := cmd.GetStringSlice("property")
+func parsePropertiesFlag(flags *pflag.FlagSet) (map[string]any, error) {
+	values, err := flags.GetStringSlice("property")
 	if err != nil {
 		return nil, err
 	}
@@ -56,8 +58,20 @@ func readFromReader(r io.Reader) ([]byte, error) {
 	return data, nil
 }
 
-func forEachInputLine(r io.Reader, visit func(string) error) (int, error) {
+// maxInputLine bounds one input line (or NDJSON record), which may carry a
+// large (e.g. base64) payload.
+const maxInputLine = 16 * 1024 * 1024
+
+// newLineScanner returns a line scanner tolerant of very long lines; the
+// default bufio.Scanner limit (64 KB) rejects realistic payloads.
+func newLineScanner(r io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxInputLine)
+	return scanner
+}
+
+func forEachInputLine(r io.Reader, visit func(string) error) (int, error) {
+	scanner := newLineScanner(r)
 	processed := 0
 	for scanner.Scan() {
 		if err := visit(scanner.Text()); err != nil {

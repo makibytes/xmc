@@ -1081,18 +1081,18 @@ func TestComputeInputLines(t *testing.T) {
 	}
 
 	// Empty value → 1 line.
-	if got := (&m).computeInputLines(""); got != 1 {
+	if got := m.computeInputLines(""); got != 1 {
 		t.Errorf("empty value: got %d, want 1", got)
 	}
 
 	// Short value → 1 line.
-	if got := (&m).computeInputLines("hello"); got != 1 {
+	if got := m.computeInputLines("hello"); got != 1 {
 		t.Errorf("short value: got %d, want 1", got)
 	}
 
 	// Value one rune short of the row width → 1 line.
 	almostRow := strings.Repeat("x", w-1)
-	if got := (&m).computeInputLines(almostRow); got != 1 {
+	if got := m.computeInputLines(almostRow); got != 1 {
 		t.Errorf("almost-full row: got %d, want 1", got)
 	}
 
@@ -1100,13 +1100,13 @@ func TestComputeInputLines(t *testing.T) {
 	// trailing empty row for the cursor when a line is exactly full, so the
 	// widget really renders two rows here.
 	oneRow := strings.Repeat("x", w)
-	if got := (&m).computeInputLines(oneRow); got != 2 {
+	if got := m.computeInputLines(oneRow); got != 2 {
 		t.Errorf("exactly-full row: got %d, want 2", got)
 	}
 
 	// Value that exceeds one row → 2 lines.
 	twoRows := strings.Repeat("x", w+1)
-	if got := (&m).computeInputLines(twoRows); got != 2 {
+	if got := m.computeInputLines(twoRows); got != 2 {
 		t.Errorf("two-row value (%d runes, width %d): got %d, want 2", len(twoRows), w, got)
 	}
 
@@ -1114,20 +1114,20 @@ func TestComputeInputLines(t *testing.T) {
 	// the next row, so the count must be 2 even though the rune count alone
 	// would still fit into one row.
 	wordWrapped := strings.Repeat("x", w-3) + " yyyy"
-	if got := (&m).computeInputLines(wordWrapped); got != 2 {
+	if got := m.computeInputLines(wordWrapped); got != 2 {
 		t.Errorf("word-wrapped value: got %d, want 2", got)
 	}
 
 	// Very long value → clamped to maxInputLines.
 	huge := strings.Repeat("x", w*maxInputLines+100)
-	if got := (&m).computeInputLines(huge); got != maxInputLines {
+	if got := m.computeInputLines(huge); got != maxInputLines {
 		t.Errorf("huge value: got %d, want %d (maxInputLines)", got, maxInputLines)
 	}
 
 	// computeInputLines must agree with the widget's own wrapping for a value
 	// set directly into the textarea (LineInfo().Height is the widget's count).
 	m.input.SetValue(wordWrapped)
-	if got, want := (&m).computeInputLines(wordWrapped), m.input.LineInfo().Height; got != want {
+	if got, want := m.computeInputLines(wordWrapped), m.input.LineInfo().Height; got != want {
 		t.Errorf("computeInputLines = %d, widget LineInfo().Height = %d; must match", got, want)
 	}
 }
@@ -1332,7 +1332,7 @@ func TestAppendTranscript_Cap(t *testing.T) {
 	m.transcript.WriteString(strings.Repeat("a\n", over/2))
 
 	// A tiny appendTranscript call tips it over the cap and triggers the trim.
-	(&m).appendTranscript("tip\n")
+	m.appendTranscript("tip\n")
 
 	// Transcript must be trimmed to at most cap + small slack (the marker line).
 	slack := 1024
@@ -1346,7 +1346,7 @@ func TestAppendTranscript_Cap(t *testing.T) {
 	}
 
 	// Append a distinct string; confirm it is retained (tail policy).
-	(&m).appendTranscript("recent message\n")
+	m.appendTranscript("recent message\n")
 	if !strings.Contains(m.transcript.String(), "recent message") {
 		t.Error("most recently appended text should be retained after cap")
 	}
@@ -1800,12 +1800,12 @@ func TestAITUI_ProcessView_FromAIMode_PromptColorTracksText(t *testing.T) {
 		t.Fatalf("initial prompt color = %v, want themeAI accent", got)
 	}
 
-	(&m).enterProcessView()
+	m.enterProcessView()
 	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
 		t.Errorf("process view always shows a \"<binary>>\"-shaped prompt, so its color must be themeCmd even when entered from AI mode; got %v", got)
 	}
 
-	(&m).exitProcessView()
+	m.exitProcessView()
 	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeAI.accent {
 		t.Errorf("after exiting process view, prompt color = %v, want themeAI accent (the mode it was entered from)", got)
 	}
@@ -1816,17 +1816,17 @@ func TestAITUI_ProcessView_FromAIMode_PromptColorTracksText(t *testing.T) {
 
 func TestAITUI_ProcessView_FromCmdMode_PromptStaysBlueThroughout(t *testing.T) {
 	m := newTestModel()
-	(&m).toggleInputMode() // -> modeCmd
+	m.toggleInputMode() // -> modeCmd
 	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
 		t.Fatalf("after toggling to cmd mode, prompt color = %v, want themeCmd accent", got)
 	}
 
-	(&m).enterProcessView()
+	m.enterProcessView()
 	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
 		t.Errorf("process view prompt color = %v, want themeCmd accent", got)
 	}
 
-	(&m).exitProcessView()
+	m.exitProcessView()
 	if got := m.input.FocusedStyle.Prompt.GetForeground(); got != themeCmd.accent {
 		t.Errorf("after exiting process view, prompt color = %v, want themeCmd accent (mode was restored to cmd)", got)
 	}
@@ -1886,8 +1886,8 @@ func TestIsNoMessage(t *testing.T) {
 		{"other error", fmt.Errorf("connection refused"), false},
 	}
 	for _, c := range cases {
-		if got := isNoMessage(c.err); got != c.want {
-			t.Errorf("isNoMessage(%v) [%s] = %v, want %v", c.err, c.name, got, c.want)
+		if got := backends.IsNoMessage(c.err); got != c.want {
+			t.Errorf("IsNoMessage(%v) [%s] = %v, want %v", c.err, c.name, got, c.want)
 		}
 	}
 }

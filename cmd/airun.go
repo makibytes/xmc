@@ -110,10 +110,7 @@ func (m aiTUIModel) handleModelsDone(msg modelsMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 	}
-	startSel := currentIdx
-	if startSel < 0 {
-		startSel = 0
-	}
+	startSel := max(currentIdx, 0)
 	models := msg.models // capture for closure
 	m.picker = &pickerState{
 		title:   fmt.Sprintf("Select model (%s):", m.ai.providerName),
@@ -121,13 +118,7 @@ func (m aiTUIModel) handleModelsDone(msg modelsMsg) (tea.Model, tea.Cmd) {
 		sel:     startSel,
 		current: currentIdx,
 		onSelect: func(model *aiTUIModel, idx int) {
-			name := models[idx]
-			model.applyModel(name)
-			info := "model → " + name
-			if err := saveAIModel(name); err != nil {
-				info += fmt.Sprintf(" (save failed: %s)", err)
-			}
-			model.appendTranscript(dimStyle.Render(info) + "\n\n")
+			model.selectModel(models[idx])
 		},
 	}
 	m.state = tuiPicking
@@ -152,8 +143,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		if len(m.ai.history) > 0 && m.ai.history[len(m.ai.history)-1].Role == "user" {
 			m.ai.history = m.ai.history[:len(m.ai.history)-1]
 		}
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		return m, nil
 	}
 
@@ -164,7 +154,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		log.Verbose("AI tokens: %d input, %d output", msg.usage.InputTokens, msg.usage.OutputTokens)
 	}
 
-	command := extractCommandWithVerbs(msg.text, m.ai.verbSet)
+	command := extractCommandWithVerbs(msg.text)
 	isAsk := strings.HasPrefix(command, "# ask:")
 	isCannot := strings.HasPrefix(command, "# cannot:")
 	// A "#" line that isn't one of the two canonical forms is not a command —
@@ -184,8 +174,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		if len(m.ai.history) > 0 && m.ai.history[len(m.ai.history)-1].Role == "user" {
 			m.ai.history = m.ai.history[:len(m.ai.history)-1]
 		}
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		return m, nil
 	}
 
@@ -193,8 +182,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		m.appendTranscript(infoStyle.Render("? "+strings.TrimSpace(question)) + "\n\n")
 		m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: command})
 		m.fixAttempts = 0
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		return m, nil
 	}
 
@@ -202,8 +190,7 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		m.appendTranscript(infoStyle.Render("✗ "+strings.TrimSpace(reason)) + "\n\n")
 		m.ai.history = append(m.ai.history, aiMessage{Role: "assistant", Content: command})
 		m.fixAttempts = 0
-		m.state = tuiIdle
-		m.input.Focus()
+		m.toIdle()
 		return m, nil
 	}
 
@@ -235,23 +222,19 @@ func (m *aiTUIModel) applyEffort(arg string) bool {
 		return false
 	}
 	m.ai.setEffort(effort)
-	msg := "effort → " + string(effort)
-	if err := saveAIEffort(effort); err != nil {
-		msg += fmt.Sprintf(" (save failed: %s)", err)
-	}
-	m.appendTranscript(dimStyle.Render(msg) + "\n\n")
+	m.noteSaved("effort → "+string(effort), saveAIEffort(effort))
 	return true
 }
 
-// applyModel switches the AI client to a new model (in-memory only).
-func (m *aiTUIModel) applyModel(name string) {
+// selectModel switches the AI client to model name and persists the choice to
+// the config, like applyEffort does for the effort. The system prompt does not
+// depend on the model, so it is not rebuilt.
+func (m *aiTUIModel) selectModel(name string) {
 	if setter, ok := m.ai.client.(modelSettable); ok {
 		setter.SetModel(name)
 	}
 	m.ai.modelName = name
-	m.ai.mu.Lock()
-	m.ai.rebuildPrompt()
-	m.ai.mu.Unlock()
+	m.noteSaved("model → "+name, saveAIModel(name))
 }
 
 // ---------- Command execution ----------
@@ -343,8 +326,7 @@ func (m aiTUIModel) handleExecDone(msg execDoneMsg) (tea.Model, tea.Cmd) {
 		return m, m.beginAIRequest()
 	}
 
-	m.state = tuiIdle
-	m.input.Focus()
+	m.toIdle()
 	return m, nil
 }
 

@@ -1,12 +1,10 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -37,27 +35,24 @@ var (
 // ---------- bgProcess ----------
 
 // bgProcess holds state for one managed background process.
-// cancel, done, err, finishedAt are only accessed on the UI goroutine.
-// out and lines are shared with the background goroutine via mu.
+// cancel, done and err are only accessed on the UI goroutine.
+// out and unseenStderr are shared with the background goroutine via mu.
 type bgProcess struct {
-	id        int
-	name      string
-	command   string
-	startedAt time.Time
-	cancel    context.CancelFunc // set via procCancelMsg; UI goroutine only thereafter
-	doneCh    chan struct{}      // closed by the background goroutine when it exits
+	id      int
+	name    string
+	command string
+	cancel  context.CancelFunc // set via procCancelMsg; UI goroutine only thereafter
+	doneCh  chan struct{}      // closed by the background goroutine when it exits
 
-	mu         sync.Mutex
-	out        cappedBuffer // goroutine writes; UI reads via snapshotText()
-	lines      int          // count of '\n' in out
-	stderrSeen bool         // process wrote to stderr since the user last viewed its output
+	mu           sync.Mutex
+	out          cappedBuffer // goroutine writes; UI reads via snapshotText()
+	unseenStderr bool         // process wrote to stderr since the user last viewed its output
 
 	killed bool // stopped by the user (K); UI goroutine only
 
 	// Set in handleProcDoneMsg (UI goroutine only):
-	done       bool
-	err        error
-	finishedAt time.Time
+	done bool
+	err  error
 }
 
 // snapshotText returns a safe copy of the captured output under mu.
@@ -72,7 +67,7 @@ func (p *bgProcess) snapshotText() string {
 func (p *bgProcess) hasUnseenStderr() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.stderrSeen
+	return p.unseenStderr
 }
 
 // ---------- procWriter ----------
@@ -89,11 +84,10 @@ type procWriter struct {
 
 func (w procWriter) Write(b []byte) (int, error) {
 	w.p.mu.Lock()
-	w.p.lines += bytes.Count(b, []byte{'\n'})
 	n, err := w.p.out.Write(b)
 	notify := false
-	if w.stderr && len(b) > 0 && !w.p.stderrSeen {
-		w.p.stderrSeen = true
+	if w.stderr && len(b) > 0 && !w.p.unseenStderr {
+		w.p.unseenStderr = true
 		notify = true
 	}
 	w.p.mu.Unlock()
@@ -256,29 +250,44 @@ func commandWellFormed(s string) bool {
 
 // ensureProcWindow adds the Processes sidebar window if it does not exist yet.
 func (m *aiTUIModel) ensureProcWindow() {
-	if m.procWinIdx >= 0 {
+	if m.procWindowIndex() >= 0 {
 		return
 	}
 	m.objTypes = append(m.objTypes, objWindow{
 		label: "Processes",
 		kind:  objWindowProcs,
 	})
-	m.procWinIdx = len(m.objTypes) - 1
 	m.recalcLayout()
+}
+
+// procWindowIndex returns the index of the Processes window, or -1 when there
+// is none. It is always the last window, so no other index changes when it
+// comes or goes.
+func (m *aiTUIModel) procWindowIndex() int {
+	if n := len(m.objTypes); n > 0 && m.objTypes[n-1].kind == objWindowProcs {
+		return n - 1
+	}
+	return -1
+}
+
+// procsFocused reports whether the Processes window has keyboard focus.
+func (m *aiTUIModel) procsFocused() bool {
+	wi, ok := m.focusedWindow()
+	return ok && m.objTypes[wi].kind == objWindowProcs
 }
 
 // removeProcWindow removes the Processes sidebar window (called when procs is empty).
 // The proc window is always the last entry; no other window index changes.
 func (m *aiTUIModel) removeProcWindow() {
-	if m.procWinIdx < 0 {
+	wi := m.procWindowIndex()
+	if wi < 0 {
 		return
 	}
 	// If focused on the proc window, exit and return to chat.
-	if int(m.focus)-1 == m.procWinIdx {
+	if m.procsFocused() {
 		m.focusChat()
 	}
-	m.objTypes = m.objTypes[:len(m.objTypes)-1]
-	m.procWinIdx = -1
+	m.objTypes = m.objTypes[:wi]
 	m.recalcLayout()
 }
 
@@ -305,21 +314,19 @@ func (m *aiTUIModel) clampProcSel() {
 // the command to cmdHistory.
 func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) {
 	p := &bgProcess{
-		id:        m.procNextID,
-		name:      processName(command, m.rootCmd),
-		command:   command,
-		startedAt: time.Now(),
-		doneCh:    make(chan struct{}),
+		id:      m.procNextID,
+		name:    processName(command, m.rootCmd),
+		command: command,
+		doneCh:  make(chan struct{}),
 	}
 	p.out.max = maxProcCapture
 	m.procNextID++
 	m.procs = append(m.procs, p)
-	(&m).ensureProcWindow()
-	(&m).clampProcSel()
+	m.ensureProcWindow()
+	m.clampProcSel()
 
 	// Stay idle and interactive immediately.
-	m.state = tuiIdle
-	m.input.Focus()
+	m.toIdle()
 
 	// Write to shell history so the command is available via Up/Down recall.
 	shellHistory.Append(command)
@@ -348,12 +355,7 @@ func (m aiTUIModel) startBackgroundProcess(command string) (tea.Model, tea.Cmd) 
 	// are not safe for concurrent use of one connection this way. Wrapping
 	// with wrapReconnectQueue/Topic mirrors the wrapping runAI gives the
 	// foreground session, so the process still gets auto-reconnect.
-	procSess := &shellSession{
-		spec:         m.session.spec,
-		queueFactory: wrapReconnectQueue(m.session.spec.Queue, ReconnectOptions{}),
-		topicFactory: wrapReconnectTopic(m.session.spec.Topic, ReconnectOptions{}),
-		aliases:      m.session.aliases,
-	}
+	procSess := newShellSession(m.session.spec, m.session.aliases)
 
 	return m, func() tea.Msg {
 		defer close(p.doneCh)
@@ -390,8 +392,7 @@ func (m aiTUIModel) handleProcDoneMsg(msg procDoneMsg) (tea.Model, tea.Cmd) {
 		if p.id == msg.id {
 			p.done = true // UI goroutine only; no lock
 			p.err = msg.err
-			p.finishedAt = time.Now()
-			(&m).clampProcSel()
+			m.clampProcSel()
 			// Say so in the transcript — the sidebar glyph alone is easy to
 			// miss, and invisible on a terminal too narrow for the sidebar,
 			// where the output is shown right away since the Processes
@@ -405,11 +406,11 @@ func (m aiTUIModel) handleProcDoneMsg(msg procDoneMsg) (tea.Model, tea.Cmd) {
 			}
 			m.appendTranscript(dimStyle.Render("↳ background process finished: "+p.name+" ") + status + "\n\n")
 			if !m.sidebarVisible() {
-				(&m).dumpProcessOutput(p)
+				m.dumpProcessOutput(p)
 			}
 			// Trigger sidebar refresh when the process may have changed message counts.
 			if anyCommand(p.command, m.aliases(), mutatesMessages) && !m.refreshing && len(m.objTypes) > 0 {
-				return m, (&m).beginRefresh()
+				return m, m.beginRefresh()
 			}
 			return m, nil
 		}
@@ -440,8 +441,8 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeySpace:
 		// Space collapses/expands the Processes window.
-		if m.procWinIdx >= 0 {
-			m.objTypes[m.procWinIdx].collapsed = !m.objTypes[m.procWinIdx].collapsed
+		if wi := m.procWindowIndex(); wi >= 0 {
+			m.objTypes[wi].collapsed = !m.objTypes[wi].collapsed
 		}
 		return m, nil
 
@@ -452,11 +453,6 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyTab:
 		// Tab moves focus forward (to the next window).
 		m.cycleFocus(true)
-		return m, nil
-
-	case tea.KeyShiftTab:
-		// Shift+Tab moves focus backward.
-		m.cycleFocus(false)
 		return m, nil
 
 	case tea.KeyRunes:
@@ -479,12 +475,7 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				p.cancel()
 			}
 			m.procs = append(m.procs[:m.procSel], m.procs[m.procSel+1:]...)
-			(&m).clampProcSel()
-			if len(m.procs) == 0 {
-				(&m).removeProcWindow()
-			} else {
-				(&m).updateProcPrompt()
-			}
+			m.procsChanged()
 
 		case "K": // kill but keep in list (its output stays viewable)
 			if len(m.procs) > 0 && m.procSel < len(m.procs) {
@@ -506,25 +497,27 @@ func (m aiTUIModel) handleKeyProcessPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.procs = keep
-			(&m).clampProcSel()
-			if len(m.procs) == 0 {
-				(&m).removeProcWindow()
-			} else {
-				(&m).updateProcPrompt()
-			}
+			m.procsChanged()
 
 		case "D": // kill and delete all
-			for _, p := range m.procs {
-				if p.cancel != nil {
-					p.cancel()
-				}
-			}
+			m.killAllProcs()
 			m.procs = nil
-			(&m).removeProcWindow()
+			m.removeProcWindow()
 		}
 		return m, nil
 	}
 	return m, nil
+}
+
+// procsChanged re-establishes the Processes window after entries were removed:
+// it drops the window when none are left, else clamps the selection.
+func (m *aiTUIModel) procsChanged() {
+	m.clampProcSel()
+	if len(m.procs) == 0 {
+		m.removeProcWindow()
+	} else {
+		m.updateProcPrompt()
+	}
 }
 
 // moveProcSel moves the Processes window selection by delta.
@@ -591,7 +584,7 @@ func (m *aiTUIModel) exitProcessView() {
 
 // updateProcPrompt sets the textarea to the selected process's command (read-only).
 func (m *aiTUIModel) updateProcPrompt() {
-	if !m.inProcView || m.procWinIdx < 0 || len(m.procs) == 0 {
+	if !m.inProcView || m.procWindowIndex() < 0 || len(m.procs) == 0 {
 		return
 	}
 	if m.procSel >= len(m.procs) {
@@ -608,7 +601,7 @@ func (m *aiTUIModel) dumpProcessOutput(p *bgProcess) {
 	text := p.snapshotText()
 	// The user is looking at the output now — clear the red stderr highlight.
 	p.mu.Lock()
-	p.stderrSeen = false
+	p.unseenStderr = false
 	p.mu.Unlock()
 	var b strings.Builder
 
@@ -645,7 +638,7 @@ func (m *aiTUIModel) killAllProcs() {
 // Called from writeObjectSection when kind == objWindowProcs.
 // collapsed=true renders only the title line (no underline, no body rows).
 func (m aiTUIModel) writeProcessSection(b *strings.Builder, width, bodyLines int, collapsed bool) int {
-	focused := m.procWinIdx >= 0 && int(m.focus)-1 == m.procWinIdx
+	focused := m.procsFocused()
 	headerText := fmt.Sprintf("Processes (%d)", len(m.procs))
 
 	renderRow := func(i int, selected bool) string {
@@ -662,10 +655,7 @@ func (m aiTUIModel) writeProcessSection(b *strings.Builder, width, bodyLines int
 		}
 
 		name := p.name
-		maxName := width - 5
-		if maxName < 3 {
-			maxName = 3
-		}
+		maxName := max(width-5, 3)
 		runes := []rune(name)
 		if len(runes) > maxName {
 			name = string(runes[:maxName-1]) + "…"

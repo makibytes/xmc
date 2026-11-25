@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"strconv"
@@ -54,14 +55,11 @@ func (c aiConfig) metadataFormat() metadataFormat {
 	return parseMetadataFormat(c.MetadataFormat)
 }
 
-// requestTimeoutDuration returns the configured AI request timeout.
-// An empty or invalid value falls back to defaultRequestTimeout.
+// requestTimeoutDuration returns the configured AI request timeout. An empty
+// or invalid value yields 0, which clients read as "use defaultRequestTimeout".
 func (c aiConfig) requestTimeoutDuration() time.Duration {
-	if c.RequestTimeout == "" {
-		return 0 // caller uses defaultRequestTimeout
-	}
 	d, _, err := parseRefreshInterval(c.RequestTimeout) // reuse the same duration parser
-	if err != nil || d <= 0 {
+	if c.RequestTimeout == "" || err != nil || d <= 0 {
 		return 0
 	}
 	return d
@@ -197,6 +195,16 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 		maxTok = defaultMaxTokens
 	}
 	reqTimeout := cfg.AI.requestTimeoutDuration()
+	specFor := func(def providerDef, key string) providerSpec {
+		return providerSpec{
+			name:           def.name,
+			apiKey:         key,
+			baseURL:        def.baseURL,
+			model:          cmp.Or(cfg.AI.Model, def.defaultModel),
+			maxTokens:      maxTok,
+			requestTimeout: reqTimeout,
+		}
+	}
 
 	if cfg.AI.Provider != "" {
 		for _, def := range providerOrder {
@@ -208,31 +216,29 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 				return providerSpec{}, fmt.Errorf("provider %q selected in config but no API key found (set %s)",
 					def.name, strings.Join(def.envKeys, " or "))
 			}
-			model := cfg.AI.Model
-			if model == "" {
-				model = def.defaultModel
-			}
-			return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok, requestTimeout: reqTimeout}, nil
+			return specFor(def, key), nil
 		}
 		if strings.EqualFold(cfg.AI.Provider, "opencode") {
 			return providerSpec{}, fmt.Errorf("AI provider %q is no longer supported (OpenCode's free tier only works inside OpenCode); use \"openrouter\" (OPENROUTER_API_KEY) or \"gemini\" (GEMINI_API_KEY) in ai.provider", cfg.AI.Provider)
 		}
-		return providerSpec{}, fmt.Errorf("unknown AI provider %q (supported: anthropic, openai, gemini, xai, deepseek, mistral, openrouter)", cfg.AI.Provider)
+		names := make([]string, len(providerOrder))
+		for i, def := range providerOrder {
+			names[i] = def.name
+		}
+		return providerSpec{}, fmt.Errorf("unknown AI provider %q (supported: %s)", cfg.AI.Provider, strings.Join(names, ", "))
 	}
 
 	for _, def := range providerOrder {
-		key := findKey(def.envKeys, getenv)
-		if key == "" {
-			continue
+		if key := findKey(def.envKeys, getenv); key != "" {
+			return specFor(def, key), nil
 		}
-		model := cfg.AI.Model
-		if model == "" {
-			model = def.defaultModel
-		}
-		return providerSpec{name: def.name, apiKey: key, baseURL: def.baseURL, model: model, maxTokens: maxTok, requestTimeout: reqTimeout}, nil
 	}
 
-	return providerSpec{}, fmt.Errorf("no AI API key found; set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY")
+	keys := make([]string, len(providerOrder))
+	for i, def := range providerOrder {
+		keys[i] = def.envKeys[0]
+	}
+	return providerSpec{}, fmt.Errorf("no AI API key found; set one of: %s", strings.Join(keys, ", "))
 }
 
 func findKey(envKeys []string, getenv envLookup) string {

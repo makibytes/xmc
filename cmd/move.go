@@ -79,10 +79,7 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 		})
 
 		switch {
-		case errors.Is(err, context.Canceled),
-			errors.Is(err, context.DeadlineExceeded),
-			errors.Is(err, backends.ErrNoMessageAvailable),
-			message == nil && err == nil:
+		case errors.Is(err, context.Canceled), backends.IsNoMessage(err), message == nil && err == nil:
 			return summarizeMove(cmd.OutOrStdout(), moved, source, destination)
 		case err != nil:
 			return err
@@ -97,6 +94,7 @@ func doMove(cmd *cobra.Command, args []string, backend backends.QueueBackend) er
 			ContentType:   message.ContentType,
 			Priority:      message.Priority,
 			Persistent:    message.Persistent,
+			Key:           message.Key,
 		})
 		if sendErr != nil {
 			// The message was already consumed from the source; surface it so

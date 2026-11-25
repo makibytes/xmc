@@ -12,7 +12,6 @@ import (
 
 // TopicAdapter adapts Artemis to the TopicBackend interface
 type TopicAdapter struct {
-	connArgs   ConnArguments
 	connection *amqp.Conn
 	session    *amqp.Session
 	sendCache  amqpcommon.SenderCache
@@ -27,7 +26,6 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	}
 
 	return &TopicAdapter{
-		connArgs:   connArgs,
 		connection: connection,
 		session:    session,
 	}, nil

@@ -13,7 +13,6 @@ import (
 
 // QueueAdapter adapts Artemis to the QueueBackend interface
 type QueueAdapter struct {
-	connArgs   ConnArguments
 	connection *amqp.Conn
 	session    *amqp.Session
 	sendCache  amqpcommon.SenderCache
@@ -28,7 +27,6 @@ func NewQueueAdapter(connArgs ConnArguments) (*QueueAdapter, error) {
 	}
 
 	return &QueueAdapter{
-		connArgs:   connArgs,
 		connection: connection,
 		session:    session,
 	}, nil

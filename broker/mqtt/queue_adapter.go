@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
@@ -115,20 +114,9 @@ func qosFromExtra(extra map[string]string) byte {
 	return 1
 }
 
-// waitForMessage waits on msgCh respecting timeout/wait semantics, using the
-// shared TimeoutDuration helper so MQTT follows the same contract as all other
-// brokers. Buffered messages from a still-open subscription are drained first.
+// waitForMessage waits for the next MQTT 5 message on msgCh (see waitFor).
 func waitForMessage(ctx context.Context, msgCh <-chan *paho.Publish, timeout float32, wait bool, stripQueuePrefix bool) (*backends.Message, error) {
-	dur := backends.TimeoutDuration(timeout, wait)
-	timer := time.NewTimer(dur)
-	defer timer.Stop()
-
-	select {
-	case msg := <-msgCh:
-		return convertPublish(msg, stripQueuePrefix), nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timer.C:
-		return nil, backends.ErrNoMessageAvailable
-	}
+	return waitFor(ctx, msgCh, timeout, wait, func(p *paho.Publish) *backends.Message {
+		return convertPublish(p, stripQueuePrefix)
+	})
 }

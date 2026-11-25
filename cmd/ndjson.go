@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -98,8 +97,7 @@ func displayMessageNDJSON(w io.Writer, message *backends.Message) error {
 // lines are skipped so files can be concatenated freely. The scan buffer is
 // enlarged to tolerate large (e.g. base64) payloads on a single line.
 func forEachRecord(r io.Reader, visit func(messageRecord) error) (int, error) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	scanner := newLineScanner(r)
 
 	processed := 0
 	for scanner.Scan() {

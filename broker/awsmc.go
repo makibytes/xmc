@@ -110,7 +110,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-aws",
 				ServerVersion: cmd.Version(),
-				Target:        "aws-sqs://" + connArgs.Region,
+				Target:        func() string { return "aws-sqs://" + connArgs.Region },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return awspkg.NewQueueAdapter(connArgs)
 				},

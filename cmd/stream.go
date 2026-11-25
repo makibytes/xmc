@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,16 +16,12 @@ import (
 // the streaming features: --for bounds a stream by time, while the interrupt
 // handler lets an unbounded stream stop cleanly and print its summary.
 //
-// An optional parent context may be supplied so that external cancellation
-// (e.g. from the AI TUI's Esc handler) also propagates into the consume loop.
-// Pass nil or omit to use context.Background() as the parent.
+// parent is typically cmd.Context(), so that external cancellation (e.g. the AI
+// TUI's Esc handler) also propagates into the loop; nil means
+// context.Background().
 //
 // The returned CancelFunc must be called (typically via defer).
-func streamContext(duration time.Duration, parents ...context.Context) (context.Context, context.CancelFunc) {
-	var parent context.Context
-	if len(parents) > 0 && parents[0] != nil {
-		parent = parents[0]
-	}
+func streamContext(duration time.Duration, parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, stop := interruptContext(parent)
 	if duration <= 0 {
 		return ctx, stop
@@ -67,6 +64,16 @@ func ParseStreamingFlags(cmd *cobra.Command) (StreamingFlags, error) {
 		Stats:    stats,
 		Follow:   follow,
 	}, nil
+}
+
+// effectiveCount applies the rule shared by every streaming command: a
+// time-bounded (--for) or unbounded (--forever) stream drains until it ends
+// (count 0), unless --count was given explicitly.
+func (sf StreamingFlags) effectiveCount(cmd *cobra.Command, count int) int {
+	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
+		return 0
+	}
+	return count
 }
 
 // parseDurationFlag parses a --for value. An empty string means "no limit".
@@ -121,7 +128,8 @@ func (s *streamStats) summary() string {
 // rather than leaking to the raw terminal.
 func startStatsReporter(s *streamStats, interval time.Duration, w io.Writer) (stop func()) {
 	stopCh := make(chan struct{})
-	go func() {
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		lastCount := int64(0)
@@ -143,8 +151,29 @@ func startStatsReporter(s *streamStats, interval time.Duration, w io.Writer) (st
 				lastTime = now
 			}
 		}
-	}()
-	return func() { close(stopCh) }
+	})
+	// Waiting for the goroutine guarantees no tick line is printed after the
+	// caller's final summary.
+	return func() {
+		close(stopCh)
+		wg.Wait()
+	}
+}
+
+// startStats returns a stats accumulator and a stop function. When stats are
+// disabled it returns a non-nil accumulator (whose record is harmless) and a
+// no-op stop, so callers need no nil checks. w receives live tick lines and the
+// final summary (typically cmd.ErrOrStderr()).
+func startStats(enabled bool, w io.Writer) (*streamStats, func()) {
+	st := newStreamStats()
+	if !enabled {
+		return st, func() {}
+	}
+	stop := startStatsReporter(st, time.Second, w)
+	return st, func() {
+		stop()
+		_, _ = fmt.Fprintln(w, st.summary())
+	}
 }
 
 // humanBytes renders a byte count in a compact human-readable form.

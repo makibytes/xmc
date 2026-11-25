@@ -3,145 +3,78 @@ package log
 import (
 	"bytes"
 	"os"
-	"strings"
 	"testing"
 )
 
-func TestInfo_WithArgs(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	Info("hello %s %d", "world", 42)
-
-	_ = w.Close()
-	os.Stdout = old
-
+// capture runs fn with the log sink redirected and returns what was logged.
+func capture(t *testing.T, fn func()) string {
+	t.Helper()
 	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := buf.String(); got != "hello world 42" {
-		t.Errorf("Info() = %q, want %q", got, "hello world 42")
-	}
+	prev := SetErrorOutput(&buf)
+	defer SetErrorOutput(prev)
+	fn()
+	return buf.String()
 }
 
-func TestInfo_WithoutArgs(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	Info("simple message")
-
-	_ = w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := strings.TrimSpace(buf.String()); got != "simple message" {
-		t.Errorf("Info() = %q, want %q", got, "simple message")
+func TestError_EndsWithExactlyOneNewline(t *testing.T) {
+	cases := []struct {
+		name string
+		log  func()
+		want string
+	}{
+		{"formatted", func() { Error("error: %s", "something failed") }, "error: something failed\n"},
+		{"plain", func() { Error("plain error") }, "plain error\n"},
+		{"already terminated", func() { Error("warning: %s\n", "x") }, "warning: x\n"},
+		{"plain already terminated", func() { Error("done\n") }, "done\n"},
+		{"percent without args is literal", func() { Error("100% sure") }, "100% sure\n"},
 	}
-}
-
-func TestError_WithArgs(t *testing.T) {
-	old := os.Stderr
-	r, w, _ := os.Pipe()
-	os.Stderr = w
-
-	Error("error: %s", "something failed")
-
-	_ = w.Close()
-	os.Stderr = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := buf.String(); got != "error: something failed" {
-		t.Errorf("Error() = %q, want %q", got, "error: something failed")
-	}
-}
-
-func TestError_WithoutArgs(t *testing.T) {
-	old := os.Stderr
-	r, w, _ := os.Pipe()
-	os.Stderr = w
-
-	Error("plain error")
-
-	_ = w.Close()
-	os.Stderr = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := strings.TrimSpace(buf.String()); got != "plain error" {
-		t.Errorf("Error() = %q, want %q", got, "plain error")
+	for _, tc := range cases {
+		if got := capture(t, tc.log); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
 func TestVerbose_WhenEnabled(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	origVerbose := IsVerbose
 	IsVerbose = true
 	defer func() { IsVerbose = origVerbose }()
 
-	Verbose("debug: %d", 123)
+	if got := capture(t, func() { Verbose("debug: %d", 123) }); got != "debug: 123\n" {
+		t.Errorf("Verbose() = %q, want %q", got, "debug: 123\n")
+	}
+	if got := capture(t, func() { Verbose("plain verbose message") }); got != "plain verbose message\n" {
+		t.Errorf("Verbose() = %q, want %q", got, "plain verbose message\n")
+	}
+}
 
+// Verbose output must never reach stdout, which carries message data.
+func TestVerbose_DoesNotWriteToStdout(t *testing.T) {
+	origVerbose := IsVerbose
+	IsVerbose = true
+	defer func() { IsVerbose = origVerbose }()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	_ = capture(t, func() { Verbose("diagnostic %d", 1) })
 	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
 	_, _ = buf.ReadFrom(r)
-
-	if got := buf.String(); got != "debug: 123" {
-		t.Errorf("Verbose() = %q, want %q", got, "debug: 123")
+	if buf.Len() != 0 {
+		t.Errorf("Verbose wrote %q to stdout", buf.String())
 	}
 }
 
 func TestVerbose_WhenDisabled(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	origVerbose := IsVerbose
 	IsVerbose = false
 	defer func() { IsVerbose = origVerbose }()
 
-	Verbose("should not appear")
-
-	_ = w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := buf.String(); got != "" {
+	if got := capture(t, func() { Verbose("should not appear") }); got != "" {
 		t.Errorf("Verbose() when disabled = %q, want empty", got)
-	}
-}
-
-func TestVerbose_WithoutArgs_WhenEnabled(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	origVerbose := IsVerbose
-	IsVerbose = true
-	defer func() { IsVerbose = origVerbose }()
-
-	Verbose("plain verbose message")
-
-	_ = w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-
-	if got := strings.TrimSpace(buf.String()); got != "plain verbose message" {
-		t.Errorf("Verbose() = %q, want %q", got, "plain verbose message")
 	}
 }
 
@@ -175,6 +108,7 @@ func TestIsStdoutRedirected_WithCharDevice(t *testing.T) {
 	os.Stdout = tty
 	defer func() { os.Stdout = old }()
 
-	// Calling with a char device exercises the syscall.Stat_t path
-	_ = isStdoutRedirected()
+	if isStdoutRedirected() {
+		t.Error("expected isStdoutRedirected() = false when stdout is a terminal")
+	}
 }

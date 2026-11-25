@@ -1,6 +1,9 @@
 package cmd
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // rateLimiter paces message production to approximately a target number of
 // messages per second, used by send/publish to drive controlled load. A rate of
@@ -23,17 +26,26 @@ func newRateLimiter(ratePerSec float64) *rateLimiter {
 	return &rateLimiter{interval: time.Duration(float64(time.Second) / ratePerSec)}
 }
 
-// wait blocks until the next scheduled slot. The first call returns immediately.
-func (r *rateLimiter) wait() {
+// wait blocks until the next scheduled slot. The first call returns
+// immediately. It returns ctx.Err() as soon as ctx ends, so a slow --rate does
+// not make Ctrl-C or Esc wait out the interval.
+func (r *rateLimiter) wait(ctx context.Context) error {
 	if r.interval <= 0 {
-		return
+		return nil
 	}
 	now := time.Now()
 	if r.next.IsZero() {
 		r.next = now
 	}
 	if delay := r.next.Sub(now); delay > 0 {
-		time.Sleep(delay)
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	r.next = r.next.Add(r.interval)
+	return nil
 }

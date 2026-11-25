@@ -1,10 +1,14 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
@@ -16,8 +20,8 @@ import (
 // a connection and there is no cross-call race.
 type QueueFactory func() (backends.QueueBackend, error)
 
-// TopicFactory opens a fresh topic connection (reserved for publish/subscribe
-// tools; not registered in the default set).
+// TopicFactory opens a fresh topic connection, used per call by the publish
+// and consume tools.
 type TopicFactory func() (backends.TopicBackend, error)
 
 // Deps is everything a broker wires in to build its MCP server. Connection
@@ -32,7 +36,7 @@ type TopicFactory func() (backends.TopicBackend, error)
 type Deps struct {
 	ServerName    string
 	ServerVersion string
-	Target        string // broker URL, surfaced in descriptions for context
+	Target        func() string // broker URL, read when a tool runs (flags are parsed by then)
 
 	NewQueue QueueFactory // optional on topic-only brokers (e.g. Kafka)
 	NewTopic TopicFactory // optional on queue-only brokers (e.g. IBM MQ)
@@ -43,10 +47,18 @@ type Deps struct {
 	ListTopics func(ctx context.Context) ([]backends.TopicInfo, error)
 }
 
+// target returns the broker URL for messages, or "" when none was wired.
+func (d Deps) target() string {
+	if d.Target == nil {
+		return ""
+	}
+	return d.Target()
+}
+
 // NewServerFromDeps builds a Server with the standard messaging tool set plus
 // any management tools whose hooks were supplied.
 func NewServerFromDeps(d Deps) *Server {
-	s := NewServer(orDefault(d.ServerName, "xmc"), orDefault(d.ServerVersion, "dev"))
+	s := NewServer(cmp.Or(d.ServerName, "xmc"), cmp.Or(d.ServerVersion, "dev"))
 
 	if d.NewQueue != nil {
 		registerSend(s, d)
@@ -75,22 +87,65 @@ func NewServerFromDeps(d Deps) *Server {
 	return s
 }
 
-func orDefault(v, def string) string {
-	if v == "" {
-		return def
+// argHandler adapts a typed handler to Tool.Handler: it decodes the call's raw
+// JSON arguments into A, reporting malformed input as an "invalid arguments"
+// error, before invoking fn.
+func argHandler[A any](fn func(ctx context.Context, a A) (*ToolResult, error)) func(context.Context, json.RawMessage) (*ToolResult, error) {
+	return func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
+		var a A
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %v", err)
+		}
+		return fn(ctx, a)
 	}
-	return v
 }
 
-// withQueue opens a connection, runs fn, and always closes. Connection failures
-// are surfaced with the target so the agent can see what was unreachable.
-func withQueue(d Deps, fn func(backends.QueueBackend) (*ToolResult, error)) (*ToolResult, error) {
-	q, err := d.NewQueue()
-	if err != nil {
-		return nil, fmt.Errorf("could not connect to broker %s: %v", d.Target, err)
+// or returns *p, or def when p is nil (an omitted optional argument).
+func or[T any](p *T, def T) T {
+	if p != nil {
+		return *p
 	}
-	defer q.Close() //nolint:errcheck
-	return fn(q)
+	return def
+}
+
+// positiveCount resolves an optional "count" argument: default 1, minimum 1.
+func positiveCount(p *int) (int, error) {
+	n := or(p, 1)
+	if n < 1 {
+		return 0, errors.New("count must be at least 1")
+	}
+	return n, nil
+}
+
+// withConn opens a connection, runs fn, and always closes. Connection failures
+// are surfaced with the target so the agent can see what was unreachable.
+func withConn[T io.Closer](d Deps, open func() (T, error), fn func(T) (*ToolResult, error)) (*ToolResult, error) {
+	c, err := open()
+	if err != nil {
+		return nil, fmt.Errorf("could not connect to broker %s: %v", d.target(), err)
+	}
+	defer c.Close() //nolint:errcheck
+	return fn(c)
+}
+
+// collect pulls up to n messages from next, stopping early when none are
+// available. verb names the operation in the error message.
+func collect(ctx context.Context, n int, verb string, next func(context.Context) (*backends.Message, error)) ([]messageJSON, error) {
+	messages := make([]messageJSON, 0, n)
+	for range n {
+		msg, err := next(ctx)
+		if err != nil {
+			if backends.IsNoMessage(err) {
+				break
+			}
+			return nil, fmt.Errorf("%s failed after %d messages: %v", verb, len(messages), err)
+		}
+		if msg == nil {
+			break
+		}
+		messages = append(messages, toMessageJSON(msg))
+	}
+	return messages, nil
 }
 
 // ---- send ------------------------------------------------------------------
@@ -135,28 +190,18 @@ func registerSend(s *Server, d Deps) {
 			"idempotentHint":  false,
 			"openWorldHint":   true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a sendArgs
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a sendArgs) (*ToolResult, error) {
 			if a.Address == "" {
 				return nil, errors.New("address is required")
 			}
-			count := 1
-			if a.Count != nil {
-				count = *a.Count
+			count, err := positiveCount(a.Count)
+			if err != nil {
+				return nil, err
 			}
-			if count < 1 {
-				return nil, errors.New("count must be at least 1")
-			}
-			priority := 4
-			if a.Priority != nil {
-				priority = *a.Priority
-			}
-			contentType := orDefault(a.ContentType, "text/plain")
+			priority := or(a.Priority, backends.DefaultPriority)
+			contentType := cmp.Or(a.ContentType, backends.DefaultContentType)
 
-			return withQueue(d, func(q backends.QueueBackend) (*ToolResult, error) {
+			return withConn(d, d.NewQueue, func(q backends.QueueBackend) (*ToolResult, error) {
 				opts := backends.SendOptions{
 					Queue:         a.Address,
 					Message:       []byte(a.Body),
@@ -169,14 +214,14 @@ func registerSend(s *Server, d Deps) {
 					Persistent:    a.Persistent,
 					TTL:           a.TTLms,
 				}
-				for i := 0; i < count; i++ {
+				for i := range count {
 					if err := q.Send(ctx, opts); err != nil {
 						return nil, fmt.Errorf("send failed after %d/%d messages: %v", i, count, err)
 					}
 				}
 				return jsonResult(map[string]any{"sent": count, "address": a.Address})
 			})
-		},
+		}),
 	})
 }
 
@@ -217,28 +262,18 @@ func registerRequest(s *Server, d Deps) {
 			"idempotentHint": false,
 			"openWorldHint":  true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a requestArgs
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a requestArgs) (*ToolResult, error) {
 			if a.Address == "" {
 				return nil, errors.New("address is required")
 			}
-			replyTo := orDefault(a.ReplyTo, backends.DefaultReplyQueue)
-			timeout := backends.DefaultRequestTimeout
-			if a.TimeoutSeconds != nil {
-				timeout = float32(*a.TimeoutSeconds)
-			}
-			priority := 4
-			if a.Priority != nil {
-				priority = *a.Priority
-			}
+			replyTo := cmp.Or(a.ReplyTo, backends.DefaultReplyQueue)
+			timeout := float32(or(a.TimeoutSeconds, float64(backends.DefaultRequestTimeout)))
+			priority := or(a.Priority, backends.DefaultPriority)
 
 			callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout+5)*time.Second)
 			defer cancel()
 
-			return withQueue(d, func(q backends.QueueBackend) (*ToolResult, error) {
+			return withConn(d, d.NewQueue, func(q backends.QueueBackend) (*ToolResult, error) {
 				// backends.Request handles correlation-id generation/matching and
 				// dispatches to the broker's native RequestReplyBackend when present.
 				msg, err := backends.Request(callCtx, q, backends.RequestOptions{
@@ -247,7 +282,7 @@ func registerRequest(s *Server, d Deps) {
 					Properties:    a.Properties,
 					CorrelationID: a.CorrelationID,
 					ReplyTo:       a.ReplyTo,
-					ContentType:   orDefault(a.ContentType, "text/plain"),
+					ContentType:   cmp.Or(a.ContentType, backends.DefaultContentType),
 					Priority:      priority,
 					Timeout:       timeout,
 				})
@@ -255,7 +290,7 @@ func registerRequest(s *Server, d Deps) {
 					if sendErr, ok := errors.AsType[*backends.RequestSendError](err); ok {
 						return nil, fmt.Errorf("failed to send request to %s: %v", a.Address, sendErr.Err)
 					}
-					if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, backends.ErrNoMessageAvailable) {
+					if backends.IsNoMessage(err) {
 						return nil, fmt.Errorf("no reply received on %s within %.0fs", replyTo, timeout)
 					}
 					if errors.Is(err, backends.ErrReplyMismatch) {
@@ -268,7 +303,7 @@ func registerRequest(s *Server, d Deps) {
 				}
 				return jsonResult(toMessageJSON(msg))
 			})
-		},
+		}),
 	})
 }
 
@@ -296,22 +331,16 @@ func readMessages(ctx context.Context, d Deps, a readArgs, acknowledge bool) (*T
 	if a.Queue == "" {
 		return nil, errors.New("queue is required")
 	}
-	count := 1
-	if a.Count != nil {
-		count = *a.Count
+	count, err := positiveCount(a.Count)
+	if err != nil {
+		return nil, err
 	}
-	if count < 1 {
-		return nil, errors.New("count must be at least 1")
-	}
-	timeout := float32(2)
-	if a.TimeoutSeconds != nil {
-		timeout = float32(*a.TimeoutSeconds)
-	}
+	timeout := float32(or(a.TimeoutSeconds, 2))
 
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration((timeout*float32(count))+5)*time.Second)
 	defer cancel()
 
-	return withQueue(d, func(q backends.QueueBackend) (*ToolResult, error) {
+	return withConn(d, d.NewQueue, func(q backends.QueueBackend) (*ToolResult, error) {
 		opts := backends.ReceiveOptions{
 			Queue:       a.Queue,
 			Timeout:     timeout,
@@ -336,19 +365,9 @@ func readMessages(ctx context.Context, d Deps, a readArgs, acknowledge bool) (*T
 			next = browser.Next
 		}
 
-		messages := make([]messageJSON, 0, count)
-		for i := 0; i < count; i++ {
-			msg, err := next(callCtx)
-			if err != nil {
-				if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
-					break
-				}
-				return nil, fmt.Errorf("read failed after %d messages: %v", len(messages), err)
-			}
-			if msg == nil {
-				break
-			}
-			messages = append(messages, toMessageJSON(msg))
+		messages, err := collect(callCtx, count, "read", next)
+		if err != nil {
+			return nil, err
 		}
 		return jsonResult(map[string]any{
 			"queue":    a.Queue,
@@ -370,13 +389,9 @@ func registerPeek(s *Server, d Deps) {
 			"readOnlyHint":  true,
 			"openWorldHint": true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a readArgs
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a readArgs) (*ToolResult, error) {
 			return readMessages(ctx, d, a, false)
-		},
+		}),
 	})
 }
 
@@ -393,27 +408,13 @@ func registerReceive(s *Server, d Deps) {
 			"idempotentHint":  false,
 			"openWorldHint":   true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a readArgs
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a readArgs) (*ToolResult, error) {
 			return readMessages(ctx, d, a, true)
-		},
+		}),
 	})
 }
 
 // ---- publish / consume (topics) ---------------------------------------------
-
-// withTopic opens a topic connection, runs fn, and always closes.
-func withTopic(d Deps, fn func(backends.TopicBackend) (*ToolResult, error)) (*ToolResult, error) {
-	t, err := d.NewTopic()
-	if err != nil {
-		return nil, fmt.Errorf("could not connect to broker %s: %v", d.Target, err)
-	}
-	defer t.Close() //nolint:errcheck
-	return fn(t)
-}
 
 type publishArgs struct {
 	Topic         string         `json:"topic"`
@@ -452,23 +453,16 @@ func registerPublish(s *Server, d Deps) {
 			"idempotentHint":  false,
 			"openWorldHint":   true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a publishArgs
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a publishArgs) (*ToolResult, error) {
 			if a.Topic == "" {
 				return nil, errors.New("topic is required")
 			}
-			count := 1
-			if a.Count != nil {
-				count = *a.Count
-			}
-			if count < 1 {
-				return nil, errors.New("count must be at least 1")
+			count, err := positiveCount(a.Count)
+			if err != nil {
+				return nil, err
 			}
 
-			return withTopic(d, func(t backends.TopicBackend) (*ToolResult, error) {
+			return withConn(d, d.NewTopic, func(t backends.TopicBackend) (*ToolResult, error) {
 				opts := backends.PublishOptions{
 					Topic:         a.Topic,
 					Message:       []byte(a.Body),
@@ -476,18 +470,18 @@ func registerPublish(s *Server, d Deps) {
 					MessageID:     a.MessageID,
 					CorrelationID: a.CorrelationID,
 					ReplyTo:       a.ReplyTo,
-					ContentType:   orDefault(a.ContentType, "text/plain"),
+					ContentType:   cmp.Or(a.ContentType, backends.DefaultContentType),
 					Key:           a.Key,
 					TTL:           a.TTLms,
 				}
-				for i := 0; i < count; i++ {
+				for i := range count {
 					if err := t.Publish(ctx, opts); err != nil {
 						return nil, fmt.Errorf("publish failed after %d/%d messages: %v", i, count, err)
 					}
 				}
 				return jsonResult(map[string]any{"published": count, "topic": a.Topic})
 			})
-		},
+		}),
 	})
 }
 
@@ -514,49 +508,31 @@ func registerConsume(s *Server, d Deps) {
 			"readOnlyHint":  false,
 			"openWorldHint": true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a consumeArgs
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a consumeArgs) (*ToolResult, error) {
 			if a.Topic == "" {
 				return nil, errors.New("topic is required")
 			}
-			count := 1
-			if a.Count != nil {
-				count = *a.Count
+			count, err := positiveCount(a.Count)
+			if err != nil {
+				return nil, err
 			}
-			if count < 1 {
-				return nil, errors.New("count must be at least 1")
-			}
-			timeout := float32(2)
-			if a.TimeoutSeconds != nil {
-				timeout = float32(*a.TimeoutSeconds)
-			}
+			timeout := float32(or(a.TimeoutSeconds, 2))
 
 			callCtx, cancel := context.WithTimeout(ctx, time.Duration((timeout*float32(count))+5)*time.Second)
 			defer cancel()
 
-			return withTopic(d, func(t backends.TopicBackend) (*ToolResult, error) {
+			return withConn(d, d.NewTopic, func(t backends.TopicBackend) (*ToolResult, error) {
 				opts := backends.SubscribeOptions{
 					Topic:     a.Topic,
-					GroupID:   orDefault(a.Group, "xmc-consumer-group"),
+					GroupID:   cmp.Or(a.Group, backends.DefaultGroupID),
 					Timeout:   timeout,
 					Verbosity: backends.VerbosityNormal,
 				}
-				messages := make([]messageJSON, 0, count)
-				for i := 0; i < count; i++ {
-					msg, err := t.Subscribe(callCtx, opts)
-					if err != nil {
-						if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
-							break
-						}
-						return nil, fmt.Errorf("consume failed after %d messages: %v", len(messages), err)
-					}
-					if msg == nil {
-						break
-					}
-					messages = append(messages, toMessageJSON(msg))
+				messages, err := collect(callCtx, count, "consume", func(ctx context.Context) (*backends.Message, error) {
+					return t.Subscribe(ctx, opts)
+				})
+				if err != nil {
+					return nil, err
 				}
 				return jsonResult(map[string]any{
 					"topic":    a.Topic,
@@ -564,7 +540,7 @@ func registerConsume(s *Server, d Deps) {
 					"messages": messages,
 				})
 			})
-		},
+		}),
 	})
 }
 
@@ -584,7 +560,7 @@ func registerPing(s *Server, d Deps) {
 		Handler: func(_ context.Context, _ json.RawMessage) (*ToolResult, error) {
 			// Probe via whichever adapter the broker has (topic-only brokers
 			// like Kafka have no queue factory).
-			connect := func() (interface{ Close() error }, error) {
+			connect := func() (io.Closer, error) {
 				if d.NewQueue != nil {
 					return d.NewQueue()
 				}
@@ -594,12 +570,12 @@ func registerPing(s *Server, d Deps) {
 			conn, err := connect()
 			elapsed := time.Since(start)
 			if err != nil {
-				return nil, fmt.Errorf("broker %s unreachable: %v", d.Target, err)
+				return nil, fmt.Errorf("broker %s unreachable: %v", d.target(), err)
 			}
 			_ = conn.Close()
 			return jsonResult(map[string]any{
 				"ok":     true,
-				"target": d.Target,
+				"target": d.target(),
 				"rttMs":  float64(elapsed.Microseconds()) / 1000.0,
 			})
 		},
@@ -623,6 +599,7 @@ func registerListQueues(s *Server, d Deps) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to list queues: %v", err)
 			}
+			slices.SortStableFunc(queues, func(a, b backends.QueueInfo) int { return strings.Compare(a.Name, b.Name) })
 			return jsonResult(map[string]any{"count": len(queues), "queues": queues})
 		},
 	})
@@ -643,6 +620,7 @@ func registerListTopics(s *Server, d Deps) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to list topics: %v", err)
 			}
+			slices.SortStableFunc(topics, func(a, b backends.TopicInfo) int { return strings.Compare(a.Name, b.Name) })
 			return jsonResult(map[string]any{"count": len(topics), "topics": topics})
 		},
 	})
@@ -660,13 +638,9 @@ func registerQueueStats(s *Server, d Deps) {
 			"readOnlyHint":  true,
 			"openWorldHint": true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a struct {
-				Queue string `json:"queue"`
-			}
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a struct {
+			Queue string `json:"queue"`
+		}) (*ToolResult, error) {
 			if a.Queue == "" {
 				return nil, errors.New("queue is required")
 			}
@@ -675,7 +649,7 @@ func registerQueueStats(s *Server, d Deps) {
 				return nil, fmt.Errorf("failed to get stats for %s: %v", a.Queue, err)
 			}
 			return jsonResult(stats)
-		},
+		}),
 	})
 }
 
@@ -695,14 +669,10 @@ func registerPurgeQueue(s *Server, d Deps) {
 			"idempotentHint":  true,
 			"openWorldHint":   true,
 		},
-		Handler: func(ctx context.Context, raw json.RawMessage) (*ToolResult, error) {
-			var a struct {
-				Queue   string `json:"queue"`
-				Confirm bool   `json:"confirm"`
-			}
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, fmt.Errorf("invalid arguments: %v", err)
-			}
+		Handler: argHandler(func(ctx context.Context, a struct {
+			Queue   string `json:"queue"`
+			Confirm bool   `json:"confirm"`
+		}) (*ToolResult, error) {
 			if a.Queue == "" {
 				return nil, errors.New("queue is required")
 			}
@@ -714,6 +684,6 @@ func registerPurgeQueue(s *Server, d Deps) {
 				return nil, fmt.Errorf("failed to purge %s: %v", a.Queue, err)
 			}
 			return jsonResult(map[string]any{"purged": n, "queue": a.Queue})
-		},
+		}),
 	})
 }

@@ -144,7 +144,7 @@ func newTestModelWithProcs(n int) aiTUIModel {
 		m.procs = append(m.procs, p)
 	}
 	m.ensureProcWindow()
-	m.focus = focusTarget(m.procWinIdx + 1)
+	m.focus = focusTarget(m.procWindowIndex() + 1)
 	m.enterProcessView()
 	return m
 }

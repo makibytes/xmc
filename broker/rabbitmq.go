@@ -4,7 +4,6 @@ package broker
 
 import (
 	"context"
-	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/broker/rabbitmq"
@@ -19,14 +18,7 @@ func GetRootCommand() *cobra.Command {
 	var exchangeType string
 	var routingKey string
 
-	defaultServer := os.Getenv("RMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "amqp://localhost:5672"
-	}
-
-	mgmtArgs := func() rabbitmq.ManagementArgs {
-		return rabbitmq.ManagementArgs{Server: connArgs.Server, User: connArgs.User, Password: connArgs.Password}
-	}
+	mgmtArgs := func() rabbitmq.ManagementArgs { return rabbitmq.ManagementFor(connArgs) }
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
 		Use:       "rmc",
@@ -38,7 +30,7 @@ func GetRootCommand() *cobra.Command {
 		},
 		ExchangeRouting: true,
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "RMC_", defaultServer,
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "RMC_", "amqp://localhost:5672",
 				"Server URL", "Username for SASL PLAIN login", "Password for SASL PLAIN login")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
 		},
@@ -115,7 +107,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-rabbitmq",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return rabbitmq.NewQueueAdapter(connArgs)
 				},

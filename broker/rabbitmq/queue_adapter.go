@@ -98,11 +98,7 @@ func (a *QueueAdapter) Browse(_ context.Context, opts backends.ReceiveOptions) (
 		// back to the plain receive loop, which applies the selector filter.
 		return nil, backends.ErrBrowseUnsupported
 	}
-	msgs, err := peekQueueMessages(ManagementArgs{
-		Server:   a.connArgs.Server,
-		User:     a.connArgs.User,
-		Password: a.connArgs.Password,
-	}, opts.Queue, 10000)
+	msgs, err := peekQueueMessages(ManagementFor(a.connArgs), opts.Queue, 10000)
 	if err != nil {
 		log.Verbose("RabbitMQ browse via management API failed: %s — falling through to receive loop", err)
 		return nil, backends.ErrBrowseUnsupported

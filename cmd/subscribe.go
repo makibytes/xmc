@@ -20,7 +20,7 @@ func NewSubscribeCommand(backend backends.TopicBackend, resolver TargetResolver,
 		},
 	}
 
-	cmd.Flags().StringP("group", "g", "xmc-consumer-group", "Consumer group ID")
+	cmd.Flags().StringP("group", "g", backends.DefaultGroupID, "Consumer group ID")
 	registerConsumeFlags(cmd, true, "Number of messages to receive (0 = until interrupted)", false)
 	cmd.Flags().BoolP("durable", "D", false, "Create a durable subscription that survives disconnection")
 	registerConsumeExchangeFlags(cmd, exchRouting,

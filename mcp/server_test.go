@@ -37,7 +37,7 @@ func testServer(fq *fakeQueue) *Server {
 	return NewServerFromDeps(Deps{
 		ServerName:    "xmc-test",
 		ServerVersion: "test",
-		Target:        "amqp://localhost:5672",
+		Target:        func() string { return "amqp://localhost:5672" },
 		NewQueue:      func() (backends.QueueBackend, error) { return fq, nil },
 	})
 }
@@ -55,8 +55,8 @@ func call(t *testing.T, s *Server, method string, params any) rpcResponse {
 		rawParams = b
 	}
 	req, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: method, Params: rawParams})
-	respBytes, notification := s.handle(context.Background(), req)
-	if notification {
+	respBytes := s.handle(context.Background(), req)
+	if respBytes == nil {
 		t.Fatalf("unexpected notification for method %s", method)
 	}
 	var resp rpcResponse
@@ -207,8 +207,7 @@ func TestUnknownToolIsRpcError(t *testing.T) {
 func TestNotificationGetsNoResponse(t *testing.T) {
 	s := testServer(&fakeQueue{})
 	req, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
-	resp, notification := s.handle(context.Background(), req)
-	if !notification {
+	if resp := s.handle(context.Background(), req); resp != nil {
 		t.Errorf("expected notification handling, got response: %s", resp)
 	}
 }
@@ -284,8 +283,8 @@ func (f *fakeBrowseQueue) Browse(_ context.Context, _ backends.ReceiveOptions) (
 func TestPeekUsesBrowseCursor(t *testing.T) {
 	fq := &fakeBrowseQueue{
 		// Receive would repeat this head message forever:
-		fakeQueue: fakeQueue{toReturn: []*backends.Message{{Data: []byte("head")}}},
-		browsed:   []*backends.Message{{Data: []byte("m1")}, {Data: []byte("m2")}},
+		toReturn: []*backends.Message{{Data: []byte("head")}},
+		browsed:  []*backends.Message{{Data: []byte("m1")}, {Data: []byte("m2")}},
 	}
 	s := NewServerFromDeps(Deps{
 		NewQueue: func() (backends.QueueBackend, error) { return fq, nil },
@@ -345,5 +344,14 @@ func TestInitializeRejectsUnknownVersion(t *testing.T) {
 	_ = json.Unmarshal(b, &got)
 	if got.ProtocolVersion != protocolVersion {
 		t.Errorf("unknown client version must fall back to %s, got %q", protocolVersion, got.ProtocolVersion)
+	}
+}
+
+// The message key (Kafka/Pulsar partition key, Google/AWS ordering key) is part
+// of the shared message shape and must reach the agent.
+func TestToMessageJSON_CarriesKey(t *testing.T) {
+	rec := toMessageJSON(&backends.Message{Data: []byte("x"), Key: "order-42"})
+	if rec.Key != "order-42" {
+		t.Errorf("key = %q, want order-42", rec.Key)
 	}
 }

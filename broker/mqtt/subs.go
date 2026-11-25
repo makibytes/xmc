@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 )
 
@@ -99,4 +101,21 @@ func topicMatchesFilter(filter, topic string) bool {
 		}
 	}
 	return len(fl) == len(tl)
+}
+
+// waitFor waits on msgCh respecting timeout/wait semantics, using the shared
+// TimeoutDuration helper so MQTT follows the same contract as all other
+// brokers. Buffered messages from a still-open subscription are drained first.
+func waitFor[T any](ctx context.Context, msgCh <-chan T, timeout float32, wait bool, convert func(T) *backends.Message) (*backends.Message, error) {
+	timer := time.NewTimer(backends.TimeoutDuration(timeout, wait))
+	defer timer.Stop()
+
+	select {
+	case msg := <-msgCh:
+		return convert(msg), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return nil, backends.ErrNoMessageAvailable
+	}
 }

@@ -67,7 +67,7 @@ throughput to stderr.`,
 		cmd.Flags().Bool("to-topic", false, "Write the destination as a topic (publish) instead of a queue")
 	}
 	if topicCapable {
-		cmd.Flags().StringP("group", "g", "xmc-consumer-group", "Consumer group ID for the source subscription (topic source only)")
+		cmd.Flags().StringP("group", "g", backends.DefaultGroupID, "Consumer group ID for the source subscription (topic source only)")
 	}
 	addForwardFlags(cmd)
 	return cmd
@@ -134,7 +134,7 @@ func resolveForwardTopology(cmd *cobra.Command, queueCapable, topicCapable bool)
 
 // closeAdapter closes a backend adapter and logs (rather than propagates) a
 // close failure, matching WrapQueueCommand/WrapTopicCommand's behavior.
-func closeAdapter(c interface{ Close() error }) {
+func closeAdapter(c Closeable) {
 	if err := c.Close(); err != nil {
 		log.Verbose("close: %s", err)
 	}
@@ -175,7 +175,7 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 
 	ctx, cancel := streamContext(sf.Duration, cmd.Context())
 	defer cancel()
-	st, stopStats := startForwardStats(sf.Stats, errw)
+	st, stopStats := startStats(sf.Stats, errw)
 	defer stopStats()
 
 	// readFn abstracts over Receive (queue) / Subscribe (topic) for the source.
@@ -252,17 +252,16 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 		switch {
 		case errors.Is(err, context.Canceled):
 			return summarizeForward(out, forwarded, source, destination)
-		// DeadlineExceeded here is from the AMQP internal poll timeout (the
-		// backend creates its own context from Background(), not from our ctx),
-		// so it means "no message in this poll window" — keep looping. The
-		// outer --for deadline is caught by ctx.Err() at the top of the loop.
-		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
+		// An empty poll (possibly a bare per-call wait deadline, see
+		// backends.IsNoMessage): keep looping. The outer --for deadline is
+		// caught by ctx.Err() at the top of the loop.
+		case backends.IsNoMessage(err), message == nil && err == nil:
 			continue
 		case err != nil:
 			return err
 		}
 
-		body, ok := runCommandOrRecover(command, message.Data, out, errw)
+		body, ok := runCommandOrRecover(ctx, command, message.Data, out, errw)
 		if !ok {
 			continue
 		}
@@ -282,31 +281,15 @@ func doForward(cmd *cobra.Command, args []string, queueBackend backends.QueueBac
 	return summarizeForward(out, forwarded, source, destination)
 }
 
-// startForwardStats returns a stats accumulator and a stop function. When stats
-// is disabled it returns a non-nil accumulator (whose record is harmless) and a
-// no-op stop, so callers need no nil checks. w receives live tick lines and the
-// final summary (typically cmd.ErrOrStderr(); falls back to os.Stderr for CLI).
-func startForwardStats(enabled bool, w io.Writer) (*streamStats, func()) {
-	st := newStreamStats()
-	if !enabled {
-		return st, func() {}
-	}
-	stop := startStatsReporter(st, time.Second, w)
-	return st, func() {
-		stop()
-		_, _ = fmt.Fprintln(w, st.summary())
-	}
-}
-
 // runCommandOrRecover applies the optional shell command. On success it returns
 // the command's output and true. If the command fails, it logs the error,
 // writes the original (already-consumed) payload to out for recovery, and
 // returns false so the caller skips the message instead of losing it.
-func runCommandOrRecover(command string, data []byte, out, errw io.Writer) ([]byte, bool) {
+func runCommandOrRecover(ctx context.Context, command string, data []byte, out, errw io.Writer) ([]byte, bool) {
 	if command == "" {
 		return data, true
 	}
-	result, err := runShellCommand(command, data, errw)
+	result, err := runShellCommand(ctx, command, data, errw)
 	if err != nil {
 		_, _ = fmt.Fprintf(errw, "command failed: %s\n", err)
 		emitUndelivered(out, data)

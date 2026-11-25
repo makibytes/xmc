@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -10,9 +12,7 @@ import (
 // Closeable is satisfied by both QueueBackend and TopicBackend (each exposes
 // Close). It lets the ping command accept a broker connection without caring
 // whether the broker is queue- or topic-oriented.
-type Closeable interface {
-	Close() error
-}
+type Closeable = io.Closer
 
 // Connector establishes a fresh connection to the broker, performing whatever
 // authentication and TLS handshake the broker requires. Each broker wires this
@@ -51,10 +51,7 @@ func doPing(c *cobra.Command, connect Connector) error {
 	interval := getDuration(c, "interval")
 	target, _ := c.Flags().GetString("server") // inherited persistent flag
 
-	label := target
-	if label == "" {
-		label = "broker"
-	}
+	label := cmp.Or(target, "broker")
 	// Write through the command's streams: in the shell and the AI shell
 	// they are the pipeline's/transcript's writers, and the AI shell's
 	// alternate screen must never be written to directly.

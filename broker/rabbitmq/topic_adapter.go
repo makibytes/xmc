@@ -171,7 +171,7 @@ func (a *TopicAdapter) ensureSubscriptionQueue(exchange, key string, opts backen
 	}
 
 	name, ephemeral := subscriptionQueueName(exchange, key, opts)
-	mgmt := ManagementArgs{Server: a.connArgs.Server, User: a.connArgs.User, Password: a.connArgs.Password}
+	mgmt := ManagementFor(a.connArgs)
 	if err := DeclareSubscriptionQueue(mgmt, name, ephemeral); err != nil {
 		return "", fmt.Errorf("declaring subscription queue %s: %w", name, err)
 	}
@@ -188,7 +188,7 @@ func (a *TopicAdapter) ensureSubscriptionQueue(exchange, key string, opts backen
 
 // Close implements backends.TopicBackend
 func (a *TopicAdapter) Close() error {
-	mgmt := ManagementArgs{Server: a.connArgs.Server, User: a.connArgs.User, Password: a.connArgs.Password}
+	mgmt := ManagementFor(a.connArgs)
 	a.mu.Lock()
 	ephemeral := append([]string(nil), a.ephemeral...)
 	a.mu.Unlock()

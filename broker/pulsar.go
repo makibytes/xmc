@@ -21,11 +21,6 @@ func GetRootCommand() *cobra.Command {
 	var tenant, namespace string
 	var nonPersistent bool
 
-	defaultServer := os.Getenv("PMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "pulsar://localhost:6650"
-	}
-
 	return cmd.NewRootCommand(cmd.BrokerSpec{
 		Use:              "pmc",
 		Short:            "Pulsar Messaging Client",
@@ -36,7 +31,7 @@ func GetRootCommand() *cobra.Command {
 			return pulsarpkg.ResolveTarget(t.IsTopic, t.To, tenant, namespace, nonPersistent)
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "PMC_", defaultServer, "Server URL", "Username", "Password")
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "PMC_", "pulsar://localhost:6650", "Server URL", "Username", "Password")
 			c.PersistentFlags().StringVar(&connArgs.Token, "token", os.Getenv("PMC_TOKEN"), "Authentication token (mutually exclusive with --user/--password)")
 			c.PersistentFlags().StringVar(&tenant, "tenant", "public", "Pulsar tenant")
 			c.PersistentFlags().StringVar(&namespace, "namespace", "default", "Pulsar namespace")
@@ -87,7 +82,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-pulsar",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return pulsarpkg.NewQueueAdapter(connArgs)
 				},

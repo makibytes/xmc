@@ -1,20 +1,22 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"time"
 
+	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
 // registerProduceFlags adds the common flags shared by send and publish commands.
 func registerProduceFlags(cmd *cobra.Command) {
-	cmd.Flags().StringP("content-type", "T", "text/plain", "MIME type of message data")
+	cmd.Flags().StringP("content-type", "T", backends.DefaultContentType, "MIME type of message data")
 	cmd.Flags().StringP("correlation-id", "C", "", "Correlation ID for request/response")
 	cmd.Flags().StringP("message-id", "I", "", "Message ID")
-	cmd.Flags().IntP("priority", "Y", 4, "Priority of the message (0-9)")
+	cmd.Flags().IntP("priority", "Y", backends.DefaultPriority, "Priority of the message (0-9)")
 	cmd.Flags().BoolP("persistent", "d", false, "Make message persistent")
 	cmd.Flags().StringP("reply-to", "R", "", "Reply to address for request/response")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Message properties in key=value format")
@@ -84,10 +86,7 @@ func parseProduceFlags(cmd *cobra.Command) (produceFlags, error) {
 // back to the --key flag otherwise — the shared --ndjson key-fallback rule
 // used identically by send and publish.
 func (pf produceFlags) resolveKey(recordKey string) string {
-	if recordKey != "" {
-		return recordKey
-	}
-	return pf.key
+	return cmp.Or(recordKey, pf.key)
 }
 
 // emitter is a function that sends a single message payload to the broker.
@@ -105,7 +104,9 @@ func runProduce(ctx context.Context, input io.Reader, args []string, pf produceF
 ) error {
 	if pf.ndjson {
 		sent, err := forEachRecord(input, func(rec messageRecord) error {
-			pf.limiter.wait()
+			if err := pf.limiter.wait(ctx); err != nil {
+				return err
+			}
 			return emitRecord(ctx, rec)
 		})
 		if err != nil {
@@ -117,7 +118,9 @@ func runProduce(ctx context.Context, input io.Reader, args []string, pf produceF
 
 	if pf.lines {
 		sent, err := forEachInputLine(input, func(line string) error {
-			pf.limiter.wait()
+			if err := pf.limiter.wait(ctx); err != nil {
+				return err
+			}
 			return emit(ctx, []byte(line))
 		})
 		if err != nil {
@@ -136,7 +139,9 @@ func runProduce(ctx context.Context, input io.Reader, args []string, pf produceF
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		pf.limiter.wait()
+		if err := pf.limiter.wait(ctx); err != nil {
+			return err
+		}
 		if err := emit(ctx, data); err != nil {
 			return err
 		}

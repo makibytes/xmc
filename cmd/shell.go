@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -75,12 +76,7 @@ func runShell(cmd *cobra.Command, spec BrokerSpec) error {
 		return fmt.Errorf("initialize readline: %w", err)
 	}
 	defer rl.Close() //nolint:errcheck
-	session := &shellSession{
-		spec:         spec,
-		queueFactory: wrapReconnectQueue(spec.Queue, ReconnectOptions{}),
-		topicFactory: wrapReconnectTopic(spec.Topic, ReconnectOptions{}),
-		aliases:      cfg.Aliases,
-	}
+	session := newShellSession(spec, cfg.Aliases)
 	defer session.close()
 
 	fmt.Fprintf(os.Stderr, "%s shell — type \"help\" for commands, \"exit\" to quit\n", binBaseName())
@@ -89,10 +85,10 @@ func runShell(cmd *cobra.Command, spec BrokerSpec) error {
 		line, err := rl.Readline()
 
 		if err != nil {
-			if err == readline.ErrInterrupt {
+			if errors.Is(err, readline.ErrInterrupt) {
 				continue
 			}
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				fmt.Fprintln(os.Stderr, "exit")
 				return nil
 			}
@@ -136,13 +132,13 @@ func containsVerb(line string) bool {
 // so "manage <Tab>" shows "list", "purge", "create-queue", etc. and
 // "receive <Tab>" shows "-n", "--ndjson", etc.
 func newShellCompleter(rootCmd *cobra.Command, aliases map[string]string) *readline.PrefixCompleter {
-	skip := map[string]bool{"shell": true, "sh": true, "ai": true, "version": true, "completion": true}
-
 	var items []readline.PrefixCompleterInterface
 
 	for _, cmd := range rootCmd.Commands() {
 		name := cmd.Name()
-		if cmd.Hidden || skip[name] {
+		// Only offer what the shell can actually run: verbs run in-process,
+		// anything else (shell, ai, mcp, ...) would be handed to $SHELL.
+		if cmd.Hidden || !shellVerbs[name] {
 			continue
 		}
 		items = append(items, buildCmdCompleter(cmd))

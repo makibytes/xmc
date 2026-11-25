@@ -132,6 +132,10 @@ func (c *ensureCache) subscription(ctx context.Context, client *pubsub.Client, s
 	if err != nil {
 		return nil, err
 	}
+	// Every read takes one message at a time (peek/receive semantics).
+	s.ReceiveSettings.MaxOutstandingMessages = 1
+	s.ReceiveSettings.NumGoroutines = 1
+	s.ReceiveSettings.Synchronous = true
 	if c.subs == nil {
 		c.subs = make(map[string]*pubsub.Subscription)
 	}

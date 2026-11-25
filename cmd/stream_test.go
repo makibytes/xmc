@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func TestStreamStats_Summary(t *testing.T) {
 }
 
 func TestStreamContext_Timeout(t *testing.T) {
-	ctx, cancel := streamContext(30 * time.Millisecond)
+	ctx, cancel := streamContext(30*time.Millisecond, context.Background())
 	defer cancel()
 	select {
 	case <-ctx.Done():
@@ -85,7 +86,7 @@ func TestStreamContext_Timeout(t *testing.T) {
 }
 
 func TestStreamContext_NoLimit(t *testing.T) {
-	ctx, cancel := streamContext(0)
+	ctx, cancel := streamContext(0, context.Background())
 	defer cancel()
 	if ctx.Err() != nil {
 		t.Error("no-limit context should not be done immediately")
@@ -121,5 +122,20 @@ func TestReceiveCommand_ForEmptyStops(t *testing.T) {
 	})
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("--for did not stop the stream promptly: took %v", d)
+	}
+}
+
+// After stop returns, no further tick line may be written — otherwise a tick
+// could print after the caller's final summary.
+func TestStartStatsReporter_NothingWrittenAfterStop(t *testing.T) {
+	var buf syncBuffer
+	st := newStreamStats()
+	stop := startStatsReporter(st, 2*time.Millisecond, &buf)
+	time.Sleep(15 * time.Millisecond)
+	stop()
+	n := len(buf.String())
+	time.Sleep(20 * time.Millisecond)
+	if got := len(buf.String()); got != n {
+		t.Errorf("reporter wrote %d bytes after stop returned", got-n)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	natsclient "github.com/nats-io/nats.go"
 
@@ -15,6 +16,13 @@ import (
 // TopicAdapter adapts core NATS pub/sub to the TopicBackend interface.
 type TopicAdapter struct {
 	nc *natsclient.Conn
+
+	// subs keeps one subscription per (topic, group) open for the adapter's
+	// lifetime. Core NATS delivers only to live subscribers, so subscribing
+	// per Subscribe call would drop every message published between two calls
+	// of a streaming read (-n 0, --for); the subscription buffers them.
+	mu   sync.Mutex
+	subs map[string]*natsclient.Subscription
 }
 
 // NewTopicAdapter creates a new NATS topic adapter.
@@ -25,7 +33,8 @@ func NewTopicAdapter(connArgs ConnArguments) (*TopicAdapter, error) {
 	}
 
 	return &TopicAdapter{
-		nc: nc,
+		nc:   nc,
+		subs: make(map[string]*natsclient.Subscription),
 	}, nil
 }
 
@@ -53,28 +62,47 @@ func (a *TopicAdapter) Publish(_ context.Context, opts backends.PublishOptions) 
 	return a.nc.PublishMsg(msg)
 }
 
-// Subscribe implements backends.TopicBackend.
-func (a *TopicAdapter) Subscribe(_ context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
-	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-
+// subscription returns the open subscription for (topic, group), creating it
+// on first use. A non-empty group makes it a queue subscription (competing
+// consumers).
+func (a *TopicAdapter) subscription(topic, group string) (*natsclient.Subscription, error) {
+	key := topic + "|" + group
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sub, ok := a.subs[key]; ok {
+		return sub, nil
+	}
 	var (
 		sub *natsclient.Subscription
 		err error
 	)
-
-	if opts.GroupID != "" {
-		sub, err = a.nc.QueueSubscribeSync(opts.Topic, opts.GroupID)
+	if group != "" {
+		sub, err = a.nc.QueueSubscribeSync(topic, group)
 	} else {
-		sub, err = a.nc.SubscribeSync(opts.Topic)
+		sub, err = a.nc.SubscribeSync(topic)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("subscribing to topic %s: %w", opts.Topic, err)
+		return nil, fmt.Errorf("subscribing to topic %s: %w", topic, err)
 	}
-	defer sub.Unsubscribe() //nolint:errcheck
+	a.subs[key] = sub
+	return sub, nil
+}
 
-	msg, err := sub.NextMsg(timeout)
+// Subscribe implements backends.TopicBackend.
+func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOptions) (*backends.Message, error) {
+	sub, err := a.subscription(opts.Topic, opts.GroupID)
 	if err != nil {
-		if errors.Is(err, natsclient.ErrTimeout) {
+		return nil, err
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, backends.TimeoutDuration(opts.Timeout, opts.Wait))
+	defer cancel()
+	msg, err := sub.NextMsgWithContext(waitCtx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err() // the caller gave up (Ctrl-C, Esc)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, natsclient.ErrTimeout) {
 			return nil, backends.ErrNoMessageAvailable
 		}
 		return nil, err

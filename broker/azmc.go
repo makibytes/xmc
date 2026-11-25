@@ -84,7 +84,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-azure",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Namespace,
+				Target:        func() string { return connArgs.Namespace },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return azpkg.NewQueueAdapter(connArgs)
 				},

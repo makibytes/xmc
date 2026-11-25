@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+// The clients always stream, so request-shape tests answer with the smallest
+// valid event stream carrying one text chunk.
+
+func writeSSE(w http.ResponseWriter, events ...string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	for _, e := range events {
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", e)
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func writeAnthropicStream(w http.ResponseWriter, text string) {
+	writeSSE(w, `{"type":"content_block_delta","delta":{"type":"text_delta","text":`+jsonString(text)+`}}`, `{"type":"message_stop"}`)
+}
+
+func writeOpenAIStream(w http.ResponseWriter, text string) {
+	writeSSE(w, `{"choices":[{"delta":{"content":`+jsonString(text)+`}}]}`, `[DONE]`)
+}
+
+func writeGeminiStream(w http.ResponseWriter, text string) {
+	writeSSE(w, `{"candidates":[{"content":{"parts":[{"text":`+jsonString(text)+`}]}}]}`)
+}
+
 func TestAnthropicClient_RequestShape(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -43,11 +70,7 @@ func TestAnthropicClient_RequestShape(t *testing.T) {
 			t.Errorf("output_config = %#v, want %#v", req["output_config"], wantOutputConfig)
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"content": []map[string]string{
-				{"text": "receive q -n 5"},
-			},
-		})
+		writeAnthropicStream(w, "receive q -n 5")
 	}))
 	defer srv.Close()
 
@@ -61,17 +84,17 @@ func TestAnthropicClient_RequestShape(t *testing.T) {
 	}
 }
 
-func TestAnthropicClient_ThinkingResponse(t *testing.T) {
-	response := `{
-		"content": [
-			{"type":"thinking","thinking":"reasoning"},
-			{"type":"text","text":"send orders hello"}
-		],
-		"usage":{"input_tokens":12,"output_tokens":7}
-	}`
+func TestAnthropicClient_ThinkingStream(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}`,
+		`data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reasoning"}}`,
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"send orders hello"}}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`,
+		`data: {"type":"message_stop"}`,
+	}, "\n\n") + "\n\n"
 	c := &anthropicClient{model: "claude-sonnet-5"}
 
-	text, usage, err := c.parseResponse(strings.NewReader(response))
+	text, usage, err := c.parseStream(strings.NewReader(stream), func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,11 +115,7 @@ func TestOpenAIClient_RequestShape(t *testing.T) {
 			t.Errorf("auth = %q", r.Header.Get("Authorization"))
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]string{"content": "send q hello"}},
-			},
-		})
+		writeOpenAIStream(w, "send q hello")
 	}))
 	defer srv.Close()
 
@@ -163,11 +182,7 @@ func TestOpenAIClient_ReasoningModelRequestShape(t *testing.T) {
 			t.Errorf("reasoning_effort = %v, want high", req["reasoning_effort"])
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]string{"content": "ok"}},
-			},
-		})
+		writeOpenAIStream(w, "ok")
 	}))
 	defer srv.Close()
 
@@ -264,15 +279,7 @@ func TestGeminiClient_RequestShape(t *testing.T) {
 			t.Errorf("API key must not be in the URL: %s", r.URL)
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"candidates": []map[string]any{
-				{"content": map[string]any{
-					"parts": []map[string]string{
-						{"text": "publish topic msg"},
-					},
-				}},
-			},
-		})
+		writeGeminiStream(w, "publish topic msg")
 	}))
 	defer srv.Close()
 
@@ -303,13 +310,7 @@ func TestGeminiClient_CurrentModelEffort(t *testing.T) {
 			t.Errorf("thinkingConfig = %#v, want %#v", generationConfig["thinkingConfig"], wantThinking)
 		}
 
-		if err := json.NewEncoder(w).Encode(map[string]any{
-			"candidates": []map[string]any{{
-				"content": map[string]any{"parts": []map[string]string{{"text": "send q hello"}}},
-			}},
-		}); err != nil {
-			t.Errorf("encode response: %v", err)
-		}
+		writeGeminiStream(w, "send q hello")
 	}))
 	defer srv.Close()
 
@@ -390,9 +391,7 @@ func TestAnthropicClient_MultiTurnMessages(t *testing.T) {
 			t.Errorf("temperature = %v, want 0", temp)
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"content": []map[string]string{{"text": "send q refined"}},
-		})
+		writeAnthropicStream(w, "send q refined")
 	}))
 	defer srv.Close()
 
@@ -432,11 +431,7 @@ func TestOpenAIClient_MultiTurnMessages(t *testing.T) {
 			t.Errorf("temperature = %v, want 0", temp)
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]string{"content": "ok"}},
-			},
-		})
+		writeOpenAIStream(w, "ok")
 	}))
 	defer srv.Close()
 
@@ -476,13 +471,7 @@ func TestGeminiClient_RoleMapping(t *testing.T) {
 			t.Errorf("temperature = %v, want 0", genConfig["temperature"])
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"candidates": []map[string]any{
-				{"content": map[string]any{
-					"parts": []map[string]string{{"text": "ok"}},
-				}},
-			},
-		})
+		writeGeminiStream(w, "ok")
 	}))
 	defer srv.Close()
 
@@ -591,31 +580,6 @@ func TestOpenAIClient_Streaming(t *testing.T) {
 		t.Errorf("got %d tokens, want 2", len(tokens))
 	}
 	if usage.InputTokens != 15 || usage.OutputTokens != 6 {
-		t.Errorf("usage = %+v", usage)
-	}
-}
-
-func TestOpenAIClient_MistralChunkedResponse(t *testing.T) {
-	response := `{
-		"choices":[{
-			"message":{"content":[
-				{"type":"thinking","thinking":[{"type":"text","text":"reasoning"}]},
-				{"type":"text","text":"receive orders -n 1"}
-			]},
-			"finish_reason":"stop"
-		}],
-		"usage":{"prompt_tokens":18,"completion_tokens":9}
-	}`
-	c := &openaiClient{provider: "mistral", model: "mistral-small-latest"}
-
-	text, usage, err := c.parseResponse(strings.NewReader(response))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text != "receive orders -n 1" {
-		t.Errorf("text = %q, want final text chunk", text)
-	}
-	if usage.InputTokens != 18 || usage.OutputTokens != 9 {
 		t.Errorf("usage = %+v", usage)
 	}
 }

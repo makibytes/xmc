@@ -30,29 +30,38 @@ func ListQueues(args ConnArguments) ([]backends.QueueInfo, error) {
 
 	var queues []backends.QueueInfo
 	for _, url := range out.QueueUrls {
-		parts := strings.Split(url, "/")
-		name := parts[len(parts)-1]
-
-		count := int64(0)
-		attrs, err := sqsc.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
-			QueueUrl: &url,
-			AttributeNames: []sqstypes.QueueAttributeName{
-				sqstypes.QueueAttributeNameApproximateNumberOfMessages,
-			},
-		})
-		if err == nil {
-			if v, ok := attrs.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessages)]; ok {
-				count, _ = strconv.ParseInt(v, 10, 64)
-			}
-		}
-
 		queues = append(queues, backends.QueueInfo{
-			Name:         name,
-			MessageCount: count,
+			Name:         lastSegment(url, "/"),
+			MessageCount: approxMessages(ctx, sqsc, url),
 		})
 	}
 
 	return queues, nil
+}
+
+// lastSegment returns the part of s after the last sep (all of s if sep is
+// absent): the queue name of a queue URL, the topic name of a topic ARN.
+func lastSegment(s, sep string) string {
+	if i := strings.LastIndex(s, sep); i >= 0 {
+		return s[i+len(sep):]
+	}
+	return s
+}
+
+// approxMessages returns the queue's approximate visible message count, or 0
+// when it cannot be read.
+func approxMessages(ctx context.Context, sqsc *sqs.Client, queueURL string) int64 {
+	attrs, err := sqsc.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl: &queueURL,
+		AttributeNames: []sqstypes.QueueAttributeName{
+			sqstypes.QueueAttributeNameApproximateNumberOfMessages,
+		},
+	})
+	if err != nil {
+		return 0
+	}
+	count, _ := strconv.ParseInt(attrs.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessages)], 10, 64)
+	return count
 }
 
 // ListTopicsWithSubscriptions returns SNS topics as ObjectNodes with their
@@ -74,9 +83,7 @@ func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, err
 		if t.TopicArn == nil {
 			continue
 		}
-		parts := strings.Split(*t.TopicArn, ":")
-		name := parts[len(parts)-1]
-		node := backends.ObjectNode{Name: name}
+		node := backends.ObjectNode{Name: lastSegment(*t.TopicArn, ":")}
 
 		subOut, subErr := snsc.ListSubscriptionsByTopic(ctx, &sns.ListSubscriptionsByTopicInput{
 			TopicArn: t.TopicArn,
@@ -87,8 +94,7 @@ func ListTopicsWithSubscriptions(args ConnArguments) ([]backends.ObjectNode, err
 				proto := derefStr(s.Protocol)
 				// For SQS endpoints show only the queue name (last URL segment).
 				if proto == "sqs" {
-					segs := strings.Split(ep, "/")
-					ep = segs[len(segs)-1]
+					ep = lastSegment(ep, "/")
 				}
 				node.Children = append(node.Children, backends.ObjectNode{
 					Name: ep,
@@ -119,8 +125,7 @@ func ListTopics(args ConnArguments) ([]backends.TopicInfo, error) {
 		if t.TopicArn == nil {
 			continue
 		}
-		parts := strings.Split(*t.TopicArn, ":")
-		topics = append(topics, backends.TopicInfo{Name: parts[len(parts)-1]})
+		topics = append(topics, backends.TopicInfo{Name: lastSegment(*t.TopicArn, ":")})
 	}
 	return topics, nil
 }
@@ -135,8 +140,7 @@ func lookupTopicARN(ctx context.Context, snsc *sns.Client, name string) (string,
 		if t.TopicArn == nil {
 			continue
 		}
-		parts := strings.Split(*t.TopicArn, ":")
-		if parts[len(parts)-1] == name {
+		if lastSegment(*t.TopicArn, ":") == name {
 			return *t.TopicArn, nil
 		}
 	}
@@ -212,18 +216,7 @@ func PurgeQueue(args ConnArguments, queue string) (int64, error) {
 		return 0, err
 	}
 
-	attrs, err := sqsc.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
-		QueueUrl: &url,
-		AttributeNames: []sqstypes.QueueAttributeName{
-			sqstypes.QueueAttributeNameApproximateNumberOfMessages,
-		},
-	})
-	var count int64
-	if err == nil {
-		if v, ok := attrs.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessages)]; ok {
-			count, _ = strconv.ParseInt(v, 10, 64)
-		}
-	}
+	count := approxMessages(ctx, sqsc, url)
 
 	_, err = sqsc.PurgeQueue(ctx, &sqs.PurgeQueueInput{
 		QueueUrl: &url,

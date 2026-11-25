@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"github.com/makibytes/xmc/broker/backends"
-	"github.com/makibytes/xmc/log"
 	"github.com/spf13/cobra"
 )
 
@@ -23,11 +22,7 @@ func wrapCommand[T Closeable](newCmd func(T) *cobra.Command, factory func() (T, 
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if cerr := adapter.Close(); cerr != nil {
-				log.Verbose("close: %s", cerr)
-			}
-		}()
+		defer closeAdapter(adapter)
 		return newCmd(adapter).RunE(c, args)
 	}
 	return cmd

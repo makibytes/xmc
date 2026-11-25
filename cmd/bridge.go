@@ -3,13 +3,10 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/makibytes/xmc/broker/backends"
 	"github.com/makibytes/xmc/log"
@@ -60,7 +57,7 @@ Examples:
 		cmd.Flags().Bool("topic", false, "Read the source as a topic (subscribe) instead of a queue")
 	}
 	if topicCapable {
-		cmd.Flags().StringP("group", "g", "xmc-consumer-group", "Consumer group ID for the source subscription (topic source only)")
+		cmd.Flags().StringP("group", "g", backends.DefaultGroupID, "Consumer group ID for the source subscription (topic source only)")
 	}
 	addForwardFlags(cmd)
 	return cmd
@@ -134,18 +131,19 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 	out := cmd.OutOrStdout()
 	errw := cmd.ErrOrStderr()
 
-	ctx, cancel := timedOrInterruptCtx(cmd.Context(), sf.Duration)
+	ctx, cancel := streamContext(sf.Duration, cmd.Context())
 	defer cancel()
 
-	st, stopStats := startForwardStats(sf.Stats, errw)
+	st, stopStats := startStats(sf.Stats, errw)
 	defer stopStats()
 
-	// Use cmd.Context() (interrupt-only), not the --for-bounded ctx: exec.CommandContext
-	// kills the process the instant its context is done, which would abort the target
+	// Use cmd.Context(), not the --for-bounded ctx: exec.CommandContext kills the
+	// process the instant its context is done, which would abort the target
 	// mid-drain the moment --for expires, dropping whatever it hadn't yet published from
-	// its stdin buffer. The bounded ctx still governs the read loop below; once it ends,
-	// the deferred stdinPipe.Close()+proc.Wait() lets the target finish gracefully via EOF.
-	// A real interrupt (Ctrl-C) still kills it immediately, since that cancels cmd.Context() too.
+	// its stdin buffer. The bounded ctx still governs the read loop below; once it ends
+	// (--for expiry, count reached, or Ctrl-C, which streamContext turns into a clean
+	// stop), the deferred flush, stdinPipe.Close() and proc.Wait() let the target finish
+	// gracefully via EOF and the summary is printed.
 	proc, stdinPipe, err := startTargetProcess(cmd.Context(), target, out, errw)
 	if err != nil {
 		return err
@@ -202,11 +200,8 @@ func doBridge(cmd *cobra.Command, args []string, queueBackend backends.QueueBack
 			if ctx.Err() != nil {
 				break
 			}
-			// DeadlineExceeded is the AMQP backend's internal poll timeout
-			// (100ms, from its own Background context), not the outer deadline.
-			// ErrNoMessageAvailable is its logical equivalent. Both mean "empty
-			// source this poll" — keep looping.
-			if errors.Is(err, backends.ErrNoMessageAvailable) || errors.Is(err, context.DeadlineExceeded) {
+			// An empty poll (see backends.IsNoMessage) — keep looping.
+			if backends.IsNoMessage(err) {
 				// Source empty this poll: flush now so a trickle stream still
 				// reaches the target promptly instead of sitting in the buffer.
 				if err := bw.Flush(); err != nil {
@@ -237,12 +232,7 @@ func startTargetProcess(ctx context.Context, target string, out, errw io.Writer)
 		target = target + " --ndjson"
 	}
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-
-	proc := exec.CommandContext(ctx, shell, "-c", target)
+	proc := exec.CommandContext(ctx, systemShell(), "-c", target)
 	proc.Stdout = out
 	proc.Stderr = errw
 
@@ -256,13 +246,4 @@ func startTargetProcess(ctx context.Context, target string, out, errw io.Writer)
 	}
 
 	return proc, stdinPipe, nil
-}
-
-// timedOrInterruptCtx returns a context that cancels on interrupt or after
-// duration (if > 0).
-func timedOrInterruptCtx(parent context.Context, duration time.Duration) (context.Context, context.CancelFunc) {
-	if duration > 0 {
-		return context.WithTimeout(parent, duration)
-	}
-	return context.WithCancel(parent)
 }

@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"time"
 
@@ -54,7 +54,7 @@ of payloads, or use a command that reads stdin directly.`,
 	cmd.Flags().BoolP("echo", "e", false, "Echo the request payload back as the response")
 	cmd.Flags().StringP("command", "x", "", "Run a shell command per request; its stdout becomes the response")
 	cmd.Flags().StringP("reply-to", "R", "", "Fallback reply destination when a request carries no reply-to")
-	cmd.Flags().StringP("content-type", "T", "text/plain", "MIME type of the response data")
+	cmd.Flags().StringP("content-type", "T", backends.DefaultContentType, "MIME type of the response data")
 	cmd.Flags().StringSliceP("property", "P", []string{}, "Response properties in key=value format")
 	cmd.Flags().IntP("count", "n", 0, "Number of requests to serve (0 = serve until interrupted)")
 	cmd.Flags().VarP(newDurationValue(0, time.Second), "timeout", "t", "Time to wait per request (e.g. \"5s\"; 0 = wait indefinitely)")
@@ -95,9 +95,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 	if err != nil {
 		return err
 	}
-	if (sf.Duration > 0 || sf.Forever) && !cmd.Flags().Changed("count") {
-		count = 0
-	}
+	count = sf.effectiveCount(cmd, count)
 
 	properties, err := parsePropertiesFlag(cmd.Flags())
 	if err != nil {
@@ -120,9 +118,9 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 
 	// A fixed response body is only meaningful when not echoing or shelling out.
 	if !echo && command == "" {
-		body, err := readReplyBody(args)
+		body, err := readCommandMessage(args, cmd.InOrStdin())
 		if err != nil {
-			return err
+			return fmt.Errorf("no response provided: pass a response argument, --echo, or --command (%w)", err)
 		}
 		cfg.staticBody = body
 	}
@@ -153,7 +151,7 @@ func doReply(cmd *cobra.Command, args []string, backend backends.QueueBackend) e
 		switch {
 		case errors.Is(err, context.Canceled):
 			return finishReply(served)
-		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, backends.ErrNoMessageAvailable), message == nil && err == nil:
+		case backends.IsNoMessage(err), message == nil && err == nil:
 			if sf.Follow || count == 0 {
 				continue // keep waiting for the next request
 			}
@@ -180,16 +178,13 @@ func finishReply(served int) error {
 // that cannot be answered (no reply-to and no fallback) is skipped rather than
 // aborting the responder.
 func respondToRequest(ctx context.Context, backend backends.QueueBackend, request *backends.Message, cfg replyConfig) error {
-	replyTo := request.ReplyTo
-	if replyTo == "" {
-		replyTo = cfg.replyTo
-	}
+	replyTo := cmp.Or(request.ReplyTo, cfg.replyTo)
 	if replyTo == "" {
 		log.Verbose("request has no reply-to and no --replyto fallback; skipping")
 		return nil
 	}
 
-	body, err := replyBody(cfg, request)
+	body, err := replyBody(ctx, cfg, request)
 	if err != nil {
 		// A failing command should not tear down the whole responder. Write to
 		// the command's error stream (not the global log) so the message lands
@@ -198,10 +193,7 @@ func respondToRequest(ctx context.Context, backend backends.QueueBackend, reques
 		return nil
 	}
 
-	correlationID := request.CorrelationID
-	if correlationID == "" {
-		correlationID = request.MessageID
-	}
+	correlationID := cmp.Or(request.CorrelationID, request.MessageID)
 
 	if !cfg.quiet {
 		log.Verbose("replying to %s (correlation %q)", replyTo, correlationID)
@@ -216,12 +208,12 @@ func respondToRequest(ctx context.Context, backend backends.QueueBackend, reques
 	})
 }
 
-func replyBody(cfg replyConfig, request *backends.Message) ([]byte, error) {
+func replyBody(ctx context.Context, cfg replyConfig, request *backends.Message) ([]byte, error) {
 	switch {
 	case cfg.echo:
 		return request.Data, nil
 	case cfg.command != "":
-		return runShellCommand(cfg.command, request.Data, cfg.errOut)
+		return runShellCommand(ctx, cfg.command, request.Data, cfg.errOut)
 	default:
 		return cfg.staticBody, nil
 	}
@@ -232,22 +224,11 @@ func replyBody(cfg replyConfig, request *backends.Message) ([]byte, error) {
 // (the calling command's error stream) so its diagnostics are visible — and,
 // in shell/AI mode, captured with the rest of the command's output instead of
 // leaking to the terminal. Shared by the reply responder and forward --command.
-func runShellCommand(command string, input []byte, errOut io.Writer) ([]byte, error) {
-	c := exec.Command("sh", "-c", command)
+// The command runs under the user's $SHELL like every other external command,
+// and is killed when ctx ends (Esc in the AI shell, --for expiry, Ctrl-C).
+func runShellCommand(ctx context.Context, command string, input []byte, errOut io.Writer) ([]byte, error) {
+	c := exec.CommandContext(ctx, systemShell(), "-c", command)
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = errOut
 	return c.Output()
-}
-
-// readReplyBody resolves the static response body from the command argument or,
-// failing that, stdin. It is only called when neither --echo nor --command is set.
-func readReplyBody(args []string) ([]byte, error) {
-	if len(args) > 1 {
-		return []byte(args[1]), nil
-	}
-	stat, err := os.Stdin.Stat()
-	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		return io.ReadAll(os.Stdin)
-	}
-	return nil, fmt.Errorf("no response provided: pass a response argument, --echo, or --command")
 }

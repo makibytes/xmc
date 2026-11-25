@@ -4,7 +4,6 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,17 +58,17 @@ func (a *TopicAdapter) Subscribe(ctx context.Context, opts backends.SubscribeOpt
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
 	if opts.GroupID != "" {
-		return a.subscribeGroup(ctx, key, opts.GroupID, opts.Durable, timeout)
+		return a.subscribeGroup(ctx, key, opts.GroupID, timeout)
 	}
 	return a.subscribeIndependent(ctx, key, timeout)
 }
 
-func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, _ bool, timeout time.Duration) (*backends.Message, error) {
+func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, timeout time.Duration) (*backends.Message, error) {
 	if err := a.ensureTopicGroup(ctx, key, group); err != nil {
 		return nil, err
 	}
 
-	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+	entry, err := readOne(ctx, timeout, fmt.Sprintf("subscribing to topic group %s/%s", key, group), func(block time.Duration) ([]redis.XStream, error) {
 		return a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    group,
 			Consumer: "xmc",
@@ -79,17 +78,9 @@ func (a *TopicAdapter) subscribeGroup(ctx context.Context, key, group string, _ 
 		}).Result()
 	})
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, backends.ErrNoMessageAvailable
-		}
-		return nil, fmt.Errorf("subscribing to topic group %s/%s: %w", key, group, err)
+		return nil, err
 	}
 
-	if len(result) == 0 || len(result[0].Messages) == 0 {
-		return nil, backends.ErrNoMessageAvailable
-	}
-
-	entry := result[0].Messages[0]
 	a.client.XAck(ctx, key, group, entry.ID) //nolint:errcheck
 
 	return streamToMessage(entry.ID, entry.Values), nil
@@ -113,7 +104,7 @@ func (a *TopicAdapter) subscribeIndependent(ctx context.Context, key string, tim
 		a.lastID[key] = startID
 	}
 
-	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+	entry, err := readOne(ctx, timeout, "subscribing to topic "+key, func(block time.Duration) ([]redis.XStream, error) {
 		return a.client.XRead(ctx, &redis.XReadArgs{
 			Streams: []string{key, startID},
 			Count:   1,
@@ -121,17 +112,8 @@ func (a *TopicAdapter) subscribeIndependent(ctx context.Context, key string, tim
 		}).Result()
 	})
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, backends.ErrNoMessageAvailable
-		}
-		return nil, fmt.Errorf("subscribing to topic %s: %w", key, err)
+		return nil, err
 	}
-
-	if len(result) == 0 || len(result[0].Messages) == 0 {
-		return nil, backends.ErrNoMessageAvailable
-	}
-
-	entry := result[0].Messages[0]
 	a.lastID[key] = entry.ID
 
 	return streamToMessage(entry.ID, entry.Values), nil

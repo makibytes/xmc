@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/makibytes/xmc/log"
@@ -86,10 +87,5 @@ func isOKStatus(status int, okStatuses []int) bool {
 	if len(okStatuses) == 0 {
 		return status == 200
 	}
-	for _, s := range okStatuses {
-		if status == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(okStatuses, status)
 }

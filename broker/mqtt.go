@@ -17,11 +17,6 @@ import (
 func GetRootCommand() *cobra.Command {
 	var connArgs mqtt.ConnArguments
 
-	defaultServer := os.Getenv("MMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "tcp://localhost:1883"
-	}
-
 	var group string
 	var mqttVersion int
 
@@ -85,7 +80,7 @@ func GetRootCommand() *cobra.Command {
 			return extra
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "MMC_", defaultServer,
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "MMC_", "tcp://localhost:1883",
 				"MQTT broker URL", "Username", "Password")
 			c.PersistentFlags().StringVar(&connArgs.ClientID, "client-id", "", "MQTT client ID (auto-generated if empty)")
 			// Named --queue-group (not --group) to avoid clashing with the
@@ -102,7 +97,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-mqtt",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewQueue:      newQueue,
 				NewTopic:      newTopic,
 			}),

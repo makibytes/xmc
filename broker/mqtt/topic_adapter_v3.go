@@ -5,7 +5,6 @@ package mqtt
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/makibytes/xmc/broker/backends"
@@ -13,9 +12,8 @@ import (
 
 // TopicAdapterV3 adapts MQTT to TopicBackend.
 type TopicAdapterV3 struct {
-	connArgs ConnArguments
-	client   pahomqtt.Client
-	subs     subscriptionCacheV3
+	client pahomqtt.Client
+	subs   subscriptionCacheV3
 }
 
 // NewTopicAdapterV3 creates a connected TopicAdapterV3.
@@ -24,7 +22,7 @@ func NewTopicAdapterV3(args ConnArguments) (*TopicAdapterV3, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopicAdapterV3{connArgs: args, client: client}, nil
+	return &TopicAdapterV3{client: client}, nil
 }
 
 // Publish implements backends.TopicBackend.
@@ -35,12 +33,8 @@ func (a *TopicAdapterV3) Publish(_ context.Context, opts backends.PublishOptions
 		opts.ReplyTo, opts.ContentType, opts.TTL); err != nil {
 		return err
 	}
-	qos := byte(1)
-	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
-		qos = byte(v)
-	}
 	retain := opts.Extra["retain"] == "true"
-	token := a.client.Publish(opts.Topic, qos, retain, opts.Message)
+	token := a.client.Publish(opts.Topic, qosFromExtra(opts.Extra), retain, opts.Message)
 	if !token.WaitTimeout(tokenTimeout) {
 		return fmt.Errorf("MQTT publish to %q timed out", opts.Topic)
 	}
@@ -61,16 +55,11 @@ func (a *TopicAdapterV3) Subscribe(ctx context.Context, opts backends.SubscribeO
 		topic = "$share/" + opts.GroupID + "/" + opts.Topic
 	}
 
-	qos := byte(1)
-	if v, err := strconv.Atoi(opts.Extra["qos"]); err == nil {
-		qos = byte(v)
-	}
-
-	msgCh, err := a.subs.channelFor(a.client, topic, qos)
+	msgCh, err := a.subs.channelFor(a.client, topic, qosFromExtra(opts.Extra))
 	if err != nil {
 		return nil, err
 	}
-	return waitForMessageV3(ctx, msgCh, opts.Timeout, opts.Wait)
+	return waitFor(ctx, msgCh, opts.Timeout, opts.Wait, convertMessageV3)
 }
 
 // Close implements backends.TopicBackend.

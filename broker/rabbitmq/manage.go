@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 
@@ -18,6 +19,11 @@ type ManagementArgs struct {
 	Server   string
 	User     string
 	Password string
+}
+
+// ManagementFor returns the management API parameters for an AMQP connection.
+func ManagementFor(c ConnArguments) ManagementArgs {
+	return ManagementArgs{Server: c.Server, User: c.User, Password: c.Password}
 }
 
 // managementBaseOverride, when non-empty, replaces the management API base URL
@@ -311,12 +317,12 @@ type mgmtMessage struct {
 	Payload         string `json:"payload"`
 	PayloadEncoding string `json:"payload_encoding"`
 	Properties      struct {
-		MessageID     string                 `json:"message_id"`
-		CorrelationID string                 `json:"correlation_id"`
-		ReplyTo       string                 `json:"reply_to"`
-		ContentType   string                 `json:"content_type"`
-		Priority      uint8                  `json:"priority"`
-		Headers       map[string]interface{} `json:"headers"`
+		MessageID     string         `json:"message_id"`
+		CorrelationID string         `json:"correlation_id"`
+		ReplyTo       string         `json:"reply_to"`
+		ContentType   string         `json:"content_type"`
+		Priority      uint8          `json:"priority"`
+		Headers       map[string]any `json:"headers"`
 	} `json:"properties"`
 }
 
@@ -349,9 +355,7 @@ func peekQueueMessages(args ManagementArgs, queueAddr string, count int) ([]back
 			}
 		}
 		props := make(map[string]any, len(m.Properties.Headers))
-		for k, v := range m.Properties.Headers {
-			props[k] = v
-		}
+		maps.Copy(props, m.Properties.Headers)
 		msgs = append(msgs, backends.Message{
 			Data:          data,
 			MessageID:     m.Properties.MessageID,

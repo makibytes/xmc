@@ -3,8 +3,8 @@
 package broker
 
 import (
+	"cmp"
 	"context"
-	"os"
 
 	"github.com/makibytes/xmc/broker/backends"
 	natspkg "github.com/makibytes/xmc/broker/nats"
@@ -20,12 +20,20 @@ func GetRootCommand() *cobra.Command {
 	var maxMsgs int64
 	var subjects []string
 
-	defaultServer := os.Getenv("NMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "nats://localhost:4222"
-	}
-
 	var stream string
+
+	// --stream is accepted by every produce and consume verb; a verb-level value
+	// wins over the persistent --stream default.
+	streamFlag := func(c *cobra.Command) {
+		c.Flags().String("stream", "", "JetStream stream name override (default: auto-derived from queue name)")
+	}
+	streamExtra := func(c *cobra.Command) map[string]string {
+		s, _ := c.Flags().GetString("stream")
+		if s = cmp.Or(s, stream); s == "" {
+			return map[string]string{}
+		}
+		return map[string]string{"stream": s}
+	}
 
 	return cmd.NewRootCommand(cmd.BrokerSpec{
 		Use:              "nmc",
@@ -33,34 +41,12 @@ func GetRootCommand() *cobra.Command {
 		Long:             "Command-line interface for NATS messaging",
 		AIContext:        AIDoc("nats"),
 		UnsupportedFlags: []string{"ttl", "priority", "persistent", "selector"},
-		ConsumeFlags: func(c *cobra.Command) {
-			c.Flags().String("stream", "", "JetStream stream name override (default: auto-derived from queue name)")
-		},
-		ConsumeExtra: func(c *cobra.Command) map[string]string {
-			extra := make(map[string]string)
-			if s, _ := c.Flags().GetString("stream"); s != "" {
-				extra["stream"] = s
-			}
-			if stream != "" && extra["stream"] == "" {
-				extra["stream"] = stream
-			}
-			return extra
-		},
-		ProduceFlags: func(c *cobra.Command) {
-			c.Flags().String("stream", "", "JetStream stream name override (default: auto-derived from queue name)")
-		},
-		ProduceExtra: func(c *cobra.Command) map[string]string {
-			extra := make(map[string]string)
-			if s, _ := c.Flags().GetString("stream"); s != "" {
-				extra["stream"] = s
-			}
-			if stream != "" && extra["stream"] == "" {
-				extra["stream"] = stream
-			}
-			return extra
-		},
+		ConsumeFlags:     streamFlag,
+		ConsumeExtra:     streamExtra,
+		ProduceFlags:     streamFlag,
+		ProduceExtra:     streamExtra,
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "NMC_", defaultServer,
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "NMC_", "nats://localhost:4222",
 				"Server URL", "Username for authentication", "Password for authentication")
 			c.PersistentFlags().StringVar(&stream, "stream", "", "Default JetStream stream name (applied when --stream on verb is not set)")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
@@ -95,7 +81,7 @@ func GetRootCommand() *cobra.Command {
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-nats",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return natspkg.NewQueueAdapter(connArgs)
 				},
@@ -103,21 +89,7 @@ func GetRootCommand() *cobra.Command {
 					return natspkg.NewTopicAdapter(connArgs)
 				},
 				ListQueues: func(_ context.Context) ([]backends.QueueInfo, error) {
-					nodes, err := natspkg.ListStreamsWithConsumers(connArgs)
-					if err != nil {
-						return nil, err
-					}
-					infos := make([]backends.QueueInfo, len(nodes))
-					for i, n := range nodes {
-						var msgs int64
-						for _, m := range n.Metrics {
-							if m.Label == "msgs" {
-								msgs = m.Value
-							}
-						}
-						infos[i] = backends.QueueInfo{Name: n.Name, MessageCount: msgs, ConsumerCount: len(n.Children)}
-					}
-					return infos, nil
+					return natspkg.ListStreams(connArgs)
 				},
 				PurgeQueue: func(_ context.Context, queue string) (int64, error) {
 					return natspkg.PurgeStream(connArgs, queue)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -51,14 +52,11 @@ const maxFixAttempts = 2
 type aiSession struct {
 	mu                 sync.Mutex
 	client             aiClient
-	sysPrompt          string // guarded by mu
-	brokerContext      string
-	topology           string          // guarded by mu
-	capabilities       string          // cached buildCapabilities result (command tree is static)
-	destructive        []string        // cached destructiveCommands result (command tree is static)
-	verbSet            map[string]bool // cached verb set for extractCommandWithVerbs
-	aliases            map[string]string
-	session            *shellSession
+	sysPrompt          string        // guarded by mu
+	topology           string        // guarded by mu
+	capabilities       string        // cached buildCapabilities result (command tree is static)
+	destructive        []string      // cached destructiveCommands result (command tree is static)
+	session            *shellSession // also the source of the aliases and the broker's AI doc
 	rootCmd            *cobra.Command
 	history            []aiMessage // UI-goroutine-owned; see struct doc above
 	initOnce           sync.Once
@@ -95,7 +93,6 @@ func (a *aiSession) init() error {
 		if setter, ok := a.client.(modelSettable); ok && a.effort != "" {
 			setter.SetEffort(a.effort)
 		}
-		a.verbSet = buildVerbSet(a.rootCmd)
 		a.mu.Lock()
 		a.rebuildPrompt()
 		a.mu.Unlock()
@@ -136,7 +133,7 @@ func (a *aiSession) rebuildPrompt() {
 		server = f.Value.String()
 	}
 
-	a.sysPrompt = systemPrompt(a.capabilities, a.brokerContext, server, a.topology, a.aliases, a.destructive)
+	a.sysPrompt = systemPrompt(a.capabilities, a.session.spec.AIContext, server, a.topology, a.session.aliases, a.destructive)
 	log.Verbose("AI system prompt: %d bytes", len(a.sysPrompt))
 }
 
@@ -307,10 +304,8 @@ func isMessageRead(stage string) bool {
 // "grep x | send q" as message-mutating.
 func anyCommand(line string, aliases map[string]string, predicate func(string) bool) bool {
 	for _, command := range splitCommands(expandAlias(strings.TrimSpace(line), aliases)) {
-		for _, stage := range splitPipeline(command) {
-			if predicate(stage) {
-				return true
-			}
+		if slices.ContainsFunc(splitPipeline(command), predicate) {
+			return true
 		}
 	}
 	return false

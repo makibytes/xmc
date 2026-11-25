@@ -444,6 +444,8 @@ type aiTUIModel struct {
 	// so that mouse-click copy can resolve which line was clicked.
 	copyItems           []string
 	wrappedContentLines []string
+	wrapCache           *wrapCache // memoized soft-wrap of the transcript; see wrappedTranscript
+	vpContent           string     // last content handed to the viewport (skips no-op repaints)
 
 	// Token coalescing: tracks the last time setViewportContent was called
 	// during streaming so we throttle re-renders to ~50ms intervals.
@@ -464,7 +466,6 @@ type aiTUIModel struct {
 	// Background process management (cmd/aiproc.go).
 	procs      []*bgProcess // active and finished background processes
 	procNextID int          // monotone counter for bgProcess.id
-	procWinIdx int          // index of the Processes window in objTypes (-1 if absent)
 	procSel    int          // selected row in the Processes window
 
 	// Saved prompt state while Processes pane is focused (enterProcessView / exitProcessView).
@@ -602,7 +603,6 @@ func newAITUIModel(ai *aiSession, session *shellSession, rootCmd *cobra.Command,
 		cmdHistory:     shellHistory.Load(),
 		askHistory:     askHistory.Load(),
 		histIdx:        -1,
-		procWinIdx:     -1,
 	}
 }
 
@@ -634,7 +634,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.sidebarVisible() && m.focus != focusChat {
 			m.focusChat()
 		}
-		(&m).updateInputHeight()
+		m.updateInputHeight()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -767,7 +767,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProcDoneMsg(msg)
 
 	case procStderrMsg:
-		// State already updated by the writer goroutine (bgProcess.stderrSeen);
+		// State already updated by the writer goroutine (bgProcess.unseenStderr);
 		// the message only forces a repaint so the red highlight shows now.
 		return m, nil
 
@@ -788,7 +788,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshTickMsg:
 		if !m.refreshing && len(m.objTypes) > 0 && m.autoUpdateEnabled() {
-			return m, (&m).beginRefresh()
+			return m, m.beginRefresh()
 		}
 		return m, nil
 
@@ -796,7 +796,7 @@ func (m aiTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-issue the fetch only if the wedged generation matches.
 		if m.refreshing && msg.gen == m.refreshGen && len(m.objTypes) > 0 {
 			log.Verbose("sidebar refresh watchdog: fetch gen %d timed out, re-issuing", msg.gen)
-			return m, (&m).beginRefresh()
+			return m, m.beginRefresh()
 		}
 		return m, nil
 	}
@@ -822,10 +822,7 @@ func (m aiTUIModel) View() string {
 	}
 	binaryText := " " + m.binaryName + " "
 	serverInfo := m.serverInfo()
-	padLen := w - lipgloss.Width(titleText) - lipgloss.Width(binaryText) - lipgloss.Width(modelInfo) - lipgloss.Width(serverInfo)
-	if padLen < 1 {
-		padLen = 1
-	}
+	padLen := max(w-lipgloss.Width(titleText)-lipgloss.Width(binaryText)-lipgloss.Width(modelInfo)-lipgloss.Width(serverInfo), 1)
 	titleBar := th.titleMain().Render(titleText) +
 		th.titleDim().Render(binaryText) +
 		th.titleDim().Render(strings.Repeat("─", padLen)) +
@@ -909,13 +906,7 @@ func (m aiTUIModel) sidebarVisible() bool {
 // terminal size and whether sidebar windows are configured.
 func (m aiTUIModel) paneWidths() (convWidth, sideWidth int) {
 	if m.width >= 90 && len(m.objTypes) > 0 {
-		sideWidth = m.width / 3
-		if sideWidth < 32 {
-			sideWidth = 32
-		}
-		if sideWidth > 40 {
-			sideWidth = 40
-		}
+		sideWidth = min(max(m.width/3, 32), 40)
 	}
 	convWidth = m.width
 	if sideWidth > 0 {
@@ -977,16 +968,13 @@ func (m aiTUIModel) renderMainContent() string {
 	// Build a full-height vertical separator. Use the same grey (dimStyle) as
 	// the sidebar window underlines. On rows that align with a window underline,
 	// emit ├ to visually connect the vertical bar to the horizontal rule.
-	h := m.viewport.Height
-	if h < 1 {
-		h = 1
-	}
+	h := max(m.viewport.Height, 1)
 	junctionSet := make(map[int]bool, len(junctionRows))
 	for _, r := range junctionRows {
 		junctionSet[r] = true
 	}
 	sepLines := make([]string, h)
-	for row := 0; row < h; row++ {
+	for row := range h {
 		ch := "│"
 		if junctionSet[row] {
 			ch = "├"
@@ -1010,10 +998,7 @@ func (m aiTUIModel) renderStatusBar() string {
 	// Available width for the left (hint) segment, reserving space for right
 	// and at least one padding column — used by the object-pane branch below
 	// to decide whether its hint list needs to scroll.
-	hintWidth := m.width - lipgloss.Width(right) - 1
-	if hintWidth < 1 {
-		hintWidth = 1
-	}
+	hintWidth := max(m.width-lipgloss.Width(right)-1, 1)
 
 	// While a sidebar prompt (create/delete/purge/send/publish) is active,
 	// the object window's hotkeys are not live — only Enter (confirm the
@@ -1040,21 +1025,21 @@ func (m aiTUIModel) renderStatusBar() string {
 			left = m.spinner.View() + " " + statusStyle.Render("Fetching models…")
 		} else if m.filtering {
 			filter := ""
-			if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) {
+			if wi, ok := m.focusedWindow(); ok {
 				filter = m.objTypes[wi].filter
 			}
 			kvs := []hintKV{{"/", filter + "▍"}, {"Enter", "apply"}, {"Esc", "clear"}}
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
-		} else if wi := int(m.focus) - 1; wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].kind == objWindowProcs {
+		} else if m.procsFocused() {
 			kvs := []hintKV{
 				{"↑↓", "move"}, {"Enter", "output"}, {"K", "kill"}, {"d", "remove"},
 				{"P", "purge finished"}, {"D", "remove all"}, {"Space", "collapse"}, {"Esc", "chat"},
 			}
 			left = renderHintList(kvs, hintWidth, m.statusScrollOffset)
 		} else if m.focus != focusChat {
-			wi := int(m.focus) - 1
+			wi, inRange := m.focusedWindow()
 			kvs := []hintKV{{"↑↓", "move"}, {"/", "filter"}, {"s", "sort"}, {"r", "refresh"}}
-			if wi >= 0 && wi < len(m.objTypes) && m.objTypes[wi].hierarchical {
+			if inRange && m.objTypes[wi].hierarchical {
 				kvs = append(kvs, hintKV{"x", "tree"})
 			}
 			// Each selection-dependent object hotkey (c/d/p/m/P/S/R) is
@@ -1121,10 +1106,7 @@ func (m aiTUIModel) renderStatusBar() string {
 // padStatusBar right-pads left with spaces (at least one) so right lands
 // flush against the terminal's right edge.
 func padStatusBar(left, right string, width int) string {
-	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if pad < 1 {
-		pad = 1
-	}
+	pad := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	return left + strings.Repeat(" ", pad) + right
 }
 
@@ -1205,10 +1187,7 @@ func (m *aiTUIModel) recalcLayout() {
 	headerHeight := 2
 	// Use the textarea's authoritative height so the budget always matches what
 	// View() actually renders (textarea.View() always emits exactly m.input.Height() lines).
-	inputLines := m.input.Height()
-	if inputLines < 1 {
-		inputLines = 1
-	}
+	inputLines := max(m.input.Height(), 1)
 	inputHeight := 2 + inputLines // top rule + textarea rows + bottom rule
 	statusHeight := 1
 	slack := 1
@@ -1217,10 +1196,7 @@ func (m *aiTUIModel) recalcLayout() {
 	if m.conn.reconnectStatus != "" {
 		reconnectLine = 1
 	}
-	vpHeight := m.height - headerHeight - inputHeight - statusHeight - slack - reconnectLine
-	if vpHeight < 3 {
-		vpHeight = 3
-	}
+	vpHeight := max(m.height-headerHeight-inputHeight-statusHeight-slack-reconnectLine, 3)
 	convWidth, _ := m.paneWidths()
 	m.viewport.Width = convWidth - 2
 	m.viewport.Height = vpHeight
@@ -1236,12 +1212,9 @@ func (m *aiTUIModel) recalcLayout() {
 // undercounts as soon as a word soft-wraps, which made the textarea scroll its
 // first line out of view before the height caught up.
 func (m *aiTUIModel) computeInputLines(value string) int {
-	w := m.input.Width() // inner content width (after prompt and reserved margins)
-	if w < 1 {
-		w = 1
-	}
+	w := max(m.input.Width(), 1) // inner content width (after prompt and reserved margins)
 	n := 0
-	for _, line := range strings.Split(value, "\n") {
+	for line := range strings.SplitSeq(value, "\n") {
 		n += len(textareaWrap([]rune(line), w))
 	}
 	if n < 1 {
@@ -1367,8 +1340,10 @@ func (m *aiTUIModel) appendTranscript(text string) {
 	// Transcript cap: drop the oldest content when we exceed the budget.
 	if m.transcript.Len() > maxTranscriptBytes {
 		raw := m.transcript.String()
-		// Keep the last maxTranscriptBytes bytes, aligning to a newline boundary.
-		keep := raw[m.transcript.Len()-maxTranscriptBytes:]
+		// Keep the newest 3/4 of the budget, aligning to a newline boundary.
+		// Trimming below the cap leaves room to grow, so consecutive appends
+		// don't each re-copy a full-size transcript.
+		keep := raw[m.transcript.Len()-maxTranscriptBytes*3/4:]
 		if nl := strings.Index(keep, "\n"); nl >= 0 {
 			keep = keep[nl+1:]
 		}
@@ -1389,18 +1364,20 @@ func (m *aiTUIModel) appendTranscript(text string) {
 // any in-flight streaming tokens), soft-wraps it to the pane width, and
 // conditionally scrolls to the bottom when follow mode is active.
 func (m *aiTUIModel) setViewportContent() {
-	content := m.transcript.String()
+	// overlay is the transient content below the transcript (streaming tokens,
+	// picker, live output preview, proposal); it is rebuilt on every repaint.
+	var overlay strings.Builder
 	if m.state == tuiThinking && m.streamBuf.Len() > 0 {
-		content += dimStyle.Render(collapseBlankLines(m.streamBuf.String()))
+		overlay.WriteString(dimStyle.Render(collapseBlankLines(m.streamBuf.String())))
 	}
 	if m.state == tuiPicking && m.picker != nil {
-		content += m.renderPicker()
+		overlay.WriteString(m.renderPicker())
 	}
 	if m.state == tuiExecuting && m.liveCapture != nil {
 		// The last lines written so far; replaced by the full, styled output
 		// once the command finishes (handleExecDone).
 		for _, line := range m.liveCapture.tail(livePreviewLines) {
-			content += dimStyle.Render("  "+line) + "\n"
+			overlay.WriteString(dimStyle.Render("  "+line) + "\n")
 		}
 	}
 	if m.state == tuiProposing || m.state == tuiEditing {
@@ -1423,10 +1400,7 @@ func (m *aiTUIModel) setViewportContent() {
 		for _, l := range lines {
 			totalRunes += len([]rune(l))
 		}
-		period := totalRunes + shimmerBand
-		if period < 1 {
-			period = 1
-		}
+		period := max(totalRunes+shimmerBand, 1)
 		pos := m.shimmerPhase % period // left edge of the bright band
 		var shimmed strings.Builder
 		globalIdx := 0 // continuous rune index across all wrapped lines
@@ -1445,21 +1419,65 @@ func (m *aiTUIModel) setViewportContent() {
 				shimmed.WriteString("\n")
 			}
 		}
-		content += shimmed.String()
+		overlay.WriteString(shimmed.String())
 		if m.proposedDestructive {
-			content += "\n" + warnStyle.Render("  ⚠ destructive — review carefully")
+			overlay.WriteString("\n" + warnStyle.Render("  ⚠ destructive — review carefully"))
 		}
-		content += "\n\n"
+		overlay.WriteString("\n\n")
 	}
+
+	var content string
 	if w := m.viewport.Width; w > 0 {
-		content = wrapText(content, w)
+		content = m.wrappedTranscript(m.transcript.String(), overlay.String(), w)
+	} else {
+		content = m.transcript.String() + overlay.String()
 	}
-	// Cache the wrapped lines for click-to-copy ⧉ detection.
-	m.wrappedContentLines = strings.Split(content, "\n")
-	m.viewport.SetContent(content)
+	// Typing and cursor blinks repaint without changing the content; only
+	// re-split and re-measure it when it did.
+	if content != m.vpContent {
+		m.vpContent = content
+		// Cache the wrapped lines for click-to-copy ⧉ detection.
+		m.wrappedContentLines = strings.Split(content, "\n")
+		m.viewport.SetContent(content)
+	}
 	if m.follow {
 		m.viewport.GotoBottom()
 	}
+}
+
+// wrapCache memoizes the soft-wrapped head of the transcript across repaints.
+type wrapCache struct {
+	src     string // the transcript prefix wrapped so far; empty or ending in "\n"
+	width   int    // the wrap width it was computed for
+	wrapped string // wrapText(src, width)
+}
+
+// wrappedTranscript returns transcript+overlay soft-wrapped to width. Wrapping
+// is per line (a newline resets all of the wrapper's state), so the whole
+// lines of the transcript are wrapped once and reused: a repaint only wraps
+// what was appended since the previous one, plus the unfinished last line and
+// the overlay, instead of the entire (up to 200 KB) transcript. The cache
+// validates itself against the transcript, so any other way the transcript
+// changes (reset, trim, direct writes) just costs a re-wrap.
+func (m *aiTUIModel) wrappedTranscript(transcript, overlay string, width int) string {
+	c := m.wrapCache
+	if c == nil {
+		c = &wrapCache{}
+		m.wrapCache = c
+	}
+	if c.width != width || !strings.HasPrefix(transcript, c.src) {
+		*c = wrapCache{width: width}
+	}
+	if i := strings.LastIndexByte(transcript[len(c.src):], '\n'); i >= 0 {
+		end := len(c.src) + i + 1
+		c.wrapped += wrapText(transcript[len(c.src):end], width)
+		c.src = transcript[:end]
+	}
+	rest := transcript[len(c.src):] + overlay
+	if rest == "" {
+		return c.wrapped
+	}
+	return c.wrapped + wrapText(rest, width)
 }
 
 // wrapText soft-wraps s (which may carry ANSI styling) to width columns at
@@ -1493,14 +1511,12 @@ func runAITUI(ai *aiSession, session *shellSession, rootCmd *cobra.Command, bina
 		totalOut = m.totalOut
 		// Cancel any still-running background processes and wait up to 2s for
 		// their goroutines to exit before the shared session adapters are torn down.
-		(&m).killAllProcs()
+		m.killAllProcs()
 		deadline := time.After(2 * time.Second)
 		for _, proc := range m.procs {
-			if proc.doneCh != nil {
-				select {
-				case <-proc.doneCh:
-				case <-deadline:
-				}
+			select {
+			case <-proc.doneCh:
+			case <-deadline:
 			}
 		}
 	}

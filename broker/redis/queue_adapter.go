@@ -4,7 +4,6 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -60,7 +59,7 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
 
-	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+	entry, err := readOne(ctx, timeout, "reading from queue "+opts.Queue, func(block time.Duration) ([]redis.XStream, error) {
 		return a.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    xmcQueueGroup,
 			Consumer: "xmc",
@@ -70,17 +69,8 @@ func (a *QueueAdapter) Receive(ctx context.Context, opts backends.ReceiveOptions
 		}).Result()
 	})
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, backends.ErrNoMessageAvailable
-		}
-		return nil, fmt.Errorf("reading from queue %s: %w", opts.Queue, err)
+		return nil, err
 	}
-
-	if len(result) == 0 || len(result[0].Messages) == 0 {
-		return nil, backends.ErrNoMessageAvailable
-	}
-
-	entry := result[0].Messages[0]
 
 	a.client.XAck(ctx, opts.Queue, xmcQueueGroup, entry.ID) //nolint:errcheck
 	a.client.XDel(ctx, opts.Queue, entry.ID)                //nolint:errcheck
@@ -102,7 +92,7 @@ func (a *QueueAdapter) peek(ctx context.Context, key string, opts backends.Recei
 	}
 
 	timeout := backends.TimeoutDuration(opts.Timeout, opts.Wait)
-	result, err := blockingRead(ctx, timeout, func(block time.Duration) ([]redis.XStream, error) {
+	entry, err := readOne(ctx, timeout, "peeking queue "+opts.Queue, func(block time.Duration) ([]redis.XStream, error) {
 		return a.client.XRead(ctx, &redis.XReadArgs{
 			Streams: []string{key, "0"},
 			Count:   1,
@@ -110,16 +100,8 @@ func (a *QueueAdapter) peek(ctx context.Context, key string, opts backends.Recei
 		}).Result()
 	})
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, backends.ErrNoMessageAvailable
-		}
-		return nil, fmt.Errorf("peeking queue %s: %w", opts.Queue, err)
+		return nil, err
 	}
-	if len(result) == 0 || len(result[0].Messages) == 0 {
-		return nil, backends.ErrNoMessageAvailable
-	}
-
-	entry := result[0].Messages[0]
 	return streamToMessage(entry.ID, entry.Values), nil
 }
 

@@ -4,6 +4,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -316,5 +317,50 @@ func TestNATS_TopicPublishSubscribe_QueueGroup(t *testing.T) {
 		t.Fatal("both subscribers received the message; expected exactly one")
 	case <-time.After(500 * time.Millisecond):
 		// expected: no second delivery
+	}
+}
+
+// A streaming read calls Subscribe repeatedly; messages published between two
+// calls must be buffered by the still-open subscription, not lost.
+func TestNATS_TopicSubscribe_KeepsMessagesBetweenCalls(t *testing.T) {
+	t.Parallel()
+	topic := "test.topic." + randomSuffix()
+	ctx := context.Background()
+
+	sub, err := NewTopicAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter (sub): %v", err)
+	}
+	defer sub.Close()
+	pub, err := NewTopicAdapter(makeConnArgs())
+	if err != nil {
+		t.Fatalf("NewTopicAdapter (pub): %v", err)
+	}
+	defer pub.Close()
+
+	// The first call registers the subscription and finds nothing yet.
+	if _, err := sub.Subscribe(ctx, backends.SubscribeOptions{Topic: topic, Timeout: 0.2}); !errors.Is(err, backends.ErrNoMessageAvailable) {
+		t.Fatalf("empty poll: err = %v, want ErrNoMessageAvailable", err)
+	}
+
+	// Published while no Subscribe call is in flight.
+	for _, p := range []string{"one", "two"} {
+		if err := pub.Publish(ctx, backends.PublishOptions{Topic: topic, Message: []byte(p)}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	if err := pub.nc.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	for _, want := range []string{"one", "two"} {
+		msg, err := sub.Subscribe(ctx, backends.SubscribeOptions{Topic: topic, Timeout: 2})
+		if err != nil {
+			t.Fatalf("Subscribe for %q: %v", want, err)
+		}
+		if string(msg.Data) != want {
+			t.Fatalf("got %q, want %q", msg.Data, want)
+		}
 	}
 }

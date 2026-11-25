@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -112,10 +113,8 @@ func TestResolveProvider_DefaultModels(t *testing.T) {
 		t.Run(def.name, func(t *testing.T) {
 			cfg := &xmcConfig{AI: aiConfig{Provider: def.name}}
 			getenv := func(key string) string {
-				for _, envKey := range def.envKeys {
-					if key == envKey {
-						return "test-key"
-					}
+				if slices.Contains(def.envKeys, key) {
+					return "test-key"
 				}
 				return ""
 			}

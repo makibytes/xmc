@@ -5,7 +5,6 @@ package broker
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/makibytes/xmc/broker/artemis"
@@ -18,11 +17,6 @@ import (
 // GetRootCommand builds the Apache Artemis root cobra command.
 func GetRootCommand() *cobra.Command {
 	var connArgs artemis.ConnArguments
-
-	defaultServer := os.Getenv("AMC_SERVER")
-	if defaultServer == "" {
-		defaultServer = "amqp://localhost:5672"
-	}
 
 	var brokerName string
 	var addrRoutingType string
@@ -55,7 +49,7 @@ func GetRootCommand() *cobra.Command {
 			return extra
 		},
 		RegisterFlags: func(c *cobra.Command) {
-			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "AMC_", defaultServer,
+			backends.RegisterCommonFlags(c, &connArgs.Server, &connArgs.User, &connArgs.Password, "AMC_", "amqp://localhost:5672",
 				"Server URL", "Username for SASL PLAIN login", "Password for SASL PLAIN login")
 			c.PersistentFlags().StringVar(&brokerName, "broker-name", "", "Artemis broker name for Jolokia management")
 			backends.RegisterTLSFlags(c, &connArgs.TLS)
@@ -165,7 +159,7 @@ address, delete it and bind it again.`
 			mcp.NewCommand(mcp.Deps{
 				ServerName:    "xmc-artemis",
 				ServerVersion: cmd.Version(),
-				Target:        connArgs.Server,
+				Target:        func() string { return connArgs.Server },
 				NewQueue: func() (backends.QueueBackend, error) {
 					return artemis.NewQueueAdapter(connArgs)
 				},

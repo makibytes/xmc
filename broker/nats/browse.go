@@ -20,7 +20,7 @@ import (
 // yielding the same head message).
 func (a *QueueAdapter) Browse(_ context.Context, opts backends.ReceiveOptions) (backends.Browser, error) {
 	sn := streamName(opts.Queue)
-	if opts.Extra != nil && opts.Extra["stream"] != "" {
+	if opts.Extra["stream"] != "" {
 		sn = opts.Extra["stream"]
 	}
 	if _, err := a.ensureStreamWithName(sn, queueSubject(opts.Queue)); err != nil {
