@@ -135,6 +135,9 @@ func (m aiTUIModel) handleAIDone(msg aiDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.execCancel = nil
+	if n := m.ai.takeNotice(); n != "" {
+		m.appendTranscript(dimStyle.Render(n) + "\n\n")
+	}
 	if msg.err != nil {
 		if errors.Is(msg.err, context.Canceled) {
 			return m, nil
@@ -234,7 +237,7 @@ func (m *aiTUIModel) selectModel(name string) {
 		setter.SetModel(name)
 	}
 	m.ai.modelName = name
-	m.noteSaved("model → "+name, saveAIModel(name))
+	m.noteSaved("model → "+name, saveAIModel(m.ai.providerName, name))
 }
 
 // ---------- Command execution ----------

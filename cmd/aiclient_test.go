@@ -951,3 +951,54 @@ func TestDoWithRetry_ContextCancelImmediate(t *testing.T) {
 		t.Fatal("expected error for cancelled context")
 	}
 }
+
+// The Kilo free router is called without credentials: no Authorization header
+// at all (an empty "Bearer " is rejected there).
+func TestOpenAIClient_KeylessSendsNoAuthorization(t *testing.T) {
+	var gotAuth []string
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Values("Authorization")
+		gotPath = r.URL.Path
+		writeOpenAIStream(w, "ok")
+	}))
+	defer srv.Close()
+
+	c := newAIClient(providerSpec{name: "kilo", baseURL: srv.URL, model: "kilo-auto/free", maxTokens: 10})
+	if _, _, err := c.Complete(context.Background(), "s", []aiMessage{{Role: "user", Content: "u"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotAuth) != 0 {
+		t.Errorf("Authorization = %q, want none", gotAuth)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("path = %q", gotPath)
+	}
+}
+
+// OpenCode serves DeepSeek V4.x with the same thinking switch as DeepSeek's
+// own API, including the v4.1 model names.
+func TestOpenAIClient_OpenCodeDeepSeekV41Shape(t *testing.T) {
+	var body map[string]any
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeOpenAIStream(w, "ok")
+	}))
+	defer srv.Close()
+
+	c := newAIClient(providerSpec{name: "opencode", apiKey: "oc", baseURL: srv.URL, model: "deepseek-v4.1-flash", maxTokens: 10})
+	if _, _, err := c.Complete(context.Background(), "s", []aiMessage{{Role: "user", Content: "u"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer oc" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+	if !reflect.DeepEqual(body["thinking"], map[string]any{"type": "disabled"}) {
+		t.Errorf("thinking = %v, want disabled at low effort", body["thinking"])
+	}
+	if _, ok := body["temperature"]; ok {
+		t.Error("temperature must be omitted for DeepSeek V4")
+	}
+}

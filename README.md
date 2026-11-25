@@ -575,24 +575,30 @@ topics, exchanges) and all available flags, so you don't have to memorize them.
 
 ### Setup
 
-xmc supports these AI providers:
+xmc supports these AI providers, listed in the order xmc looks for their keys:
 
 | Provider | Environment variable | Default model |
 | --- | --- | --- |
+| OpenRouter | `OPENROUTER_API_KEY` | openrouter/free |
+| OpenCode | `OPENCODE_API_KEY` | deepseek-v4.1-flash |
 | Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-5 |
 | OpenAI | `OPENAI_API_KEY` | gpt-5.6-luna |
-| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | gemini-3.8-flash |
+| Google Gemini | `GEMINI_API_KEY` | gemini-3.8-flash |
 | xAI | `XAI_API_KEY` | grok-4.5 |
 | DeepSeek | `DEEPSEEK_API_KEY` | deepseek-v4-flash |
 | Mistral | `MISTRAL_API_KEY` | mistral-small-latest |
-| OpenRouter | `OPENROUTER_API_KEY` | openrouter/free |
+| Kilo Code Gateway | `KILO_API_KEY` (optional) | kilo-auto/free |
 
-Two good ways to start without paying:
+**No key at all? It still works.** If none of the variables above is set, xmc
+uses the [Kilo Code Gateway](https://kilo.ai)'s `kilo-auto/free` router, which
+rotates through free models and needs neither an account nor an API key. Kilo
+limits it per IP address (about 200 requests per hour), and the free models'
+providers may log prompts — do not submit personal or confidential data. Set
+any key from the table to use your own account instead; a `KILO_API_KEY` lifts
+Kilo's limit and unlocks its paid models.
 
-- **Google Gemini** — create a free key in [Google AI Studio](https://aistudio.google.com/apikey)
-  (no payment details needed) and `export GEMINI_API_KEY="your-key"`. The default
-  model, gemini-3.8-flash, works well for command generation. Free-tier limits
-  are shown in the AI Studio console.
+Other good ways to start without paying:
+
 - **OpenRouter** — create a key at [openrouter.ai](https://openrouter.ai) and
   `export OPENROUTER_API_KEY="your-key"`. The default `openrouter/free` is
   OpenRouter's free router: it picks one of the currently available free models
@@ -601,8 +607,15 @@ Two good ways to start without paying:
   Free usage is rate limited (20 requests/minute, 50/day; 1,000/day once the
   account has bought $10 of credits), and free models' providers may log
   prompts — do not submit personal or confidential data.
+- **Google Gemini** — create a free key in [Google AI Studio](https://aistudio.google.com/apikey)
+  (no payment details needed) and `export GEMINI_API_KEY="your-key"`. The default
+  model, gemini-3.8-flash, works well for command generation. Free-tier limits
+  are shown in the AI Studio console. (`GOOGLE_API_KEY` is not read.)
 
-xmc auto-detects API keys in the order listed above.
+**OpenCode** uses its console API (`opencode.ai/inference`). The default is the
+inexpensive paid `deepseek-v4.1-flash`, which needs console credit or an
+OpenCode Go subscription. OpenCode's `-free` models only work inside the
+OpenCode app — other clients, xmc included, get `429 FreeUsageLimitError`.
 
 ### Using AI Shell
 
@@ -750,13 +763,18 @@ ai:
 ```
 
 An explicit `ai.model` is always preserved. Remove that setting if you want to
-adopt the provider's current built-in default after upgrading xmc.
+adopt the provider's current built-in default after upgrading xmc. `/model`
+saves `ai.provider` next to `ai.model`, because a model name only means
+something for the provider it was chosen on. (A model saved without
+`ai.provider` is ignored when OpenRouter, OpenCode or Kilo is picked
+automatically, since those gateways name models differently.)
 
 Provider selection precedence is:
 
 1. If `ai.provider` is set in YAML, that provider is required.
 2. Otherwise, xmc picks the first provider with a present API key in this order:
-   Anthropic, OpenAI, Gemini, xAI, DeepSeek, Mistral, OpenRouter.
+   OpenRouter, OpenCode, Anthropic, OpenAI, Gemini, xAI, DeepSeek, Mistral.
+3. With no key at all, the Kilo Code Gateway's free router is used.
 
 AI shell aliases are also supported via YAML and are available in both shell and AI command mode:
 

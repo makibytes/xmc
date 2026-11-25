@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"cmp"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -159,11 +159,13 @@ const defaultMaxTokens = 4096
 
 type providerSpec struct {
 	name           string
-	apiKey         string
+	apiKey         string // empty for a keyless provider used without a key
+	keyEnv         string // environment variable the key came from ("" when none)
 	baseURL        string
 	model          string
 	maxTokens      int
 	requestTimeout time.Duration // 0 means use defaultRequestTimeout
+	notice         string        // shown once in the AI shell before the first answer
 }
 
 type providerDef struct {
@@ -171,23 +173,54 @@ type providerDef struct {
 	envKeys      []string
 	baseURL      string
 	defaultModel string
+	// aggregator marks a gateway serving many vendors' models under its own
+	// names. A model chosen while another provider was in effect is
+	// meaningless there (see resolveProvider).
+	aggregator bool
+	// keyless providers work without an API key (rate-limited per IP) and are
+	// the fallback when no key is found.
+	keyless bool
+	// notice is shown when the provider is used without a key.
+	notice string
 }
 
+// providerOrder is the auto-detection order: the first provider whose API key
+// is set wins (ai.provider overrides). The keyless provider comes last.
 var providerOrder = []providerDef{
-	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "https://api.anthropic.com", "claude-sonnet-5"},
-	{"openai", []string{"OPENAI_API_KEY"}, "https://api.openai.com", "gpt-5.6-luna"},
-	{"gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}, "https://generativelanguage.googleapis.com", "gemini-3.8-flash"},
-	{"xai", []string{"XAI_API_KEY"}, "https://api.x.ai", "grok-4.5"},
-	{"deepseek", []string{"DEEPSEEK_API_KEY"}, "https://api.deepseek.com", "deepseek-v4-flash"},
-	{"mistral", []string{"MISTRAL_API_KEY"}, "https://api.mistral.ai", "mistral-small-latest"},
 	// OpenRouter's "openrouter/free" router picks a currently available free
 	// model that supports the request, so the default doesn't depend on any
 	// single :free model surviving. Pin one with ai.model to get a
 	// reproducible model.
-	{"openrouter", []string{"OPENROUTER_API_KEY"}, "https://openrouter.ai/api", "openrouter/free"},
+	{name: "openrouter", envKeys: []string{"OPENROUTER_API_KEY"}, baseURL: "https://openrouter.ai/api", defaultModel: "openrouter/free", aggregator: true},
+	// OpenCode's console API (formerly Zen). Its free models are served to the
+	// OpenCode app only (HTTP 429 FreeUsageLimitError elsewhere), so the
+	// default is the paid, cheap DeepSeek model.
+	{name: "opencode", envKeys: []string{"OPENCODE_API_KEY"}, baseURL: "https://opencode.ai/inference/openai", defaultModel: "deepseek-v4.1-flash", aggregator: true},
+	{name: "anthropic", envKeys: []string{"ANTHROPIC_API_KEY"}, baseURL: "https://api.anthropic.com", defaultModel: "claude-sonnet-5"},
+	{name: "openai", envKeys: []string{"OPENAI_API_KEY"}, baseURL: "https://api.openai.com", defaultModel: "gpt-5.6-luna"},
+	{name: "gemini", envKeys: []string{"GEMINI_API_KEY"}, baseURL: "https://generativelanguage.googleapis.com", defaultModel: "gemini-3.8-flash"},
+	{name: "xai", envKeys: []string{"XAI_API_KEY"}, baseURL: "https://api.x.ai", defaultModel: "grok-4.5"},
+	{name: "deepseek", envKeys: []string{"DEEPSEEK_API_KEY"}, baseURL: "https://api.deepseek.com", defaultModel: "deepseek-v4-flash"},
+	{name: "mistral", envKeys: []string{"MISTRAL_API_KEY"}, baseURL: "https://api.mistral.ai", defaultModel: "mistral-small-latest"},
+	// Kilo Code Gateway: its kilo-auto/free router needs no key and no login,
+	// only an IP-based rate limit (about 200 requests/hour). KILO_API_KEY is
+	// optional and, when set, lifts that limit and unlocks paid models.
+	{
+		name: "kilo", envKeys: []string{"KILO_API_KEY"}, baseURL: "https://api.kilo.ai/api/gateway", defaultModel: "kilo-auto/free",
+		aggregator: true, keyless: true,
+		notice: "No AI API key found — using the free Kilo gateway (kilo-auto/free): about 200 requests/hour per IP, and prompts may be logged by the upstream providers, so keep sensitive data out. Set OPENROUTER_API_KEY (or another provider's key) to use your own account.",
+	},
 }
 
 type envLookup func(string) string
+
+func providerNames() []string {
+	names := make([]string, len(providerOrder))
+	for i, def := range providerOrder {
+		names[i] = def.name
+	}
+	return names
+}
 
 func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 	maxTok := cfg.AI.MaxTokens
@@ -195,45 +228,76 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 		maxTok = defaultMaxTokens
 	}
 	reqTimeout := cfg.AI.requestTimeoutDuration()
-	specFor := func(def providerDef, key string) providerSpec {
+	pinned := cfg.AI.Provider != ""
+
+	// retiredKey names an environment variable xmc used to read but doesn't
+	// any more, so a user who still has only that one set learns why their
+	// Gemini key is ignored instead of silently losing the provider.
+	retiredKey := ""
+	if getenv("GEMINI_API_KEY") == "" && getenv("GOOGLE_API_KEY") != "" {
+		retiredKey = "GOOGLE_API_KEY is no longer read; set GEMINI_API_KEY to use Gemini."
+	}
+
+	specFor := func(def providerDef, key, keyEnv string) providerSpec {
+		model := def.defaultModel
+		var notices []string
+		if m := cfg.AI.Model; m != "" {
+			// With no ai.provider the provider is whichever key is found, so a
+			// model saved while another provider was in effect (before /model
+			// stored the provider next to the model) may not exist on a
+			// gateway; ignore it there rather than fail every request.
+			if pinned || !def.aggregator {
+				model = m
+			} else {
+				notices = append(notices, fmt.Sprintf("ai.model %q is ignored because ai.provider is not set and %s was picked automatically; /model saves both.", m, def.name))
+			}
+		}
+		if key == "" && def.notice != "" {
+			notices = append(notices, def.notice)
+		}
+		if retiredKey != "" {
+			notices = append(notices, retiredKey)
+		}
 		return providerSpec{
 			name:           def.name,
 			apiKey:         key,
+			keyEnv:         keyEnv,
 			baseURL:        def.baseURL,
-			model:          cmp.Or(cfg.AI.Model, def.defaultModel),
+			model:          model,
 			maxTokens:      maxTok,
 			requestTimeout: reqTimeout,
+			notice:         strings.Join(notices, "\n"),
 		}
 	}
 
-	if cfg.AI.Provider != "" {
+	if pinned {
 		for _, def := range providerOrder {
 			if !strings.EqualFold(def.name, cfg.AI.Provider) {
 				continue
 			}
-			key := findKey(def.envKeys, getenv)
-			if key == "" {
-				return providerSpec{}, fmt.Errorf("provider %q selected in config but no API key found (set %s)",
-					def.name, strings.Join(def.envKeys, " or "))
+			key, keyEnv := findKey(def.envKeys, getenv)
+			if key == "" && !def.keyless {
+				msg := fmt.Sprintf("provider %q selected in config but no API key found (set %s)", def.name, strings.Join(def.envKeys, " or "))
+				if def.name == "gemini" && retiredKey != "" {
+					msg += "; " + retiredKey
+				}
+				return providerSpec{}, errors.New(msg)
 			}
-			return specFor(def, key), nil
+			return specFor(def, key, keyEnv), nil
 		}
-		if strings.EqualFold(cfg.AI.Provider, "opencode") {
-			return providerSpec{}, fmt.Errorf("AI provider %q is no longer supported (OpenCode's free tier only works inside OpenCode); use \"openrouter\" (OPENROUTER_API_KEY) or \"gemini\" (GEMINI_API_KEY) in ai.provider", cfg.AI.Provider)
-		}
-		names := make([]string, len(providerOrder))
-		for i, def := range providerOrder {
-			names[i] = def.name
-		}
-		return providerSpec{}, fmt.Errorf("unknown AI provider %q (supported: %s)", cfg.AI.Provider, strings.Join(names, ", "))
+		return providerSpec{}, fmt.Errorf("unknown AI provider %q (supported: %s)", cfg.AI.Provider, strings.Join(providerNames(), ", "))
 	}
 
 	for _, def := range providerOrder {
-		if key := findKey(def.envKeys, getenv); key != "" {
-			return specFor(def, key), nil
+		if key, keyEnv := findKey(def.envKeys, getenv); key != "" {
+			return specFor(def, key, keyEnv), nil
 		}
 	}
-
+	for _, def := range providerOrder {
+		if def.keyless {
+			return specFor(def, "", ""), nil
+		}
+	}
 	keys := make([]string, len(providerOrder))
 	for i, def := range providerOrder {
 		keys[i] = def.envKeys[0]
@@ -241,17 +305,24 @@ func resolveProvider(cfg *xmcConfig, getenv envLookup) (providerSpec, error) {
 	return providerSpec{}, fmt.Errorf("no AI API key found; set one of: %s", strings.Join(keys, ", "))
 }
 
-func findKey(envKeys []string, getenv envLookup) string {
+// findKey returns the first non-empty key among envKeys and the variable it
+// came from.
+func findKey(envKeys []string, getenv envLookup) (key, env string) {
 	for _, k := range envKeys {
 		if v := getenv(k); v != "" {
-			return v
+			return v, k
 		}
 	}
-	return ""
+	return "", ""
 }
 
-// saveAIModel writes the model name to the config file under ai.model.
-func saveAIModel(model string) error { return saveAIConfigKey("model", model) }
+// saveAIModel writes the chosen provider and model to the config file under
+// ai.provider and ai.model. A model name only means something for the provider
+// it was chosen on, so the two are stored together — otherwise a later change
+// of API keys would send this model to a different provider.
+func saveAIModel(provider, model string) error {
+	return saveAIConfigKeys("provider", provider, "model", model)
+}
 
 // saveAIEffort writes the reasoning effort to the config file under ai.effort.
 func saveAIEffort(effort aiEffort) error { return saveAIConfigKey("effort", string(effort)) }
@@ -270,9 +341,13 @@ func parseEffort(s string) (aiEffort, bool) {
 	return "", false
 }
 
-// saveAIConfigKey persists key=value under the "ai" section of the config file,
-// preserving all other keys and comments via yaml.Node round-trip.
-func saveAIConfigKey(key, value string) error {
+// saveAIConfigKey persists key=value under the "ai" section of the config file.
+func saveAIConfigKey(key, value string) error { return saveAIConfigKeys(key, value) }
+
+// saveAIConfigKeys persists key/value pairs (alternating arguments) under the
+// "ai" section of the config file in one write, preserving all other keys and
+// comments via yaml.Node round-trip.
+func saveAIConfigKeys(pairs ...string) error {
 	if err := ensureXMCDir(); err != nil {
 		return err
 	}
@@ -295,7 +370,9 @@ func saveAIConfigKey(key, value string) error {
 	}
 
 	aiNode := yamlFindOrCreateMapping(doc.Content[0], "ai")
-	yamlSetScalar(aiNode, key, value)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		yamlSetScalar(aiNode, pairs[i], pairs[i+1])
+	}
 
 	out, err := yaml.Marshal(&doc)
 	if err != nil {

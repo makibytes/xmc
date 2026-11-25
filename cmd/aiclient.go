@@ -161,7 +161,7 @@ type modelLister interface {
 const aiListTimeout = 15 * time.Second
 
 func newAIClient(spec providerSpec) aiClient {
-	base := baseAIClient{apiKey: spec.apiKey, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: spec.requestTimeout}
+	base := baseAIClient{apiKey: spec.apiKey, keyEnv: spec.keyEnv, model: spec.model, baseURL: spec.baseURL, maxTokens: spec.maxTokens, requestTimeout: spec.requestTimeout}
 	switch spec.name {
 	case "anthropic":
 		return &anthropicClient{baseAIClient: base}
@@ -238,6 +238,7 @@ func extractOpenAIModelIDs(r io.Reader) ([]string, error) {
 // provider field for its per-vendor reasoning quirks).
 type baseAIClient struct {
 	apiKey         string
+	keyEnv         string // environment variable apiKey came from, for error hints
 	model          string
 	baseURL        string
 	effort         aiEffort
@@ -478,9 +479,15 @@ func isReasoningModel(model string) bool {
 	return false
 }
 
+// isDeepSeekV4 reports whether the request goes to a DeepSeek V4 model
+// (deepseek-v4-flash, deepseek-v4.1-flash, …), which takes a "thinking"
+// switch and reasoning_effort instead of temperature. DeepSeek's own API and
+// OpenCode's pass-through of it both use that shape.
 func (c *openaiClient) isDeepSeekV4() bool {
-	model := strings.ToLower(strings.TrimSpace(c.model))
-	return c.provider == "deepseek" && strings.Contains(model, "deepseek-v4-")
+	if c.provider != "deepseek" && c.provider != "opencode" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(c.model), "deepseek-v4")
 }
 
 func (c *openaiClient) isXAIReasoningModel() bool {
@@ -531,8 +538,12 @@ func (c *openaiClient) addGenerationConfig(body map[string]any) {
 	body["temperature"] = effortTemperature(effort)
 }
 
+// setAuth sends the key as a bearer token; a keyless provider (Kilo's free
+// router) is called without the header — an empty bearer is rejected there.
 func (c *openaiClient) setAuth(h http.Header) {
-	h.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		h.Set("Authorization", "Bearer "+c.apiKey)
+	}
 }
 
 func (c *openaiClient) ListModels(ctx context.Context) ([]string, error) {

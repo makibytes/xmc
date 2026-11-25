@@ -107,6 +107,8 @@ func TestResolveProvider_DefaultModels(t *testing.T) {
 		"deepseek":   "deepseek-v4-flash",
 		"mistral":    "mistral-small-latest",
 		"openrouter": "openrouter/free",
+		"opencode":   "deepseek-v4.1-flash",
+		"kilo":       "kilo-auto/free",
 	}
 
 	for _, def := range providerOrder {
@@ -130,59 +132,158 @@ func TestResolveProvider_DefaultModels(t *testing.T) {
 	}
 }
 
-func TestResolveProvider_NoKey(t *testing.T) {
-	cfg := &xmcConfig{}
-	getenv := func(_ string) string { return "" }
-
-	_, err := resolveProvider(cfg, getenv)
-	if err == nil {
-		t.Fatal("expected error when no API key is set")
+// With no key at all, the Kilo gateway's free router is used: no key, a notice
+// about its limits.
+func TestResolveProvider_NoKeyFallsBackToKilo(t *testing.T) {
+	spec, err := resolveProvider(&xmcConfig{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.name != "kilo" || spec.apiKey != "" || spec.model != "kilo-auto/free" {
+		t.Errorf("spec = %+v, want keyless kilo with kilo-auto/free", spec)
+	}
+	// The client appends /v1/chat/completions; Kilo serves that path too.
+	if spec.baseURL != "https://api.kilo.ai/api/gateway" {
+		t.Errorf("baseURL = %q", spec.baseURL)
+	}
+	if !strings.Contains(spec.notice, "200 requests/hour") {
+		t.Errorf("notice = %q, want the rate-limit notice", spec.notice)
 	}
 }
 
-func TestResolveProvider_GeminiAlternateKey(t *testing.T) {
-	cfg := &xmcConfig{}
+// A KILO_API_KEY is sent along (lifting the IP limit) and silences the
+// no-key notice.
+func TestResolveProvider_KiloWithKey(t *testing.T) {
+	env := map[string]string{"KILO_API_KEY": "k"}
+	spec, err := resolveProvider(&xmcConfig{}, func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.name != "kilo" || spec.apiKey != "k" || spec.keyEnv != "KILO_API_KEY" || spec.notice != "" {
+		t.Errorf("spec = %+v", spec)
+	}
+}
+
+func TestResolveProvider_KiloPinnedNeedsNoKey(t *testing.T) {
+	cfg := &xmcConfig{AI: aiConfig{Provider: "kilo", Model: "kilo-auto/efficient"}}
+	spec, err := resolveProvider(cfg, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.name != "kilo" || spec.model != "kilo-auto/efficient" {
+		t.Errorf("spec = %+v", spec)
+	}
+}
+
+// OpenRouter and OpenCode lead the auto-detection order, ahead of every
+// first-party key; Kilo is last.
+func TestResolveProvider_AutoDetectOrder(t *testing.T) {
+	names := providerNames()
+	want := []string{"openrouter", "opencode"}
+	if !slices.Equal(names[:2], want) || names[len(names)-1] != "kilo" {
+		t.Errorf("provider order = %v, want %v first and kilo last", names, want)
+	}
+
+	env := map[string]string{
+		"ANTHROPIC_API_KEY": "a", "GEMINI_API_KEY": "g", "OPENCODE_API_KEY": "oc", "OPENROUTER_API_KEY": "or",
+	}
+	getenv := func(k string) string { return env[k] }
+	spec, err := resolveProvider(&xmcConfig{}, getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.name != "openrouter" {
+		t.Errorf("with every key set got %q, want openrouter", spec.name)
+	}
+	delete(env, "OPENROUTER_API_KEY")
+	if spec, _ = resolveProvider(&xmcConfig{}, getenv); spec.name != "opencode" {
+		t.Errorf("without OpenRouter got %q, want opencode", spec.name)
+	}
+	delete(env, "OPENCODE_API_KEY")
+	if spec, _ = resolveProvider(&xmcConfig{}, getenv); spec.name != "anthropic" {
+		t.Errorf("first-party keys: got %q, want anthropic", spec.name)
+	}
+}
+
+func TestResolveProvider_OpenCode(t *testing.T) {
+	env := map[string]string{"OPENCODE_API_KEY": "oc-key"}
+	spec, err := resolveProvider(&xmcConfig{}, func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.name != "opencode" || spec.apiKey != "oc-key" || spec.keyEnv != "OPENCODE_API_KEY" {
+		t.Errorf("spec = %+v", spec)
+	}
+	// The client appends /v1/chat/completions, which must land on OpenCode's
+	// /inference/openai/v1/chat/completions.
+	if spec.baseURL != "https://opencode.ai/inference/openai" {
+		t.Errorf("baseURL = %q", spec.baseURL)
+	}
+	// The free models only work inside the OpenCode app, so the default is the
+	// paid sibling.
+	if spec.model != "deepseek-v4.1-flash" {
+		t.Errorf("model = %q", spec.model)
+	}
+	// The retired Zen variable is not read.
+	env = map[string]string{"OPENCODE_ZEN_API_KEY": "old"}
+	if spec, _ = resolveProvider(&xmcConfig{}, func(k string) string { return env[k] }); spec.name == "opencode" {
+		t.Error("OPENCODE_ZEN_API_KEY must not select opencode")
+	}
+}
+
+// GOOGLE_API_KEY is no longer an alias for Gemini, and says so instead of
+// being silently ignored.
+func TestResolveProvider_GoogleAPIKeyNoLongerRead(t *testing.T) {
 	env := map[string]string{"GOOGLE_API_KEY": "goog-key"}
 	getenv := func(k string) string { return env[k] }
 
-	spec, err := resolveProvider(cfg, getenv)
+	spec, err := resolveProvider(&xmcConfig{}, getenv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.name != "gemini" {
-		t.Errorf("expected gemini, got %q", spec.name)
+	if spec.name == "gemini" {
+		t.Error("GOOGLE_API_KEY must not select gemini")
+	}
+	if !strings.Contains(spec.notice, "GOOGLE_API_KEY is no longer read") {
+		t.Errorf("notice = %q, want the GOOGLE_API_KEY explanation", spec.notice)
+	}
+
+	_, err = resolveProvider(&xmcConfig{AI: aiConfig{Provider: "gemini"}}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "GEMINI_API_KEY") || !strings.Contains(err.Error(), "GOOGLE_API_KEY is no longer read") {
+		t.Errorf("err = %v, want the GEMINI_API_KEY / GOOGLE_API_KEY explanation", err)
+	}
+
+	env["GEMINI_API_KEY"] = "gem"
+	if spec, _ = resolveProvider(&xmcConfig{}, getenv); spec.name != "gemini" || spec.apiKey != "gem" || spec.notice != "" {
+		t.Errorf("spec = %+v, want plain gemini", spec)
 	}
 }
 
-func TestResolveProvider_OpenRouter(t *testing.T) {
-	cfg := &xmcConfig{}
-	env := map[string]string{"OPENROUTER_API_KEY": "or-key"}
+// A model saved before /model stored the provider next to it must not be sent
+// to a gateway picked automatically (it may be another vendor's name); with
+// the provider pinned, or on a first-party provider, it applies.
+func TestResolveProvider_LegacyModelIgnoredOnGateways(t *testing.T) {
+	cfg := &xmcConfig{AI: aiConfig{Model: "gemini-3.8-flash"}}
+	env := map[string]string{"OPENCODE_API_KEY": "k"}
 	getenv := func(k string) string { return env[k] }
 
 	spec, err := resolveProvider(cfg, getenv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.name != "openrouter" || spec.apiKey != "or-key" {
-		t.Errorf("spec = %+v", spec)
+	if spec.model != "deepseek-v4.1-flash" || !strings.Contains(spec.notice, `ai.model "gemini-3.8-flash" is ignored`) {
+		t.Errorf("spec = %+v, want the default model plus an explanation", spec)
 	}
-	// The client appends /v1/chat/completions, which must land on
-	// OpenRouter's /api/v1/chat/completions.
-	if spec.baseURL != "https://openrouter.ai/api" {
-		t.Errorf("baseURL = %q", spec.baseURL)
-	}
-	if spec.model != "openrouter/free" {
-		t.Errorf("model = %q, want the free router", spec.model)
-	}
-}
 
-// A config left over from the removed OpenCode provider gets a pointer to the
-// replacements, not a bare "unknown provider".
-func TestResolveProvider_RemovedOpenCodeProvider(t *testing.T) {
-	cfg := &xmcConfig{AI: aiConfig{Provider: "opencode"}}
-	_, err := resolveProvider(cfg, func(string) string { return "key" })
-	if err == nil || !strings.Contains(err.Error(), "openrouter") {
-		t.Errorf("err = %v, want a message pointing to openrouter", err)
+	cfg.AI.Provider = "opencode"
+	if spec, _ = resolveProvider(cfg, getenv); spec.model != "gemini-3.8-flash" {
+		t.Errorf("pinned provider: model = %q, want the configured one", spec.model)
+	}
+
+	cfg.AI.Provider = ""
+	env = map[string]string{"GEMINI_API_KEY": "k"}
+	if spec, _ = resolveProvider(cfg, getenv); spec.model != "gemini-3.8-flash" || spec.notice != "" {
+		t.Errorf("first-party provider: spec = %+v, want the configured model", spec)
 	}
 }
 
@@ -460,5 +561,46 @@ func TestSaveMetadataFormat(t *testing.T) {
 	}
 	if got := cfg.AI.metadataFormat(); got != metadataFormatYAML {
 		t.Fatalf("metadata format after second save = %q, want %q", got, metadataFormatYAML)
+	}
+}
+
+func TestResolveProvider_OpenRouter(t *testing.T) {
+	env := map[string]string{"OPENROUTER_API_KEY": "or-key"}
+	spec, err := resolveProvider(&xmcConfig{}, func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.name != "openrouter" || spec.apiKey != "or-key" || spec.keyEnv != "OPENROUTER_API_KEY" {
+		t.Errorf("spec = %+v", spec)
+	}
+	// The client appends /v1/chat/completions, which must land on
+	// OpenRouter's /api/v1/chat/completions.
+	if spec.baseURL != "https://openrouter.ai/api" {
+		t.Errorf("baseURL = %q", spec.baseURL)
+	}
+	if spec.model != "openrouter/free" {
+		t.Errorf("model = %q, want the free router", spec.model)
+	}
+}
+
+// /model stores the provider with the model, keeping the rest of the file.
+func TestSaveAIModel_StoresProviderWithModel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", dir)
+	}
+	if err := saveAIEffort(effortHigh); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAIModel("opencode", "deepseek-v4.1-flash"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AI.Provider != "opencode" || cfg.AI.Model != "deepseek-v4.1-flash" || cfg.AI.Effort != "high" {
+		t.Errorf("config = %+v, want provider, model and the earlier effort", cfg.AI)
 	}
 }

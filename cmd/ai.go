@@ -63,6 +63,7 @@ type aiSession struct {
 	initErr            error
 	providerName       string
 	modelName          string
+	notice             string        // guarded by mu; shown once, see takeNotice
 	effort             aiEffort      // chosen effort; "" until init() reads ai.effort (or /effort sets it)
 	autoUpdateObjects  bool          // refresh sidebar on create/delete/bind topology changes
 	autoUpdateMessages bool          // refresh sidebar on send/publish/receive/purge message changes
@@ -85,6 +86,7 @@ func (a *aiSession) init() error {
 		a.client = newAIClient(spec)
 		a.providerName = spec.name
 		a.modelName = spec.model
+		a.notice = spec.notice
 		// An /effort chosen before the first request (when no client existed
 		// yet) wins over the configured one.
 		if a.effort == "" {
@@ -99,6 +101,16 @@ func (a *aiSession) init() error {
 		log.Verbose("AI provider: %s, model: %s", spec.name, spec.model)
 	})
 	return a.initErr
+}
+
+// takeNotice returns the provider notice (e.g. "using the free Kilo gateway")
+// once, then "" — the AI shell prints it before the first answer.
+func (a *aiSession) takeNotice() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := a.notice
+	a.notice = ""
+	return n
 }
 
 // currentEffort returns the effort in effect: the client's once it exists,
