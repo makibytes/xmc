@@ -19,7 +19,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/chzyer/readline v1.5.1
 	github.com/eclipse/paho.golang v0.24.0
-	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/eclipse/paho.mqtt.golang v1.5.2
 	github.com/ibm-messaging/mq-golang/v5 v5.7.3
 	github.com/mattn/go-runewidth v0.0.31
 	github.com/muesli/termenv v0.16.0
